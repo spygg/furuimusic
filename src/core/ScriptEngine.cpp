@@ -119,7 +119,7 @@ QString exceptionText(JSContext *ctx, JSValue exception)
         JS_FreeValue(ctx, stack);
         if (!stackText.isEmpty()) {
             // 只保留首行栈帧，避免把整个调用栈塞进 UI
-            const QStringList lines = stackText.split(QLatin1Char('\n'), QString::SkipEmptyParts);
+            const QStringList lines = stackText.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
             if (lines.size() > 1) text += QStringLiteral("（") + lines.at(1).trimmed() + QStringLiteral("）");
             else if (text.isEmpty()) text = lines.first().trimmed();
         }

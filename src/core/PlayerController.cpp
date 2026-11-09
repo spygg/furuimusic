@@ -71,7 +71,10 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers)
         if (!value.trimmed().isEmpty()) req.setRawHeader(it.key().toUtf8(), value);
     }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    m_player->setSource(url, req);
+    // Qt 6 的 setSource 不接受 QNetworkRequest，也没有等价的自定义头入口；
+    // 因此 Qt 6 构建下先按地址直接播放（windeployqt/macdeployqt 平台暂不依赖防盗链头）。
+    Q_UNUSED(req);
+    m_player->setSource(url);
 #else
     m_player->setMedia(QMediaContent(req));
 #endif

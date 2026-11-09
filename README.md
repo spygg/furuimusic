@@ -131,22 +131,22 @@ Windows 主机对应 `scripts/build_android_qt6.bat`。CMake 的 Android 路径*
 └── .github/workflows/          # Release 工作流（见下）
 ```
 
-## CI / Release 工作流现状
+## CI / Release 工作流
 
-`.github/workflows/release.yml` **是从另一个工程（Listery）拷贝过来的，当前不能直接产出本工程产物**。触发方式是推送 `v*` tag 或手动 `workflow_dispatch`，只使用内置 `GITHUB_TOKEN`（`permissions: contents: write`），没有额外 secrets。以下位置与本工程对不上：
+`.github/workflows/release.yml` 已按本工程实际情况重写，触发条件为推送 `v*` tag 或手动 `workflow_dispatch`，只使用内置 `GITHUB_TOKEN`（`permissions: contents: write`），不需要额外 secrets。
 
-| 工作流内容 | 本工程实际 |
-|---|---|
-| CMake 目标/产物 `listery`、`build/listery.exe`、`build/Release/listery.exe`、`build/listery` | 目标与产物均为 `FuruiMusic`（MSVC 为 `build/Release/FuruiMusic.exe`，单配置为 `build/FuruiMusic`） |
-| `build/plugins` 下的插件 DLL/SO | 本工程没有插件目标 |
-| `installer/windows/listery.iss`、`listery-windows-setup.exe` | 本仓库没有 `installer/` 目录，该步骤必然失败 |
-| Release 资源名 `listery-windows.zip`、`listery-windows-xp.zip`、`listery-linux.AppImage`、`listery-macos.zip` | 需改为 `furui-*` 等本工程命名 |
-| macOS bundle `listery.app`、`com.listery.launcher` | 应为 `FuruiMusic.app` 对应的 bundle id |
-| Windows XP 矩阵：Qt 5.7 + `-DLISTERY_CXX_STANDARD=14` + `build/listery.exe --selftest` | 本工程 QML 使用 QtQuick/Controls 2.15，Qt 5.7 无法加载；没有 `LISTERY_CXX_STANDARD` 变量；自检开关是环境变量 `FURUI_SELFTEST`，不是 `--selftest` |
-| Windows 矩阵使用 MSVC 2019 | 本项目仅在 MinGW 8.1 上完整验证；MSVC 组合未验证（QuickJS 的 `CONFIG_BIGNUM`/`CONFIG_VERSION` 只在非 MSVC 分支注入） |
-| 失败日志写入 `logs-*` 分支、提交者 `listery-ci` | 可作为调试手段保留，但需要改成对应名称 |
+| Job | Runner / 工具链 | 产物 |
+|---|---|---|
+| Windows (MinGW 8.1 x64) | `windows-2022`，Qt 5.15.2 `win64_mingw81` + MinGW 8.1 + Ninja | `FuruiMusic-windows-x64.zip`（含 windeployqt 运行库与 QML 模块；**不含 OpenSSL**，包内附 `OPENSSL-REQUIRED.txt` 说明） |
+| Linux (x86_64) | `ubuntu-22.04`，Qt 5.15.2 `gcc_64` | `FuruiMusic-linux-x86_64.AppImage` |
+| macOS (x86_64) | `macos-15-intel`，Qt 6.8.3 `clang_64` | `FuruiMusic-macos-x86_64.zip`（`FuruiMusic.app`，bundle id `cn.furui.music`） |
 
-因此：**按现状推 `v*` tag 不会生成可用的 Release 资源**。要启用发布，需要先把上表的名称/路径/XP 矩阵按本工程改写（或直接删掉 XP 与 installer 两个 job）。
+- 构建命令与上面的「构建」一节一致。Windows job 实际执行的是
+  `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++`，
+  再 `cmake --build build --parallel`；Linux、macOS 只是把 `-G Ninja` 与编译器指定去掉（runner 默认生成器即可）。
+- 未纳入 Release：Windows XP（Qt 5.7 加载不了 QML 2.15）、MSVC 组合（本工程未验证）、Inno Setup 安装包（仓库没有 `installer/` 脚本）、Android（打包配置存在但未实跑 APK）。
+- 验证状态：Windows 的构建/部署命令已在本机同版本工具链上跑通；Linux、macOS 两个 job 属按配置推断，需要实际推一次 tag 才能确认。
+- 工作流不会把构建日志推送到分支；失败时请查看 Actions 日志。
 
 ## 许可证
 

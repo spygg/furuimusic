@@ -27,6 +27,11 @@ find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS ${QT_COMPONENTS})
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS ${QT_COMPONENTS})
 set(QT Qt${QT_VERSION_MAJOR})
 
+# Qt 6 的公开头文件要求 C++17；Qt 5 保持 C++14（MinGW 8.1 已验证）
+if(QT_VERSION_MAJOR GREATER_EQUAL 6)
+    set(CMAKE_CXX_STANDARD 17)
+endif()
+
 # sources.json 内容变化时让 AUTORCC 重新生成 qrc_config.cpp
 set_source_files_properties(src/core/config.qrc PROPERTIES
     AUTORCC_DEPENDENCIES "${CMAKE_CURRENT_SOURCE_DIR}/config/sources.json")
@@ -117,6 +122,16 @@ else()
     add_executable(FuruiMusic WIN32 MACOSX_BUNDLE ${UI_FILES})
     target_link_libraries(FuruiMusic PRIVATE FuruiCore ${QT}::Qml ${QT}::Quick)
     set_target_properties(FuruiMusic PROPERTIES OUTPUT_NAME "FuruiMusic")
+
+    if(APPLE)
+        set_target_properties(FuruiMusic PROPERTIES
+            MACOSX_BUNDLE_BUNDLE_NAME "FuruiMusic"
+            MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "cn.furui.music"
+            MACOSX_BUNDLE_ICON_FILE ""
+        )
+    endif()
 
     if(FURUI_BUILD_LEGACY_WIDGETS)
         add_executable(FuruiMusicWidgets WIN32 MACOSX_BUNDLE ${LEGACY_WIDGETS_FILES})
