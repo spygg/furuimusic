@@ -41,7 +41,7 @@
 - CMake ≥ 3.16、C++14。
 - Qt 模块：Core、Gui、Network、Sql、Multimedia、Qml、Quick（Android 使用 Qt 6 时额外走 `qt_add_executable`）。
 - 第三方库：QuickJS 2024-01-13 与 qrcodegen 已以源码形式内嵌在 `src/core/3rd/`，无需额外安装。
-- Windows 运行 HTTPS 需要 OpenSSL 1.1 的 DLL（`libssl-1_1-x64.dll`、`libcrypto-1_1-x64.dll`）与 Qt 运行库放在可执行文件旁或 PATH 中，否则会出现 `TLS initialization failed`。
+- Windows 运行 HTTPS 需要 OpenSSL 1.1 的 DLL（`libssl-1_1-x64.dll`、`libcrypto-1_1-x64.dll`）与 Qt 运行库放在可执行文件旁或 PATH 中，否则会出现 `TLS initialization failed`。这两个 DLL 已随仓库放在 `packaging/windows/openssl/`（含来源、SHA256 与许可证），Release 的 Windows 包会一并打入。
 
 ## 构建
 
@@ -162,7 +162,7 @@ Windows 主机对应 `scripts/build_android_qt6.bat`。CMake 的 Android 路径*
 
 | Job | Runner / 工具链 | 产物 |
 |---|---|---|
-| Windows (MinGW 8.1 x64) | `windows-2022`，Qt 5.15.2 `win64_mingw81` + MinGW 8.1 + Ninja | `FuruiMusic-windows-x64.zip`（含 windeployqt 运行库与 QML 模块；**不含 OpenSSL**，包内附 `OPENSSL-REQUIRED.txt` 说明） |
+| Windows (MinGW 8.1 x64) | `windows-2022`，Qt 5.15.2 `win64_mingw81` + MinGW 8.1 + Ninja | `FuruiMusic-windows-x64.zip`（含 windeployqt 运行库、QML 模块，以及仓库内 `packaging/windows/openssl/` 的 OpenSSL 1.1 DLL 与许可证） |
 | Linux (x86_64) | `ubuntu-22.04`，Qt 5.15.2 `gcc_64` | `FuruiMusic-linux-x86_64.AppImage` |
 | macOS (x86_64) | `macos-15-intel`，Qt 6.8.3 `clang_64` | `FuruiMusic-macos-x86_64.zip`（`FuruiMusic.app`，bundle id `cn.furui.music`） |
 

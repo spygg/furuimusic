@@ -75,7 +75,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libgl1-mesa-dev libxkbcommon-x11-0 libxcb-xinerama0 libxcb-cursor0
+            libgl1-mesa-dev libxkbcommon-x11-0 libxcb-xinerama0 libxcb-cursor0 \
+            desktop-file-utils
 
       - name: Configure (CMake)
         shell: bash
@@ -107,13 +108,11 @@ jobs:
           # 在传 --release 时会误判为 debug 并报 "Unable to find the platform plugin"，
           # 所以这里让它自动识别（本地已用同版本工具链验证过该命令）。
           windeployqt --no-translations --qmldir src\ui\qml dist\FuruiMusic.exe
-          @'
-          TLS support requires OpenSSL 1.1 runtime DLLs on Windows:
-            libssl-1_1-x64.dll
-            libcrypto-1_1-x64.dll
-          They are not bundled in this archive. Put them next to FuruiMusic.exe
-          (official Qt 5.15.2 MinGW builds use OpenSSL 1.1, not 3.x).
-          '@ | Set-Content -Encoding ascii dist\OPENSSL-REQUIRED.txt
+          # Qt 5.15.2 不自带 OpenSSL 1.1，缺了它所有 HTTPS 请求都会报
+          # "TLS initialization failed"；仓库内置的 1.1.1k 运行库直接放到 exe 旁
+          Copy-Item packaging\windows\openssl\libssl-1_1-x64.dll dist\
+          Copy-Item packaging\windows\openssl\libcrypto-1_1-x64.dll dist\
+          Copy-Item packaging\windows\openssl\LICENSE-OpenSSL-1.1.txt dist\OPENSSL-LICENSE.txt
           Compress-Archive -Path dist\* -DestinationPath ${{ matrix.config.artifact }} -Force
           Get-Item ${{ matrix.config.artifact }} | Select-Object Name,Length
 

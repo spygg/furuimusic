@@ -8,6 +8,8 @@
 /bin/
 *.exe
 *.dll
+# 例外：Release 包要带上的 OpenSSL 1.1 运行库（见 packaging/windows/openssl/README.txt）
+!packaging/windows/openssl/*.dll
 *.so
 *.dylib
 *.a
