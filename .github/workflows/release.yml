@@ -143,6 +143,10 @@ jobs:
             ./$f --appimage-extract >/dev/null
             mv squashfs-root "${f%.AppImage}.dir"
           done
+          # linuxdeploy 会在当前目录优先找 *-plugin-*.AppImage 并直接执行它；
+          # runner 无 FUSE 会失败，所以把 AppImage 文件移走，只用解包后的 AppRun
+          mkdir -p tools
+          mv *.AppImage tools/
           # linuxdeploy 通过 PATH 查找插件与 appimagetool；AppRun 依赖自身目录，
           # 所以复制成同名可执行文件并把这些目录加进 PATH
           cp linuxdeploy-plugin-qt-x86_64.dir/AppRun linuxdeploy-plugin-qt-x86_64.dir/linuxdeploy-plugin-qt
