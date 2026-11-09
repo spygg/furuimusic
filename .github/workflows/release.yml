@@ -81,7 +81,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libgl1-mesa-dev libxkbcommon-x11-0 libxcb-xinerama0 libxcb-cursor0 \
-            desktop-file-utils
+            desktop-file-utils patchelf file
 
       - name: Configure (CMake)
         shell: bash
@@ -121,24 +121,37 @@ jobs:
           Compress-Archive -Path dist\* -DestinationPath ${{ matrix.config.artifact }} -Force
           Get-Item ${{ matrix.config.artifact }} | Select-Object Name,Length
 
-      # ---------- Linux：linuxdeployqt 打 AppImage ----------
+      # ---------- Linux：linuxdeploy + qt 插件打 AppImage ----------
       - name: Deploy (Linux)
         if: matrix.config.key == 'linux-x86_64'
         shell: bash
         run: |
-          set -o pipefail
-          # GitHub 上的 release 资产偶发 504 / 断流，带重试；失败时让 wget 自身报错
+          set -euo pipefail
+          # probonopd/linuxdeployqt 的 continuous 资产当前从 GitHub CDN 返回 504，
+          # 改用 linuxdeploy + linuxdeploy-plugin-qt（versioned 资产可正常下载）
           wget --tries=5 --retry-connrefused --waitretry=5 --timeout=30 \
-            https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage \
-            -O linuxdeployqt.AppImage
-          test -s linuxdeployqt.AppImage
-          chmod +x linuxdeployqt.AppImage
-          ./linuxdeployqt.AppImage --appimage-extract >/dev/null
-          mkdir -p app/usr/bin app/usr/share/applications app/usr/share/icons/hicolor/256x256/apps
-          cp build/FuruiMusic app/usr/bin/
-          # 复用仓库里的真实应用图标，AppImage 与桌面 dock 才能显示 FuruiMusic 图标
-          cp src/ui/icons/app-256.png app/usr/share/icons/hicolor/256x256/apps/FuruiMusic.png
-          cat > app/usr/share/applications/FuruiMusic.desktop <<'EOF'
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget --tries=5 --retry-connrefused --waitretry=5 --timeout=30 \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/1-alpha-20240109-1/linuxdeploy-plugin-qt-x86_64.AppImage
+          wget --tries=5 --retry-connrefused --waitretry=5 --timeout=30 \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          test -s linuxdeploy-x86_64.AppImage
+
+          # runner 没有 FUSE，三个工具都解包后直接跑 AppRun
+          chmod +x *.AppImage
+          for f in linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage appimagetool-x86_64.AppImage; do
+            ./$f --appimage-extract >/dev/null
+            mv squashfs-root "${f%.AppImage}.dir"
+          done
+          # linuxdeploy 通过 PATH 查找插件与 appimagetool；AppRun 依赖自身目录，
+          # 所以复制成同名可执行文件并把这些目录加进 PATH
+          cp linuxdeploy-plugin-qt-x86_64.dir/AppRun linuxdeploy-plugin-qt-x86_64.dir/linuxdeploy-plugin-qt
+          cp appimagetool-x86_64.dir/AppRun appimagetool-x86_64.dir/appimagetool
+          chmod +x linuxdeploy-x86_64.dir/AppRun linuxdeploy-plugin-qt-x86_64.dir/linuxdeploy-plugin-qt appimagetool-x86_64.dir/appimagetool
+          export PATH="$PWD/linuxdeploy-plugin-qt-x86_64.dir:$PWD/appimagetool-x86_64.dir:$PATH"
+
+          mkdir -p AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cat > AppDir/usr/share/applications/FuruiMusic.desktop <<'EOF'
           [Desktop Entry]
           Type=Application
           Name=FuruiMusic
@@ -147,11 +160,16 @@ jobs:
           Icon=FuruiMusic
           Categories=Audio;Music;
           EOF
-          # 需要让 linuxdeployqt 通过 ldd 找到 Qt 库；QML 模块必须显式给 -qmldir，
-          # 否则 QtQuick.Controls 等插件不会被复制进 AppDir（QML 打包在 qrc 里，扫描不到）
-          export LD_LIBRARY_PATH="$QT_ROOT_DIR/lib:$LD_LIBRARY_PATH"
-          VERSION=1.0.0 ./squashfs-root/AppRun app/usr/bin/FuruiMusic -appimage -no-translations \
-            -qmldir="$PWD/src/ui/qml" -verbose=1
+          # 复用仓库里的真实应用图标，AppImage 与桌面 dock 才能显示 FuruiMusic 图标
+          cp src/ui/icons/app-256.png AppDir/usr/share/icons/hicolor/256x256/apps/FuruiMusic.png
+
+          # qmake 用来定位 Qt；QML 打包在 qrc 里，但源码目录可让插件扫描需要哪些模块
+          export QMAKE="$QT_ROOT_DIR/bin/qmake"
+          export QML_SOURCES_PATHS="$PWD/src/ui/qml"
+          ./linuxdeploy-x86_64.dir/AppRun --appdir AppDir --executable build/FuruiMusic \
+            --desktop-file AppDir/usr/share/applications/FuruiMusic.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/FuruiMusic.png \
+            --plugin qt --output appimage
           APPIMAGE=$(ls FuruiMusic*.AppImage | head -1)
           mv "$APPIMAGE" ${{ matrix.config.artifact }}
           test -f ${{ matrix.config.artifact }}
