@@ -1,0 +1,423 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          # windows-2022: VS2022/v143 工具集。windows-latest 已升级 VS2026，
+          # 其 STL 移除了 stdext::make_checked_array_iterator，与 Qt 5.15.2 头文件不兼容
+          - name: Windows
+            key: windows
+            os: windows-2022
+            qt: '5.15.2'
+            host: windows
+            target: desktop
+            arch: win64_msvc2019_64
+            cmake_extra: ''
+          # Windows XP：Qt 5.7 是最后官方支持 XP 的版本，MSVC 运行库在 XP 上装不上，
+          # 因此用 MinGW 5.3 32 位工具链（产物为纯 XP 可运行、无 VC 运行时依赖）。
+          # Qt 5.7 在线仓库已下架，CI 从离线安装包按 7z 三层结构解包并缓存
+          - name: Windows XP
+            key: windows-xp
+            os: windows-2022
+            qt: '5.7.1'
+            host: windows
+            target: desktop
+            arch: win32_mingw53
+            # runner 默认是 Visual Studio 生成器，XP 目标必须强制 Ninja + MinGW
+            cmake_extra: >-
+              -G Ninja
+              -DLISTERY_CXX_STANDARD=14
+              -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++"
+          # ubuntu-22.04: 较旧的 glibc，兼容 linuxdeployqt（ubuntu-latest 的 glibc 过新会被拒绝）
+          - name: Linux
+            key: linux
+            os: ubuntu-22.04
+            qt: '5.15.2'
+            host: linux
+            target: desktop
+            arch: gcc_64
+            cmake_extra: ''
+          # macOS 用 Qt 6.8：Qt 5.15.2 的 macdeployqt 无法解析新版 Xcode 的 otool
+          # 输出（"Could not parse otool output"），Qt 6 的 macdeployqt 正常；
+          # 代码已通过 QT_VERSION_CHECK 宏兼容 Qt6，CMake 会自动选用 Qt6
+          # macos-latest 已升级 macOS 26/Xcode 26，其 SDK 移除了 AGL framework，
+          # 而 Qt 6.8.3 的 QtGui 仍链接 -framework AGL，导致链接失败；
+          # 固定 macos-15（Xcode 16，SDK 仍带 AGL）
+          - name: macOS
+            key: macos
+            os: macos-15
+            qt: '6.8.3'
+            host: mac
+            target: desktop
+            arch: clang_64
+            cmake_extra: ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt
+        if: matrix.config.name != 'Windows XP'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ matrix.config.qt }}
+          host: ${{ matrix.config.host }}
+          target: ${{ matrix.config.target }}
+          arch: ${{ matrix.config.arch }}
+          # 禁用 Qt 安装缓存：曾出现缓存恢复了旧版本 Qt 导致链接错误
+          cache: false
+
+      - name: Restore Qt 5.7 cache
+        if: matrix.config.name == 'Windows XP'
+        uses: actions/cache@v4
+        with:
+          path: D:/qt571
+          key: qt571-win32-mingw53-v1
+
+      # Qt 5.7.1 的在线安装仓库已下架，且 aqtinstall 不再支持 5.9 以下版本；
+      # 从官方离线安装包按 7-Zip 三层结构解包（exe → [0] 流 → 编号 7z 组件载荷），
+      # 只抽取含 mingw53 的 Qt 库与 MinGW 5.3 工具链组件，跳过文档/示例
+      - name: Setup Qt 5.7 + MinGW 5.3 (Windows XP)
+        if: matrix.config.name == 'Windows XP'
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            mkdir -p /d/qt571 && cd /d/qt571
+            QMAKE=$(find /d/qt571 -type f -name qmake.exe 2>/dev/null | head -1)
+            if [ -z "$QMAKE" ]; then
+              echo "=== cache miss: downloading offline installer ==="
+              curl -sL --retry 3 -o qt571.exe \
+                "https://download.qt.io/archive/qt/5.7/5.7.1/qt-opensource-windows-x86-mingw530-5.7.1.exe"
+              ls -la qt571.exe
+              mkdir -p stage && cd stage
+              echo "=== layer 1: extract [0] payload container from exe ==="
+              7z x -y "../qt571.exe" -t'*' -i'![0]' > /dev/null
+              ls -la
+              echo "=== layer 2: split numbered component archives ==="
+              7z x -y "[0]" -t'#' -i'!*.7z' > /dev/null
+              echo "=== layer 3: extract components containing mingw53 ==="
+              for f in [0-9]*.7z; do
+                if 7z l "$f" 2>/dev/null | grep -q "mingw53"; then
+                  echo "HIT: $f"
+                  7z x -y -o/d/qt571 "$f" | tail -1
+                else
+                  echo "skip: $f ($(7z l "$f" 2>/dev/null | grep -c ' [A-Z]:' ) entries)"
+                fi
+              done
+            fi
+            QTBIN=$(find /d/qt571 -type f -name qmake.exe | head -1 | xargs dirname)
+            GCCBIN=$(find /d/qt571 -type f -name "g++.exe" | head -1 | xargs dirname)
+            echo "QTBIN=$QTBIN"
+            echo "GCCBIN=$GCCBIN"
+            echo "QT_ROOT_DIR=$(dirname "$QTBIN")" >> "$GITHUB_ENV"
+            echo "CC=$GCCBIN/gcc.exe" >> "$GITHUB_ENV"
+            echo "CXX=$GCCBIN/g++.exe" >> "$GITHUB_ENV"
+            echo "$QTBIN" >> "$GITHUB_PATH"
+            echo "$GCCBIN" >> "$GITHUB_PATH"
+            echo "=== toolchain bin ==="
+            ls "$GCCBIN" | head -40
+            echo "=== gcc -v ==="
+            "$GCCBIN/gcc.exe" -v 2>&1 | head -5
+            echo "=== runtime dll check ==="
+            for f in libstdc++-6.dll libwinpthread-1.dll libgcc_s_dw2-1.dll libiconv-2.dll libintl-8.dll; do
+              [ -f "$GCCBIN/$f" ] && echo "present: $f" || echo "MISSING: $f"
+            done
+            # 解包出来的 Qt 里 qmake/windeployqt 仍带着构建机路径
+            # (c:/Users/qt/work/install)，用 qt.conf 把前缀重定向到解包目录
+            printf '[Paths]\nPrefix=..\n' > "$QTBIN/qt.conf"
+            cat "$QTBIN/qt.conf"
+            echo "qmake prefix: $("$QTBIN/qmake.exe" -query QT_INSTALL_PREFIX)"
+            # cc1plus 等位于 libexec 目录，运行时按「程序目录 → PATH」查找
+            # libwinpthread-1.dll；PATH 里 Git 自带的 64 位同名 DLL 会让 32 位
+            # cc1plus 静默加载失败，因此把运行库复制到程序目录（优先级最高）
+            for d in "$GCCBIN/../libexec/gcc/i686-w64-mingw32/5.3.0" \
+                     "$GCCBIN/../lib/gcc/i686-w64-mingw32/5.3.0"; do
+              for f in libwinpthread-1.dll libstdc++-6.dll libgcc_s_dw2-1.dll; do
+                cp "$GCCBIN/$f" "$d/$f" 2>/dev/null && echo "seeded $d/$f"
+              done
+            done
+            # 当前步骤内 GITHUB_PATH 尚未生效，先显式把工具链放进 PATH 再验证
+            export PATH="$GCCBIN:$QTBIN:$PATH"
+            echo "=== cc1plus --version ==="
+            "$GCCBIN/../libexec/gcc/i686-w64-mingw32/5.3.0/cc1plus.exe" --version 2>&1 | head -3
+            echo "cc1plus_status=${PIPESTATUS[0]}"
+            echo "=== compile smoke test ==="
+            echo 'int main(){return 0;}' > smoke.cxx
+            "$GCCBIN/g++.exe" smoke.cxx -o smoke.exe 2>&1 | head -20
+            echo "compile_status=${PIPESTATUS[0]}"
+            ls -la smoke.exe 2>&1 || true
+            ./smoke.exe; echo "run_status=$?"
+          } 2>&1 | tee setup_qt.log
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${{ env.QT_ROOT_DIR }}" \
+            ${{ matrix.config.cmake_extra }} 2>&1 | tee configure.log
+          {
+            echo "=== selected Qt (from CMakeCache) ==="
+            grep -E "Qt(5|6)Core_DIR|Qt(5|6)Core_VERSION" build/CMakeCache.txt
+            echo "=== link command ==="
+            cat build/CMakeFiles/listery.dir/link.txt 2>/dev/null | tr ' ' '\n' | grep -iE "qt|AGL" | head -30
+          } >> configure.log 2>&1 || true
+
+      - name: Build
+        if: matrix.config.name != 'Windows XP'
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build build --config Release --parallel 2>&1 | tee build.log
+
+      # XP 构建用 ninja 的 -k 0：一次暴露所有编译错误，减少调试轮次
+      - name: Build (Windows XP)
+        if: matrix.config.name == 'Windows XP'
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build build --parallel -- -k 0 2>&1 | tee build.log
+
+      # ---------- Windows ----------
+      - name: Deploy (Windows)
+        if: matrix.config.name == 'Windows'
+        shell: pwsh
+        run: |
+          & {
+            windeployqt --release --no-translations --no-opengl-sw build\Release\listery.exe
+            # 带上插件目录（MSVC 多配置生成器会把插件放到 build\plugins\Release\）
+            # 按通配符收全部插件，新增插件时不用再改这里
+            New-Item -ItemType Directory -Force -Path build\Release\plugins | Out-Null
+            $pluginDlls = Get-ChildItem build\plugins -Recurse -Filter *.dll
+            if ($pluginDlls) { $pluginDlls | ForEach-Object { Copy-Item $_.FullName build\Release\plugins\ } } else { Write-Host "WARN: plugin dll not found" }
+            Get-ChildItem build\Release\plugins | Select-Object Name
+            # 仅从 x64 子目录取运行库：GitHub 的 Windows runner 可能是 ARM64 架构，
+            # 用 -Recurse 直接搜会把 ARM64 版 vcruntime140.dll 也收进来，导致 x64 应用
+            # 加载到 ARM64 运行库而启动失败（0xC000007B）。应用与 Qt 均为 x64，必须配对。
+            $msvcRoot = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC"
+            $verDir = Get-ChildItem $msvcRoot -Directory | Sort-Object Name | Select-Object -Last 1
+            $redist = (Get-ChildItem "$($verDir.FullName)\x64" -Recurse -Filter vcruntime140.dll | Select-Object -First 1).DirectoryName
+            if ($redist) {
+              Copy-Item "$redist\vcruntime140.dll"      build\Release\
+              Copy-Item "$redist\msvcp140.dll"          build\Release\
+              Copy-Item "$redist\vcruntime140_1.dll"    build\Release\
+            }
+            Compress-Archive -Path build\Release\* -DestinationPath listery-windows.zip -Force
+          } 2>&1 | Tee-Object -FilePath deploy.log
+          if (-not (Test-Path listery-windows.zip)) { exit 1 }
+
+      # ---------- Windows 安装版（Inno Setup） ----------
+      - name: Build installer (Windows)
+        if: matrix.config.name == 'Windows'
+        shell: pwsh
+        env:
+          # 版本号直接走环境变量：run 块里就不再出现 ${{ }} 表达式
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Host "=== Inno Setup not found, installing via chocolatey ==="
+            choco install innosetup --no-progress -y
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) { Write-Host "::error::ISCC.exe not available"; exit 1 }
+          $version = $env:REF_NAME -replace '^v',''
+          if ([string]::IsNullOrWhiteSpace($version)) { $version = '1.0.0' }
+          Write-Host "=== building installer, version=$version ==="
+          & $iscc "installer\windows\listery.iss" "/DMyAppVersion=$version" 2>&1 | Tee-Object -FilePath installer.log
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::ISCC failed"; exit 1 }
+          $setup = "installer\windows\listery-windows-setup.exe"
+          if (-not (Test-Path $setup)) { Write-Host "::error::installer not produced"; exit 1 }
+          Get-Item $setup | Select-Object Name,Length
+
+      # ---------- Windows XP (MinGW 5.3 / Qt 5.7) ----------
+      - name: Deploy (Windows XP)
+        if: matrix.config.name == 'Windows XP'
+        shell: bash
+        run: |
+          set +e
+          {
+            # 冒烟测试：确认 Qt 5.7 运行库能加载、核心逻辑正常
+            QT_QPA_PLATFORM=offscreen ./build/listery.exe --selftest | tail -5 || true
+            mkdir -p dist-xp
+            cp build/listery.exe dist-xp/
+            mkdir -p dist-xp/plugins
+            cp build/plugins/*.dll dist-xp/plugins/ 2>&1 || echo "WARN: plugin dll missing"
+            ls -la dist-xp/plugins
+            windeployqt --release --no-translations --no-compiler-runtime dist-xp/listery.exe
+            WDEPLOY=$?
+            echo "windeployqt_status=$WDEPLOY"
+            if [ "$WDEPLOY" != "0" ]; then
+              echo "=== windeployqt failed, copying Qt runtime manually ==="
+              QMAKE=$(command -v qmake.exe)
+              QTDIR=$(cd "$(dirname "$QMAKE")/.." && pwd)
+              echo "QTDIR=$QTDIR"
+              cp "$QTDIR"/bin/Qt5Core.dll "$QTDIR"/bin/Qt5Gui.dll "$QTDIR"/bin/Qt5Widgets.dll \
+                 "$QTDIR"/bin/Qt5Sql.dll "$QTDIR"/bin/Qt5Network.dll dist-xp/ 2>&1
+              mkdir -p dist-xp/platforms dist-xp/sqldrivers
+              cp "$QTDIR"/plugins/platforms/qwindows.dll dist-xp/platforms/ 2>&1
+              cp "$QTDIR"/plugins/sqldrivers/qsqlite.dll dist-xp/sqldrivers/ 2>&1
+            fi
+            GCCBIN=$(dirname "$(command -v g++.exe)")
+            # MinGW 运行库随包（避免目标机缺 DLL）
+            for f in libgcc_s_sjlj-1.dll libgcc_s_dw2-1.dll libstdc++-6.dll libwinpthread-1.dll; do
+              cp "$GCCBIN/$f" dist-xp/ 2>/dev/null && echo "copied $f"
+            done
+            ls -la dist-xp
+            ls -la dist-xp/platforms dist-xp/sqldrivers 2>&1 | head -20
+            # 必须带上 Qt 运行库与平台插件，否则产物不可用（用文件传状态，管道里变量传不出来）
+            ok=1
+            [ -f dist-xp/Qt5Core.dll ] || ok=0
+            [ -f dist-xp/listery.exe ] || ok=0
+            [ -d dist-xp/platforms ] || ok=0
+            echo "$ok" > dist_ok
+            cd dist-xp && 7z a -tzip ../listery-windows-xp.zip . > /dev/null
+          } 2>&1 | tee deploy.log
+          test -f listery-windows-xp.zip && test "$(cat dist_ok)" = "1"
+
+      # ---------- Linux ----------
+      - name: Deploy (Linux)
+        if: matrix.config.name == 'Linux'
+        shell: bash
+        run: |
+          set +e
+          {
+          wget -q https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage -O linuxdeployqt.AppImage
+          chmod +x linuxdeployqt.AppImage
+          # runner 上无 FUSE：先解包再用 AppRun 运行
+          ./linuxdeployqt.AppImage --appimage-extract >/dev/null
+          mkdir -p app/usr/bin
+          cp build/listery app/usr/bin/
+          mkdir -p app/usr/bin/plugins
+          cp build/plugins/*.so app/usr/bin/plugins/ 2>/dev/null || echo "WARN: plugin .so missing"
+          ls -la app/usr/bin/plugins
+          # 生成 256x256 App 图标（desktop 文件引用的图标必须真实存在，否则 linuxdeployqt 拒绝打包）
+          python3 - <<'PY'
+          import struct, zlib
+          def chunk(t, data):
+              c = t + data
+              return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c))
+          w = h = 256
+          raw = b''.join(b'\x00' + b'\x3d\x7c\xff' * w for _ in range(h))
+          png = (b'\x89PNG\r\n\x1a\n'
+                 + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+                 + chunk(b'IDAT', zlib.compress(raw))
+                 + chunk(b'IEND', b''))
+          open('app/listery.png', 'wb').write(png)
+          PY
+          cat > app/listery.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Listery
+          Comment=Quick launcher
+          Exec=listery
+          Icon=listery
+          Categories=Utility;
+          EOF
+          VERSION=1.0.0 ./squashfs-root/AppRun app/usr/bin/listery -appimage -no-translations
+          ls *.AppImage
+          mv Listery-*.AppImage listery-linux.AppImage 2>/dev/null || mv listery-*.AppImage listery-linux.AppImage
+          } 2>&1 | tee deploy.log
+          test -f listery-linux.AppImage
+
+      # ---------- macOS ----------
+      - name: Deploy (macOS)
+        if: matrix.config.name == 'macOS'
+        shell: bash
+        run: |
+          set +e
+          ok=1
+          {
+          mkdir -p listery.app/Contents/MacOS listery.app/Contents/Resources
+          cp build/listery listery.app/Contents/MacOS/listery
+          mkdir -p listery.app/Contents/MacOS/plugins
+          # CMake 在 macOS 上把 MODULE 库命名为 libtranslator.so（不是 .dylib），
+          # 只拷 *.dylib 会让发布包里静默缺插件，所以两种后缀都收
+          cp build/plugins/*.dylib build/plugins/*.so listery.app/Contents/MacOS/plugins/ 2>/dev/null || true
+          if ! find listery.app/Contents/MacOS/plugins -maxdepth 1 \( -name '*.so' -o -name '*.dylib' \) | grep -q .; then
+            echo "WARN: plugin library missing (build/plugins 下没有 .dylib/.so)"
+          fi
+          ls -la listery.app/Contents/MacOS/plugins
+          cat > listery.app/Contents/Info.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>CFBundleName</key><string>Listery</string>
+          <key>CFBundleExecutable</key><string>listery</string>
+          <key>CFBundleIdentifier</key><string>com.listery.launcher</string>
+          <key>CFBundleVersion</key><string>1.0.0</string>
+          <key>CFBundlePackageType</key><string>APPL</string>
+          </dict></plist>
+          EOF
+          macdeployqt listery.app -verbose=1 && echo 1 > deploy_ok || echo 0 > deploy_ok
+          echo "=== .app contents ==="
+          ls -laR listery.app/Contents | head -60
+          # macdeployqt 必须把 Qt 框架拷进 .app，否则产物不可用
+          [ -d listery.app/Contents/Frameworks ] || echo 0 > deploy_ok
+          zip -r listery-macos.zip listery.app
+          } 2>&1 | tee deploy.log
+          # 注意：braces 在管道子 shell 里执行，内部变量传不出来，所以用文件传状态
+          test -f listery-macos.zip && test "$(cat deploy_ok)" = "1" \
+            && unzip -l listery-macos.zip | grep -q Frameworks
+
+      # 调试：失败时把日志写入各平台的 logs-* 分支（公开仓库可直接读）
+      - name: Dump logs to logs branch
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          BR="logs-${{ matrix.config.key }}"
+          git config user.email "ci@listery.local"
+          git config user.name "listery-ci"
+          git fetch origin "$BR" 2>/dev/null || true
+          git checkout -B "$BR" "origin/$BR" 2>/dev/null || git checkout -B "$BR"
+          mkdir -p ci-logs
+          {
+            echo "=== pwd: $(pwd)"
+            echo "=== ls ==="
+            ls -la
+            echo "=== setup_qt.log ==="
+            cat setup_qt.log 2>&1 || true
+            echo "=== configure.log ==="
+            cat configure.log 2>&1 || true
+            echo "=== build.log ==="
+            cat build.log 2>&1 || true
+            echo "=== deploy.log ==="
+            cat deploy.log 2>&1 || true
+            echo "=== installer.log ==="
+            cat installer.log 2>&1 || true
+          } > ci-logs/all.log
+          # .gitignore 含 *.log，必须 -f 强制添加
+          git add -f ci-logs/all.log
+          git commit -m "ci logs: ${{ matrix.config.name }} run ${{ github.run_id }} $(date -u +%Y%m%d%H%M%S)" || true
+          git push --force origin "$BR"
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          # 用上一个 tag 到本 tag 的提交记录自动生成发布说明，
+          # 否则 release 页面会是空的，用户不知道这一版修了什么
+          generate_release_notes: true
+          files: |
+            listery-windows.zip
+            installer/windows/listery-windows-setup.exe
+            listery-windows-xp.zip
+            listery-linux.AppImage
+            listery-macos.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
