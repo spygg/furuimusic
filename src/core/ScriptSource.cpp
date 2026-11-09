@@ -1,0 +1,935 @@
+#include "ScriptSource.h"
+
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QDebug>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QRegularExpression>
+#include <QTimer>
+#include <QUrl>
+#include <algorithm>
+#include <memory>
+
+#include "HttpClient.h"
+#include "Library.h"
+
+namespace Furui {
+
+namespace {
+
+QJsonArray stringsToJson(const QStringList &list)
+{
+    QJsonArray arr;
+    for (const QString &s : list) arr.append(s);
+    return arr;
+}
+
+QStringList jsonToStrings(const QJsonValue &value)
+{
+    QStringList out;
+    for (const QJsonValue &v : value.toArray()) out << v.toString();
+    return out;
+}
+
+QString formatInterval(qint64 ms)
+{
+    if (ms <= 0) return QString();
+    const qint64 total = ms / 1000;
+    return QStringLiteral("%1:%2").arg(total / 60, 2, 10, QLatin1Char('0'))
+                                  .arg(total % 60, 2, 10, QLatin1Char('0'));
+}
+
+qint64 parseInterval(const QVariant &value)
+{
+    if (value.isValid() && !value.toString().isEmpty()) {
+        const QString text = value.toString();
+        if (text.contains(QLatin1Char(':'))) {
+            const QStringList parts = text.split(QLatin1Char(':'));
+            qint64 sec = 0;
+            for (const QString &p : parts) sec = sec * 60 + p.toLongLong();
+            return sec * 1000;
+        }
+        const qint64 n = value.toLongLong();
+        if (n > 0) return n < 1000 ? n * 1000 : n;
+    }
+    return 0;
+}
+
+QString entrySourceId(const QVariantMap &m)
+{
+    for (const QString &key : {QStringLiteral("songmid"), QStringLiteral("id"),
+                               QStringLiteral("hash"), QStringLiteral("copyrightId"),
+                               QStringLiteral("rid"), QStringLiteral("musicId")}) {
+        const QString v = m.value(key).toString();
+        if (!v.isEmpty()) return v;
+    }
+    return QString();
+}
+
+QString entryTitle(const QVariantMap &m)
+{
+    for (const QString &key : {QStringLiteral("name"), QStringLiteral("songname"),
+                               QStringLiteral("songName"), QStringLiteral("title")}) {
+        const QString v = m.value(key).toString();
+        if (!v.isEmpty()) return v;
+    }
+    return QString();
+}
+
+QString entryArtist(const QVariantMap &m)
+{
+    const QVariant singer = m.value(QStringLiteral("singer"));
+    if (singer.canConvert<QVariantList>()) {
+        QStringList names;
+        for (const QVariant &v : singer.toList()) {
+            if (v.canConvert<QVariantMap>()) {
+                const QString n = v.toMap().value(QStringLiteral("name")).toString();
+                if (!n.isEmpty()) names << n;
+            } else if (!v.toString().isEmpty()) {
+                names << v.toString();
+            }
+        }
+        if (!names.isEmpty()) return names.join(QLatin1Char('/'));
+    }
+    const QString s = singer.toString();
+    if (!s.isEmpty()) return s;
+    return m.value(QStringLiteral("artist")).toString();
+}
+
+QString entryText(const QVariantMap &m, const QStringList &keys)
+{
+    for (const QString &key : keys) {
+        const QString v = m.value(key).toString();
+        if (!v.isEmpty()) return v;
+    }
+    return QString();
+}
+
+QString displayStatus(const QString &status)
+{
+    if (status == QLatin1String("ok")) return QStringLiteral("可用");
+    if (status == QLatin1String("error")) return QStringLiteral("失败");
+    if (status == QLatin1String("disabled")) return QStringLiteral("已禁用");
+    if (status == QLatin1String("pending")) return QStringLiteral("未检查");
+    return status;
+}
+
+} // namespace
+
+ScriptSourceManager *ScriptSourceManager::instance()
+{
+    static ScriptSourceManager *s = new ScriptSourceManager();
+    return s;
+}
+
+ScriptSourceManager::ScriptSourceManager(QObject *parent)
+    : QObject(parent)
+{
+    load();
+    // 重启后不自动联网，先用落库状态展示；用户点「检查」或真正用到时再初始化
+}
+
+void ScriptSourceManager::load()
+{
+    m_items.clear();
+    const QVariantList rows = Library::instance()->scriptSources();
+    for (const QVariant &v : rows) {
+        const QVariantMap m = v.toMap();
+        Item item;
+        item.id        = m.value(QStringLiteral("id")).toString();
+        item.name      = m.value(QStringLiteral("name")).toString();
+        item.url       = m.value(QStringLiteral("url")).toString();
+        item.version   = m.value(QStringLiteral("version")).toString();
+        item.script    = m.value(QStringLiteral("script")).toString();
+        item.hash      = m.value(QStringLiteral("hash")).toString();
+        item.enabled   = m.value(QStringLiteral("enabled"), true).toBool();
+        item.status    = m.value(QStringLiteral("status"), QStringLiteral("pending")).toString();
+        item.errorType = m.value(QStringLiteral("errorType")).toString();
+        item.errorMsg  = m.value(QStringLiteral("errorMsg")).toString();
+        item.updated   = m.value(QStringLiteral("updated")).toLongLong();
+        item.checked   = m.value(QStringLiteral("checked")).toLongLong();
+        const QJsonDocument actionsDoc =
+            QJsonDocument::fromJson(m.value(QStringLiteral("actions")).toString().toUtf8());
+        for (const QJsonValue &a : actionsDoc.array()) item.actions << a.toString();
+        const QJsonDocument qualitiesDoc =
+            QJsonDocument::fromJson(m.value(QStringLiteral("qualities")).toString().toUtf8());
+        for (const QJsonValue &q : qualitiesDoc.array()) item.qualities << q.toString();
+        const QJsonDocument sourcesDoc =
+            QJsonDocument::fromJson(m.value(QStringLiteral("sources")).toString().toUtf8());
+        if (sourcesDoc.isArray()) item.sources = sourcesDoc.array();
+        if (!item.enabled && item.status != QLatin1String("error"))
+            item.status = QStringLiteral("disabled");
+        if (!item.id.isEmpty() && !item.script.isEmpty()) m_items.insert(item.id, item);
+    }
+}
+
+ScriptSourceManager::Item *ScriptSourceManager::find(const QString &id)
+{
+    auto it = m_items.find(id);
+    return it == m_items.end() ? nullptr : &it.value();
+}
+
+QVariantMap ScriptSourceManager::itemToVariant(const Item &item) const
+{
+    QVariantMap m;
+    m.insert(QStringLiteral("id"), item.id);
+    m.insert(QStringLiteral("name"), item.name);
+    m.insert(QStringLiteral("url"), item.url);
+    m.insert(QStringLiteral("version"), item.version.isEmpty()
+                                        ? QStringLiteral("未知") : item.version);
+    m.insert(QStringLiteral("enabled"), item.enabled);
+    m.insert(QStringLiteral("status"), item.status);
+    m.insert(QStringLiteral("statusText"), displayStatus(item.status));
+    m.insert(QStringLiteral("errorType"), item.errorType);
+    m.insert(QStringLiteral("errorMsg"), item.errorMsg);
+    m.insert(QStringLiteral("actions"), item.actions);
+    m.insert(QStringLiteral("qualities"), item.qualities);
+    m.insert(QStringLiteral("sources"), item.sources.toVariantList());
+
+    bool search = false, musicUrl = false, lyric = false;
+    for (const QJsonValue &v : item.sources) {
+        const QJsonObject o = v.toObject();
+        const QStringList acts = jsonToStrings(o.value(QStringLiteral("actions")));
+        if (acts.contains(QStringLiteral("search"))) search = true;
+        if (acts.contains(QStringLiteral("musicUrl"))) musicUrl = true;
+        if (acts.contains(QStringLiteral("lyric"))) lyric = true;
+    }
+    QString capability;
+    if (search && musicUrl) capability = QStringLiteral("搜索 + 取链");
+    else if (search) capability = QStringLiteral("仅搜索");
+    else if (musicUrl) capability = QStringLiteral("仅取链（无搜索能力）");
+    else capability = QStringLiteral("未声明可用能力");
+    if (lyric && !capability.contains(QStringLiteral("歌词")))
+        capability += QStringLiteral(" · 含歌词");
+    m.insert(QStringLiteral("capability"), capability);
+
+    QStringList lines;
+    for (const QJsonValue &v : item.sources) {
+        const QJsonObject o = v.toObject();
+        const QString key = o.value(QStringLiteral("key")).toString();
+        const QString name = o.value(QStringLiteral("name")).toString();
+        const QStringList acts = jsonToStrings(o.value(QStringLiteral("actions")));
+        QStringList caps;
+        if (acts.contains(QStringLiteral("search"))) caps << QStringLiteral("搜索");
+        if (acts.contains(QStringLiteral("musicUrl"))) caps << QStringLiteral("取链");
+        if (acts.contains(QStringLiteral("lyric"))) caps << QStringLiteral("歌词");
+        lines << QStringLiteral("%1(%2)：%3")
+                    .arg(name.isEmpty() ? key : name, key, caps.join(QLatin1Char('+')));
+    }
+    m.insert(QStringLiteral("sourcesText"), lines.join(QStringLiteral("；")));
+    m.insert(QStringLiteral("checkedText"),
+             item.checked > 0
+                 ? QDateTime::fromMSecsSinceEpoch(item.checked).toString(QStringLiteral("MM-dd HH:mm"))
+                 : QStringLiteral("未检查"));
+    m.insert(QStringLiteral("updatedText"),
+             item.updated > 0
+                 ? QDateTime::fromMSecsSinceEpoch(item.updated).toString(QStringLiteral("MM-dd HH:mm"))
+                 : QStringLiteral("未知"));
+    return m;
+}
+
+QVariantList ScriptSourceManager::items() const
+{
+    QVariantList out;
+    QStringList ids = m_items.keys();
+    std::sort(ids.begin(), ids.end(), [this](const QString &a, const QString &b) {
+        return m_items.value(a).name < m_items.value(b).name;
+    });
+    for (const QString &id : ids) out << itemToVariant(m_items.value(id));
+    return out;
+}
+
+bool ScriptSourceManager::hasEnabled() const
+{
+    for (const Item &i : m_items) if (i.enabled) return true;
+    return false;
+}
+
+bool ScriptSourceManager::hasSearch() const
+{
+    for (const Item &i : m_items)
+        if (i.enabled && i.actions.contains(QStringLiteral("search"))) return true;
+    return false;
+}
+
+bool ScriptSourceManager::hasMusicUrl() const
+{
+    for (const Item &i : m_items)
+        if (i.enabled && i.actions.contains(QStringLiteral("musicUrl"))) return true;
+    return false;
+}
+
+QString ScriptSourceManager::metaLine(const QString &script, const QString &key)
+{
+    // 兼容 "// @name xxx"、"// @name: xxx" 与 jsdoc "* @name xxx"
+    const QRegularExpression re(QStringLiteral("@%1\\s*:?\\s*([^\\r\\n*]+)").arg(key));
+    const QRegularExpressionMatch m = re.match(script.left(6000));
+    if (m.hasMatch()) {
+        QString text = m.captured(1).trimmed();
+        text.remove(QLatin1Char('*'));
+        return text.trimmed();
+    }
+    return QString();
+}
+
+void ScriptSourceManager::fillMeta(Item &item, const QString &script)
+{
+    QString name = metaLine(script, QStringLiteral("name"));
+    if (name.isEmpty()) {
+        const QString path = QUrl(item.url).path();
+        name = path.section(QLatin1Char('/'), -2, -2);
+        if (name.isEmpty()) name = QStringLiteral("LX 音源");
+    }
+    item.name = name;
+    item.version = metaLine(script, QStringLiteral("version"));
+}
+
+void ScriptSourceManager::persist(const Item &item)
+{
+    QVariantMap m;
+    m.insert(QStringLiteral("id"), item.id);
+    m.insert(QStringLiteral("name"), item.name);
+    m.insert(QStringLiteral("url"), item.url);
+    m.insert(QStringLiteral("version"), item.version);
+    m.insert(QStringLiteral("script"), item.script);
+    m.insert(QStringLiteral("hash"), item.hash);
+    m.insert(QStringLiteral("enabled"), item.enabled);
+    m.insert(QStringLiteral("status"), item.status);
+    m.insert(QStringLiteral("errorType"), item.errorType);
+    m.insert(QStringLiteral("errorMsg"), item.errorMsg);
+    m.insert(QStringLiteral("actions"),
+             QString::fromUtf8(QJsonDocument(stringsToJson(item.actions)).toJson(QJsonDocument::Compact)));
+    m.insert(QStringLiteral("qualities"),
+             QString::fromUtf8(QJsonDocument(stringsToJson(item.qualities)).toJson(QJsonDocument::Compact)));
+    m.insert(QStringLiteral("sources"),
+             QString::fromUtf8(QJsonDocument(item.sources).toJson(QJsonDocument::Compact)));
+    m.insert(QStringLiteral("updated"), item.updated);
+    m.insert(QStringLiteral("checked"), item.checked);
+    Library::instance()->saveScriptSource(m);
+}
+
+void ScriptSourceManager::updateFromInit(Item &item, const ScriptInitResult &r)
+{
+    item.ready = r.ok;
+    item.checked = QDateTime::currentMSecsSinceEpoch();
+    item.errorType.clear();
+    item.errorMsg.clear();
+    item.actions.clear();
+    item.qualities.clear();
+    item.sources = QJsonArray();
+    if (!r.ok) {
+        item.status = item.enabled ? QStringLiteral("error") : QStringLiteral("disabled");
+        item.errorType = r.errorType;
+        item.errorMsg = r.errorMsg;
+        return;
+    }
+    item.status = item.enabled ? QStringLiteral("ok") : QStringLiteral("disabled");
+    QSet<QString> actionSet;
+    QSet<QString> qualitySet;
+    for (const ScriptSourceInfo &s : r.sources) {
+        QJsonObject o;
+        o.insert(QStringLiteral("key"), s.key);
+        o.insert(QStringLiteral("name"), s.name);
+        o.insert(QStringLiteral("type"), s.type);
+        o.insert(QStringLiteral("actions"), stringsToJson(s.actions));
+        o.insert(QStringLiteral("qualities"), stringsToJson(s.qualities));
+        item.sources.append(o);
+        for (const QString &a : s.actions) actionSet.insert(a);
+        for (const QString &q : s.qualities) qualitySet.insert(q);
+    }
+    QStringList actions = actionSet.values();
+    actions.sort();
+    QStringList qualities = qualitySet.values();
+    qualities.sort();
+    item.actions = actions;
+    item.qualities = qualities;
+}
+
+void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistResult)
+{
+    const QString id = item.id;
+    if (QPointer<ScriptEngine> old = m_engines.value(id)) {
+        old->stop();
+        old->deleteLater();
+    }
+    ScriptEngine *engine = new ScriptEngine(item.name, this);
+    m_engines.insert(id, engine);
+    m_starting.insert(id);
+
+    QVariantMap meta;
+    meta.insert(QStringLiteral("name"), item.name);
+    meta.insert(QStringLiteral("version"), item.version);
+    meta.insert(QStringLiteral("author"), metaLine(item.script, QStringLiteral("author")));
+    meta.insert(QStringLiteral("homepage"), metaLine(item.script, QStringLiteral("homepage")));
+    meta.insert(QStringLiteral("description"), metaLine(item.script, QStringLiteral("description")));
+    meta.insert(QStringLiteral("rawScript"), item.script);
+
+    QPointer<ScriptSourceManager> self(this);
+    engine->start(item.script, meta, [self, id, cb, persistResult](const ScriptInitResult &r) {
+        ScriptSourceManager *mgr = self.data();
+        if (!mgr) return;
+        mgr->m_starting.remove(id);
+        Item *it = mgr->find(id);
+        if (it) {
+            // 先拷贝再写回：find 返回的是 QHash 内部元素的指针，
+            // 直接 insert(id, *it) 在 rehash 时读到的已是失效内存。
+            Item item = *it;
+            mgr->updateFromInit(item, r);
+            if (persistResult) mgr->persist(item);
+            mgr->m_items.insert(id, item);
+        }
+        if (!r.ok) {
+            // 初始化回调可能正运行在 QuickJS 内部（脚本同步 send(inited) 触发），
+            // 不能在这里立刻 stop/free 上下文，否则等于在 JS 执行中途销毁宿主。
+            QPointer<ScriptEngine> dead = mgr->m_engines.value(id);
+            mgr->m_engines.remove(id);
+            if (dead) {
+                QTimer::singleShot(0, dead.data(), [dead] {
+                    if (dead) dead->stop();
+                    if (dead) dead->deleteLater();
+                });
+            }
+        }
+        emit mgr->changed();
+
+        QString text;
+        if (r.ok) {
+            QStringList caps;
+            for (const ScriptSourceInfo &s : r.sources) {
+                QStringList acts;
+                if (s.actions.contains(QStringLiteral("search"))) acts << QStringLiteral("搜索");
+                if (s.actions.contains(QStringLiteral("musicUrl"))) acts << QStringLiteral("取链");
+                if (s.actions.contains(QStringLiteral("lyric"))) acts << QStringLiteral("歌词");
+                caps << QStringLiteral("%1(%2): %3")
+                            .arg(s.name.isEmpty() ? s.key : s.name, s.key,
+                                 acts.isEmpty() ? QStringLiteral("无") : acts.join(QLatin1Char('+')));
+            }
+            text = QStringLiteral("初始化成功") +
+                   (caps.isEmpty() ? QString() : QStringLiteral("：") + caps.join(QStringLiteral("；")));
+        } else {
+            const QString typeName = [&r] {
+                if (r.errorType == QLatin1String("syntax")) return QStringLiteral("语法错误");
+                if (r.errorType == QLatin1String("timeout")) return QStringLiteral("初始化超时");
+                if (r.errorType == QLatin1String("init")) return QStringLiteral("脚本自检失败");
+                if (r.errorType == QLatin1String("empty")) return QStringLiteral("未声明音源");
+                if (r.errorType == QLatin1String("unsupported")) return QStringLiteral("缺少宿主能力");
+                return QStringLiteral("运行错误");
+            }();
+            text = QStringLiteral("%1：%2").arg(typeName, r.errorMsg);
+        }
+        emit mgr->message(id, r.ok, text);
+        if (cb) cb(r.ok, text);
+
+        const QVector<std::function<void(bool)>> waiters = mgr->m_waiters.take(id);
+        for (const auto &w : waiters) w(r.ok);
+    });
+}
+
+void ScriptSourceManager::ensureEngine(const QString &id, std::function<void(bool)> cb)
+{
+    Item *item = find(id);
+    if (!item || !item->enabled) {
+        if (cb) cb(false);
+        return;
+    }
+    QPointer<ScriptEngine> engine = m_engines.value(id);
+    if (engine && engine->ready()) {
+        if (cb) cb(true);
+        return;
+    }
+    if (m_starting.contains(id)) {
+        m_waiters[id].append(cb);
+        return;
+    }
+    m_waiters[id].append(cb);
+    startEngine(*item, {}, true);
+}
+
+void ScriptSourceManager::importUrl(const QString &url, DoneCallback cb)
+{
+    const QString trimmed = url.trimmed();
+    const QUrl target(trimmed);
+    if (!target.isValid() || target.scheme().isEmpty()
+        || !(target.scheme() == QLatin1String("http") || target.scheme() == QLatin1String("https"))) {
+        const QString msg = QStringLiteral("请输入 http/https 开头的在线脚本地址");
+        emit message(QString(), false, msg);
+        if (cb) cb(false, msg);
+        return;
+    }
+    // 下载内容会被直接 JS_Eval，明文 HTTP 存在中间人注入风险。
+    // 确需内网/自建 HTTP 源时设 FURUI_SCRIPT_ALLOW_HTTP=1 显式放开。
+    static const bool allowHttp = qEnvironmentVariableIsSet("FURUI_SCRIPT_ALLOW_HTTP");
+    if (target.scheme() == QLatin1String("http") && !allowHttp) {
+        const QString msg = QStringLiteral("在线脚本仅允许 https 地址（如需 http 请设 FURUI_SCRIPT_ALLOW_HTTP=1）");
+        emit message(QString(), false, msg);
+        if (cb) cb(false, msg);
+        return;
+    }
+
+    QVariantMap headers;
+    headers.insert(QStringLiteral("User-Agent"), QStringLiteral("FuruiMusic/1.0"));
+    headers.insert(QStringLiteral("Accept"), QStringLiteral("*/*"));
+
+    QPointer<ScriptSourceManager> self(this);
+    HttpClient::instance()->request(QStringLiteral("GET"), target, headers, QByteArray(),
+        [self, trimmed, cb](const HttpClient::Reply &r) {
+            ScriptSourceManager *mgr = self.data();
+            if (!mgr) return;
+            if (!r.ok) {
+                const QString type = classifyNetworkError(r.error, r.status);
+                const QString msg = QStringLiteral("下载失败（%1）：%2").arg(type, r.error);
+                emit mgr->message(QString(), false, msg);
+                if (cb) cb(false, msg);
+                return;
+            }
+            if (r.body.trimmed().isEmpty()) {
+                const QString msg = QStringLiteral("下载到的脚本为空");
+                emit mgr->message(QString(), false, msg);
+                if (cb) cb(false, msg);
+                return;
+            }
+            if (r.body.size() > 2 * 1024 * 1024) {
+                const QString msg = QStringLiteral("脚本超过 2 MB，已拒绝载入");
+                emit mgr->message(QString(), false, msg);
+                if (cb) cb(false, msg);
+                return;
+            }
+            const QByteArray head = r.body.left(256).trimmed().toLower();
+            if (r.body.contains('\0') || head.startsWith("<!doctype html") || head.startsWith("<html")) {
+                const QString msg = QStringLiteral("下载内容不是 JavaScript（疑似 HTML/二进制），已拒绝载入");
+                emit mgr->message(QString(), false, msg);
+                if (cb) cb(false, msg);
+                return;
+            }
+            Item item;
+            item.id = QStringLiteral("lx_") +
+                      QString::fromUtf8(QCryptographicHash::hash(trimmed.toUtf8(),
+                                                                 QCryptographicHash::Sha1).toHex()).left(12);
+            item.url = trimmed;
+            item.script = QString::fromUtf8(r.body);
+            item.hash = QString::fromUtf8(QCryptographicHash::hash(r.body, QCryptographicHash::Sha256).toHex());
+            item.enabled = true;
+            item.status = QStringLiteral("pending");
+            item.updated = QDateTime::currentMSecsSinceEpoch();
+            mgr->fillMeta(item, item.script);
+            // 完整性可追溯：同一 URL 再次导入时若指纹变化，明确提示用户复核来源
+            const Item *previous = mgr->find(item.id);
+            if (previous && !previous->hash.isEmpty() && previous->hash != item.hash) {
+                emit mgr->message(item.id, true,
+                    QStringLiteral("注意：脚本内容相对上次导入已变化（sha256 %1 → %2），请确认来源可信")
+                        .arg(previous->hash.left(8), item.hash.left(8)));
+            }
+            mgr->m_items.insert(item.id, item);
+            mgr->persist(item);
+            emit mgr->changed();
+            emit mgr->message(item.id, true, QStringLiteral("已下载并保存：") + item.name);
+
+            Item snapshot = mgr->m_items.value(item.id);
+            mgr->startEngine(snapshot, [cb, mgr](bool ok, const QString &msg) {
+                emit mgr->changed();
+                if (cb) {
+                    cb(ok, ok ? QStringLiteral("导入成功：") + msg
+                              : QStringLiteral("已保存但当前不可用：") + msg
+                                    + QStringLiteral("（可在列表中检查/更新/删除）"));
+                }
+            }, true);
+        }, 30000, true);
+}
+
+void ScriptSourceManager::update(const QString &id, DoneCallback cb)
+{
+    Item *item = find(id);
+    if (!item) {
+        if (cb) cb(false, QStringLiteral("音源不存在"));
+        return;
+    }
+    importUrl(item->url, cb);
+}
+
+void ScriptSourceManager::check(const QString &id, DoneCallback cb)
+{
+    Item *item = find(id);
+    if (!item) {
+        if (cb) cb(false, QStringLiteral("音源不存在"));
+        return;
+    }
+    if (!item->enabled) {
+        if (cb) cb(false, QStringLiteral("该音源已禁用"));
+        return;
+    }
+    startEngine(*item, cb, true);
+}
+
+void ScriptSourceManager::checkAll()
+{
+    for (const QString &id : m_items.keys()) {
+        Item &item = m_items[id];
+        if (!item.enabled || item.script.isEmpty()) continue;
+        if (m_starting.contains(id)) continue;
+        startEngine(item, {}, true);
+    }
+}
+
+void ScriptSourceManager::remove(const QString &id)
+{
+    if (QPointer<ScriptEngine> e = m_engines.take(id)) {
+        e->stop();
+        e->deleteLater();
+    }
+    m_starting.remove(id);
+    m_waiters.remove(id);
+    m_items.remove(id);
+    Library::instance()->removeScriptSource(id);
+    emit changed();
+}
+
+void ScriptSourceManager::setEnabled(const QString &id, bool enabled)
+{
+    Item *item = find(id);
+    if (!item) return;
+    item->enabled = enabled;
+    if (!enabled) {
+        if (QPointer<ScriptEngine> e = m_engines.take(id)) {
+            e->stop();
+            e->deleteLater();
+        }
+        m_starting.remove(id);
+        item->status = QStringLiteral("disabled");
+    } else if (item->status == QLatin1String("disabled")) {
+        item->status = QStringLiteral("pending");
+        item->errorType.clear();
+        item->errorMsg.clear();
+    }
+    persist(*item);
+    emit changed();
+    if (enabled) startEngine(*item, {}, true);
+}
+
+QString ScriptSourceManager::platformToLx(const QString &platform)
+{
+    if (platform == QLatin1String("netease") || platform == QLatin1String("wy")) return QStringLiteral("wy");
+    if (platform == QLatin1String("qq") || platform == QLatin1String("tx")) return QStringLiteral("tx");
+    if (platform == QLatin1String("kugou") || platform == QLatin1String("kg")) return QStringLiteral("kg");
+    if (platform == QLatin1String("kuwo") || platform == QLatin1String("kw")) return QStringLiteral("kw");
+    if (platform == QLatin1String("migu") || platform == QLatin1String("mg")) return QStringLiteral("mg");
+    return QString();
+}
+
+QString ScriptSourceManager::qualityToLx(const QString &quality)
+{
+    const QString q = quality.toLower();
+    if (q == QLatin1String("high")) return QStringLiteral("320k");
+    if (q == QLatin1String("lossless")) return QStringLiteral("flac");
+    if (q == QLatin1String("hires")) return QStringLiteral("flac24bit");
+    return QStringLiteral("128k");
+}
+
+QString ScriptSourceManager::classifyNetworkError(const QString &error, int status)
+{
+    if (status == 404) return QStringLiteral("HTTP 404");
+    if (status >= 400) return QStringLiteral("HTTP %1").arg(status);
+    const QString lower = error.toLower();
+    if (lower.contains(QLatin1String("ssl")) || lower.contains(QLatin1String("tls"))
+        || lower.contains(QLatin1String("certificate")))
+        return QStringLiteral("TLS/证书");
+    if (lower.contains(QLatin1String("timed out")) || lower.contains(QLatin1String("超时")))
+        return QStringLiteral("超时");
+    if (lower.contains(QLatin1String("host")) || lower.contains(QLatin1String("conn"))
+        || lower.contains(QLatin1String("network")))
+        return QStringLiteral("网络");
+    return QStringLiteral("网络");
+}
+
+QVector<ScriptEngine *> ScriptSourceManager::enginesFor(const QString &lxKey, const QString &action)
+{
+    QVector<ScriptEngine *> out;
+    for (auto it = m_engines.constBegin(); it != m_engines.constEnd(); ++it) {
+        ScriptEngine *e = it.value().data();
+        if (!e || !e->ready()) continue;
+        auto item = m_items.constFind(it.key());
+        if (item == m_items.constEnd() || !item->enabled) continue;
+        if (e->supports(lxKey, action)) out << e;
+    }
+    return out;
+}
+
+QVariantMap ScriptSourceManager::musicInfoFor(const Song &song, const QString &lxKey) const
+{
+    QVariantMap info = song.extra;
+    info.insert(QStringLiteral("name"), song.title);
+    info.insert(QStringLiteral("singer"), song.artist);
+    info.insert(QStringLiteral("albumName"), song.album);
+    info.insert(QStringLiteral("albumId"), song.albumId);
+    info.insert(QStringLiteral("source"), lxKey);
+    info.insert(QStringLiteral("img"), song.cover);
+    const QString interval = formatInterval(song.duration);
+    if (!interval.isEmpty()) info.insert(QStringLiteral("interval"), interval);
+    if (!song.sourceId.isEmpty()) {
+        // 不同平台/脚本对同一个 id 的字段名不一样，全部给上别名，避免脚本读到 undefined
+        for (const QString &key : {QStringLiteral("id"), QStringLiteral("musicId"),
+                                   QStringLiteral("songmid"), QStringLiteral("hash"),
+                                   QStringLiteral("copyrightId"), QStringLiteral("rid"),
+                                   QStringLiteral("albumId")}) {
+            if (!info.contains(key) || info.value(key).toString().isEmpty())
+                info.insert(key, song.sourceId);
+        }
+    }
+    return info;
+}
+
+void ScriptSourceManager::search(const QString &keyword, int limit, SongsCallback cb)
+{
+    if (keyword.trimmed().isEmpty() || !hasSearch()) {
+        if (cb) cb(QVector<Song>());
+        return;
+    }
+
+    struct State {
+        QVector<Song> songs;
+        int pending = 0;
+        bool done = false;
+        SongsCallback cb;
+    };
+    auto state = std::make_shared<State>();
+    state->cb = cb;
+
+    // 先把还未初始化的源拉起来（首次搜索时脚本需要联网自检）
+    QStringList notReady;
+    for (auto it = m_items.constBegin(); it != m_items.constEnd(); ++it) {
+        if (!it->enabled) continue;
+        QPointer<ScriptEngine> e = m_engines.value(it.key());
+        if (!e || !e->ready()) notReady << it.key();
+    }
+
+    auto run = [this, state, keyword, limit] {
+        for (auto it = m_items.constBegin(); it != m_items.constEnd(); ++it) {
+            if (!it->enabled) continue;
+            ScriptEngine *engine = m_engines.value(it.key()).data();
+            if (!engine || !engine->ready()) continue;
+            for (const ScriptSourceInfo &src : engine->sources()) {
+                if (!src.actions.contains(QStringLiteral("search"))) continue;
+                ++state->pending;
+                QVariantMap info;
+                info.insert(QStringLiteral("keyword"), keyword);
+                info.insert(QStringLiteral("page"), 1);
+                info.insert(QStringLiteral("limit"), limit);
+                info.insert(QStringLiteral("type"), 1);
+                QPointer<ScriptEngine> guard(engine);
+                const QString scriptId = it.key();
+                const QString scriptName = it->name;
+                engine->callAction(src.key, QStringLiteral("search"), info,
+                    [state, guard, scriptId, scriptName, src, limit](const ScriptActionResult &r) {
+                        Q_UNUSED(guard);
+                        if (!state->done) {
+                            QVariant data = r.data;
+                            QVariantList list;
+                            if (data.canConvert<QVariantList>()) {
+                                list = data.toList();
+                            } else if (data.canConvert<QVariantMap>()) {
+                                const QVariantMap m = data.toMap();
+                                for (const QString &key : {QStringLiteral("list"), QStringLiteral("data"),
+                                                           QStringLiteral("songs"), QStringLiteral("result")}) {
+                                    if (m.value(key).canConvert<QVariantList>()) {
+                                        list = m.value(key).toList();
+                                        break;
+                                    }
+                                }
+                            }
+                            for (const QVariant &v : list) {
+                                if (state->songs.size() >= qMax(5, limit) * 3) break;
+                                const QVariantMap raw = v.toMap();
+                                const QString title = entryTitle(raw);
+                                if (title.isEmpty()) continue;
+                                Song s;
+                                const QString sid = entrySourceId(raw);
+                                s.uid = QStringLiteral("script:%1:%2:%3")
+                                            .arg(scriptId, src.key,
+                                                 sid.isEmpty() ? QString::number(state->songs.size()) : sid);
+                                s.source = QStringLiteral("custom");
+                                s.sourceId = sid.isEmpty() ? s.uid : sid;
+                                s.title = title;
+                                s.artist = entryArtist(raw);
+                                s.album = entryText(raw, {QStringLiteral("albumName"), QStringLiteral("album")});
+                                s.albumId = entryText(raw, {QStringLiteral("albumId")});
+                                s.cover = entryText(raw, {QStringLiteral("img"), QStringLiteral("pic"),
+                                                          QStringLiteral("cover"), QStringLiteral("albumPic")});
+                                s.duration = parseInterval(raw.value(QStringLiteral("interval")));
+                                if (s.duration <= 0)
+                                    s.duration = parseInterval(raw.value(QStringLiteral("duration")));
+                                s.vip = raw.value(QStringLiteral("vip")).toBool();
+                                s.extra = raw;
+                                s.extra.insert(QStringLiteral("scriptId"), scriptId);
+                                s.extra.insert(QStringLiteral("scriptName"), scriptName);
+                                s.extra.insert(QStringLiteral("lxKey"), src.key);
+                                state->songs << s;
+                            }
+                        }
+                        if (--state->pending == 0 && !state->done) {
+                            state->done = true;
+                            if (state->cb) state->cb(state->songs);
+                        }
+                    }, 15000);
+            }
+        }
+        // 没有任何可用源时立刻回调，避免界面空转
+        if (state->pending == 0 && !state->done) {
+            state->done = true;
+            if (state->cb) state->cb(state->songs);
+        }
+    };
+
+    if (notReady.isEmpty()) {
+        run();
+        return;
+    }
+    auto remaining = std::make_shared<int>(notReady.size());
+    for (const QString &id : notReady) {
+        ensureEngine(id, [remaining, run](bool) {
+            if (--(*remaining) == 0) run();
+        });
+    }
+    // 大体积混淆脚本（如 sixyin）初始化可能超过 20s，兜底放宽到 32s
+    QTimer::singleShot(32000, this, [state] {
+        if (state->done) return;
+        state->done = true;
+        if (state->cb) state->cb(state->songs);
+    });
+}
+
+void ScriptSourceManager::resolve(const Song &song, const QString &quality, PlayableCallback cb)
+{
+    if (!hasMusicUrl()) {
+        Playable p;
+        p.message = QStringLiteral("没有启用的取链音源");
+        if (cb) cb(p);
+        return;
+    }
+
+    struct Candidate {
+        QString engineId;
+        QString lxKey;
+    };
+    QVector<Candidate> candidates;
+
+    const QString storedScript = song.extra.value(QStringLiteral("scriptId")).toString();
+    const QString storedKey = song.extra.value(QStringLiteral("lxKey")).toString();
+    if (!storedScript.isEmpty() && !storedKey.isEmpty()) {
+        candidates << Candidate{storedScript, storedKey};
+    } else {
+        const QString lx = platformToLx(song.source);
+        if (!lx.isEmpty()) {
+            for (auto it = m_items.constBegin(); it != m_items.constEnd(); ++it) {
+                if (!it->enabled) continue;
+                for (const QJsonValue &v : it->sources) {
+                    const QJsonObject o = v.toObject();
+                    if (o.value(QStringLiteral("key")).toString() != lx) continue;
+                    if (!jsonToStrings(o.value(QStringLiteral("actions"))).contains(QStringLiteral("musicUrl")))
+                        continue;
+                    candidates << Candidate{it.key(), lx};
+                    break;
+                }
+            }
+        }
+    }
+
+    if (candidates.isEmpty()) {
+        Playable p;
+        p.message = song.source == QLatin1String("custom")
+            ? QStringLiteral("该歌曲没有对应的在线音源")
+            : QStringLiteral("在线音源未声明该平台的取链能力");
+        if (cb) cb(p);
+        return;
+    }
+
+    struct ResolveState {
+        PlayableCallback cb;
+        Song song;
+        QString quality;
+        QVector<Candidate> candidates;
+        int index = 0;
+    };
+    auto state = std::make_shared<ResolveState>();
+    state->cb = cb;
+    state->song = song;
+    state->quality = quality;
+    state->candidates = candidates;
+
+    // 用 weak_ptr 打断「shared_ptr -> function -> shared_ptr」的自捕获循环；
+    // 链上的异步回调各自捕获局部强引用 step，链结束即随回调一起释放。
+    auto next = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> weakNext = next;
+    *next = [this, state, weakNext]() {
+        auto step = weakNext.lock();
+        if (!step) return;
+        if (state->index >= state->candidates.size()) {
+            Playable p;
+            p.message = QStringLiteral("所有在线音源均未能取到音频地址");
+            if (state->cb) state->cb(p);
+            return;
+        }
+        const Candidate cand = state->candidates.at(state->index++);
+        ensureEngine(cand.engineId, [this, state, cand, step](bool ok) {
+            if (!ok) { (*step)(); return; }
+            ScriptEngine *engine = m_engines.value(cand.engineId).data();
+            if (!engine || !engine->ready()) { (*step)(); return; }
+            QVariantMap info;
+            info.insert(QStringLiteral("type"), qualityToLx(state->quality));
+            info.insert(QStringLiteral("musicInfo"), musicInfoFor(state->song, cand.lxKey));
+            const QString engineId = cand.engineId;
+            engine->callAction(cand.lxKey, QStringLiteral("musicUrl"), info,
+                [this, state, engineId, step](const ScriptActionResult &r) {
+                    QString url;
+                    if (r.ok) {
+                        if (r.data.canConvert<QVariantMap>()) {
+                            const QVariantMap m = r.data.toMap();
+                            url = m.value(QStringLiteral("url")).toString();
+                        } else {
+                            url = r.data.toString();
+                        }
+                    }
+                    if (!url.isEmpty()) {
+                        Playable p;
+                        p.ok = true;
+                        p.url = QUrl(url);
+                        p.substituted = true;
+                        p.substituteSource = QStringLiteral("在线音源 · ") +
+                                             m_items.value(engineId).name;
+                        p.message = QStringLiteral("已由在线音源「%1」提供").arg(m_items.value(engineId).name);
+                        if (state->cb) state->cb(p);
+                        return;
+                    }
+                    (*step)();
+                }, 20000);
+        });
+    };
+    (*next)();
+}
+
+void ScriptSourceManager::lyric(const Song &song, StringCallback cb)
+{
+    // 只使用明确声明了 lyric 能力的脚本；没有就如实返回空
+    const QString storedScript = song.extra.value(QStringLiteral("scriptId")).toString();
+    const QString storedKey = song.extra.value(QStringLiteral("lxKey")).toString();
+    if (storedScript.isEmpty() || storedKey.isEmpty() || !hasEnabled()) {
+        if (cb) cb(QString());
+        return;
+    }
+    ensureEngine(storedScript, [this, song, storedScript, storedKey, cb](bool ok) {
+        if (!ok) { if (cb) cb(QString()); return; }
+        ScriptEngine *engine = m_engines.value(storedScript).data();
+        if (!engine || !engine->supports(storedKey, QStringLiteral("lyric"))) {
+            if (cb) cb(QString());
+            return;
+        }
+        QVariantMap info;
+        info.insert(QStringLiteral("musicInfo"), musicInfoFor(song, storedKey));
+        QPointer<ScriptEngine> guard(engine);
+        engine->callAction(storedKey, QStringLiteral("lyric"), info,
+            [cb](const ScriptActionResult &r) {
+                if (cb) cb(r.ok ? r.data.toString() : QString());
+            }, 15000);
+    });
+}
+
+} // namespace Furui

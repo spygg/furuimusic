@@ -1,0 +1,56 @@
+# 构建输出（本地生成，不入库）
+/build/
+/build_check_*/
+/debug/
+/release/
+
+# 可执行产物与打包产物（含 OpenSSL DLL、APK、临时探针）
+/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.apk
+*.aar
+*.o
+*.obj
+*.moc
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# 第三方参考源码副本（仅本地研究用，含 AGPL 项目，不入库）
+/reference/
+
+# 本地临时目录 / 助手状态 / 截图草稿
+/.scratch_jsprobe/
+/.workbuddy/
+/.screenshots/
+
+# 数据库与登录态（含 Cookie / MUSIC_U，绝不入库）
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.db3
+furui.db*
+
+# 日志与诊断输出
+*.log
+http_diag.log
+scan*.log
+
+# 本地设置与 IDE / 系统文件
+*.user
+*.autosave
+*.pro.user
+.vscode/
+.idea/
+.vs/
+.DS_Store
+Thumbs.db
+desktop.ini

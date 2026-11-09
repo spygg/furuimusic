@@ -1,0 +1,1304 @@
+{
+  "version": 1,
+  "_note": "福瑞音乐平台描述文件。公共检索类端点为示例模板，可替换为你自己的合规聚合服务。账号相关能力统一由 userApi 节描述：netease 为内置真实实现（Cookie + linuxapi + /api/linux/forward）；其余平台需配置自建账号 API 服务（设置项 accountApiBase 或 accountApiBase/<source>），契约见 tools/account_api_server.py。未配置时登录会明确报错，不会请求不存在的 URL。数据目录下同名文件可覆盖内置配置。",
+  "defaults": {
+    "pageSize": 30,
+    "timeout": 12
+  },
+  "sources": [
+    {
+      "id": "netease",
+      "name": "网易云音乐",
+      "color": "#C20C0C",
+      "base": "https://music.163.com",
+      "enabled": true,
+      "headers": {
+        "Referer": "https://music.163.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FuruiMusic/1.0",
+        "Cookie": "{cookie}"
+      },
+      "endpoints": {
+        "search": {
+          "method": "POST",
+          "path": "/api/search/get",
+          "contentType": "form",
+          "params": {
+            "s": "{keyword}",
+            "type": "1",
+            "offset": "{offset}",
+            "limit": "{limit}"
+          },
+          "root": "result.songs",
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "artist": "artists[].name",
+            "album": "album.name",
+            "cover": "album.picUrl",
+            "albumId": "album.id",
+            "duration": "duration",
+            "vip": "fee",
+            "vipValues": [
+              "1",
+              "4",
+              "8"
+            ],
+            "durationScale": 1
+          }
+        },
+        "rank": {
+          "method": "GET",
+          "path": "/api/toplist",
+          "root": "list",
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "cover": "coverImgUrl",
+            "count": "trackCount",
+            "owner": "creator.nickname"
+          }
+        },
+        "playlistDetail": {
+          "method": "GET",
+          "path": "/api/playlist/detail",
+          "params": {
+            "id": "{id}",
+            "limit": "{limit}",
+            "offset": "{offset}"
+          },
+          "root": "result.tracks",
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "artist": "artists[].name",
+            "album": "album.name",
+            "cover": "album.picUrl",
+            "duration": "duration",
+            "vip": "fee",
+            "vipValues": [
+              "1",
+              "4"
+            ],
+            "durationScale": 1
+          }
+        },
+        "url": {
+          "method": "GET",
+          "path": "/api/song/enhance/player/url",
+          "params": {
+            "ids": "[{id}]",
+            "br": "{br}"
+          },
+          "resultPaths": [
+            "data[0].url",
+            "data.url",
+            "url"
+          ],
+          "vipRule": {
+            "emptyIsVip": true,
+            "equals": [
+              {
+                "path": "data[0].code",
+                "values": [
+                  404,
+                  -1,
+                  401
+                ]
+              },
+              {
+                "path": "data[0].fee",
+                "values": [
+                  1,
+                  4
+                ]
+              }
+            ],
+            "bodyContains": [
+              "VIP",
+              "付费",
+              "试听",
+              "需要会员"
+            ]
+          }
+        },
+        "lyric": {
+          "method": "GET",
+          "path": "/api/song/lyric",
+          "params": {
+            "id": "{id}",
+            "lv": "1",
+            "kv": "1",
+            "tv": "-1"
+          },
+          "resultPaths": [
+            "lrc.lyric",
+            "lyric"
+          ]
+        }
+      },
+      "login": {
+        "methods": [
+          "cookie",
+          "qrcode",
+          "password"
+        ],
+        "_note": "网易云为内置真实实现：Cookie 验证、原生 weapi 二维码登录（/weapi/login/qrcode/*）、原生 weapi 密码登录（手机号 /weapi/login/cellphone、邮箱 /weapi/login，密码 MD5）。其余平台仍需账号 API 服务声明 extraMethods 并实现端点。"
+      },
+      "userApi": {
+        "driver": "netease",
+        "base": "",
+        "headers": {
+          "Referer": "https://music.163.com/"
+        },
+        "extra": {
+          "forwardBase": "https://music.163.com",
+          "forwardUrl": "https://music.163.com/api/linux/forward",
+          "favoritePlaylistName": "喜欢的音乐",
+          "_note": "端点路径来自洛雪 wy/songList.js 与 NeteaseCloudMusicApi；linuxapi 加密实现在 Aes128.cpp"
+        },
+        "endpoints": {
+          "profile": {
+            "path": "/api/nuser/account/get",
+            "root": "profile",
+            "extra": {
+              "forwardMethod": "GET"
+            },
+            "fields": {
+              "uid": "userId",
+              "nickname": "nickname",
+              "avatar": "avatarUrl"
+            }
+          },
+          "playlists": {
+            "path": "/api/user/playlist",
+            "params": {
+              "uid": "{uid}",
+              "limit": "{limit}",
+              "offset": "{offset}"
+            },
+            "root": "playlist",
+            "extra": {
+              "forwardMethod": "POST"
+            },
+            "fields": {
+              "id": "id",
+              "title": "name",
+              "cover": "coverImgUrl",
+              "count": "trackCount",
+              "owner": "creator.nickname"
+            }
+          },
+          "playlistSongs": {
+            "path": "/api/v3/playlist/detail",
+            "params": {
+              "id": "{id}",
+              "n": "{limit}",
+              "s": "8"
+            },
+            "root": "playlist.tracks",
+            "extra": {
+              "forwardMethod": "POST"
+            },
+            "fields": {
+              "id": "id",
+              "title": "name",
+              "artist": "ar[].name",
+              "album": "al.name",
+              "cover": "al.picUrl",
+              "duration": "dt",
+              "vip": "fee",
+              "vipValues": [
+                "1",
+                "4",
+                "8"
+              ],
+              "durationScale": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "qq",
+      "name": "QQ音乐",
+      "color": "#31C27C",
+      "base": "https://c.y.qq.com",
+      "enabled": true,
+      "headers": {
+        "Referer": "https://y.qq.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FuruiMusic/1.0",
+        "Cookie": "{cookie}"
+      },
+      "endpoints": {
+        "search": {
+          "method": "GET",
+          "path": "/soso/fcgi-bin/client_search_cp",
+          "params": {
+            "w": "{keyword}",
+            "p": "{page}",
+            "n": "{limit}",
+            "format": "json",
+            "t": "0"
+          },
+          "root": "data.song.list",
+          "fields": {
+            "id": "songmid",
+            "title": "songname",
+            "artist": "singer[].name",
+            "album": "albumname",
+            "albumId": "albummid",
+            "duration": "interval",
+            "durationScale": 1000,
+            "vip": "pay.pay_play",
+            "vipValues": [
+              "1"
+            ]
+          }
+        },
+        "rank": {
+          "method": "GET",
+          "path": "/v8/fcg-bin/fcg_v8_toplist_opt.fcg",
+          "params": {
+            "page": "index",
+            "format": "json"
+          },
+          "root": "topList",
+          "fields": {
+            "id": "id",
+            "title": "topTitle",
+            "cover": "picUrl",
+            "count": "songNum"
+          }
+        },
+        "playlistDetail": {
+          "method": "GET",
+          "path": "/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg",
+          "params": {
+            "disstid": "{id}",
+            "format": "json",
+            "type": "1",
+            "utf8": "1"
+          },
+          "root": "cdlist[0].songlist",
+          "fields": {
+            "id": "songmid",
+            "title": "songname",
+            "artist": "singer[].name",
+            "album": "albumname",
+            "duration": "interval",
+            "durationScale": 1000
+          }
+        },
+        "url": {
+          "method": "GET",
+          "path": "/base/fcgi-bin/fcg_music_express_mobile3.fcg",
+          "params": {
+            "songmid": "{id}",
+            "format": "json",
+            "guid": "{guid}",
+            "uin": "0"
+          },
+          "resultPaths": [
+            "data.items[0].url",
+            "data.url",
+            "url"
+          ],
+          "vipRule": {
+            "emptyIsVip": true,
+            "equals": [
+              {
+                "path": "code",
+                "values": [
+                  1000,
+                  800
+                ]
+              }
+            ],
+            "bodyContains": [
+              "VIP",
+              "付费",
+              "试听"
+            ]
+          }
+        },
+        "lyric": {
+          "method": "GET",
+          "path": "/lyric/fcgi-bin/fcg_query_lyric_new.fcg",
+          "params": {
+            "songmid": "{id}",
+            "format": "json",
+            "nobase64": "1"
+          },
+          "resultPaths": [
+            "lyric",
+            "data.lyric"
+          ]
+        }
+      },
+      "login": {
+        "methods": [
+          "cookie",
+          "qrcode"
+        ],
+        "_note": "QQ 音乐为内置实现：扫码走 AuthManager 的原生 ptlogin 链路（ptqrshow/ptqrlogin → 沿重定向取 code → musicu QQLogin 换 musickey），Cookie 走 QQLogin 校验并读取资料。手机号+密码登录需图形验证码与 RSA，未内置。"
+      },
+      "userApi": {
+        "driver": "direct",
+        "base": "",
+        "headers": {},
+        "extraMethods": [],
+        "extra": {
+          "favoritePlaylistName": "我喜欢的音乐",
+          "_note": "direct 驱动：用登录 Cookie 直连 QQ 官方接口，公共请求头取平台级 headers。g_tk=hash33(登录 key)、uin、musickey 由 UserApi::vars() 从 Cookie 解出。收藏即「我喜欢的音乐」歌单，由 favoritePlaylistName 识别。"
+        },
+        "endpoints": {
+          "profile": {
+            "method": "POST",
+            "path": "https://u.y.qq.com/cgi-bin/musicu.fcg",
+            "contentType": "json",
+            "jsonBody": {
+              "comm": {
+                "g_tk": "{gtk}",
+                "uin": "{uin}",
+                "format": "json",
+                "inCharset": "utf-8",
+                "outCharset": "utf-8",
+                "notice": 0,
+                "platform": "yqq.json",
+                "needNewCode": 1,
+                "ct": 24,
+                "cv": 0
+              },
+              "req": {
+                "module": "QQConnectLogin.LoginServer",
+                "method": "QQLogin",
+                "param": {
+                  "musicid": "{uin}",
+                  "musickey": "{musickey}",
+                  "expired_in": 7776000
+                }
+              }
+            },
+            "root": "req.data",
+            "fields": {
+              "uid": "str_musicid",
+              "nickname": "nick",
+              "avatar": "logo"
+            },
+            "extra": {
+              "codePath": "req.code",
+              "messagePath": "req.msg",
+              "successValues": [
+                "0"
+              ]
+            }
+          },
+          "playlists": {
+            "method": "GET",
+            "path": "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss",
+            "params": {
+              "hostuin": "{uin}",
+              "sin": "0",
+              "size": "{limit}",
+              "g_tk": "{gtk}",
+              "loginUin": "0",
+              "hostUin": "0",
+              "format": "json",
+              "inCharset": "utf8",
+              "outCharset": "utf-8",
+              "notice": "0",
+              "platform": "yqq.json",
+              "needNewCode": "0",
+              "cid": "205360838"
+            },
+            "headers": {
+              "Referer": "https://y.qq.com/portal/profile.html"
+            },
+            "root": "data.disslist",
+            "fields": {
+              "id": "tid",
+              "title": "diss_name",
+              "cover": "diss_cover",
+              "count": "song_cnt",
+              "owner": "hostname"
+            }
+          },
+          "playlistSongs": {
+            "method": "GET",
+            "path": "https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg",
+            "params": {
+              "disstid": "{id}",
+              "type": "1",
+              "json": "1",
+              "utf8": "1",
+              "onlysong": "0",
+              "loginUin": "0",
+              "hostUin": "0",
+              "format": "json",
+              "inCharset": "utf8",
+              "outCharset": "utf-8",
+              "notice": "0",
+              "platform": "yqq.json",
+              "needNewCode": "0",
+              "g_tk": "{gtk}"
+            },
+            "headers": {
+              "Referer": "https://y.qq.com/portal/profile.html"
+            },
+            "root": "cdlist[0].songlist",
+            "fields": {
+              "id": "songmid",
+              "title": "songname",
+              "artist": "singer[].name",
+              "album": "albumname",
+              "albumId": "albummid",
+              "duration": "interval",
+              "durationScale": 1000,
+              "vip": "pay.pay_play",
+              "vipValues": [
+                "1"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "kugou",
+      "name": "酷狗音乐",
+      "color": "#2CA2F9",
+      "base": "https://songsearch.kugou.com",
+      "enabled": true,
+      "headers": {
+        "User-Agent": "Mozilla/5.0 FuruiMusic/1.0",
+        "Cookie": "{cookie}"
+      },
+      "endpoints": {
+        "search": {
+          "method": "GET",
+          "path": "/song_search_v2/keyword/{keyword}/page/{page}/pagesize/{limit}",
+          "params": {
+            "platform": "WebFilter"
+          },
+          "root": "data.lists",
+          "fields": {
+            "id": "FileHash",
+            "title": "SongName",
+            "artist": "SingerName",
+            "album": "AlbumName",
+            "duration": "Duration",
+            "durationScale": 1000
+          }
+        },
+        "playlistDetail": {
+          "method": "GET",
+          "path": "https://pubsongscdn.kugou.com/v2/get_other_list_file",
+          "params": {
+            "appid": "1058",
+            "srcappid": "2919",
+            "clientver": "20000",
+            "clienttime": "{kgClienttime}",
+            "mid": "{kgMid}",
+            "uuid": "{kgUuid}",
+            "dfid": "-",
+            "type": "0",
+            "module": "playlist",
+            "page": "{page}",
+            "pagesize": "{limit}",
+            "specialid": "{id}"
+          },
+          "headers": {
+            "Referer": "https://m3ws.kugou.com/share/index.php",
+            "dfid": "-",
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 11_0 like Mac OS X) AppleWebKit/604.1.38 (KHTML, like Gecko) Version/11.0 Mobile/15A372 Safari/604.1"
+          },
+          "_note": "酷狗网页版歌单页（www.kugou.com/yy/special/single/*.html）现在一律跳首页，取不到歌曲；这条分享接口用 web keyparam 签名、游客态即可读，实测返回 data.info[]（remark=曲名、singerinfo[].name、albuminfo.name、timelen 毫秒、hash=可播 FileHash、relate_goods[] 里按码率给出各音质 hash）。",
+          "root": "data.info",
+          "fields": {
+            "id": "hash",
+            "title": "remark",
+            "artist": "singerinfo[].name",
+            "album": "albuminfo.name",
+            "albumId": "album_id",
+            "cover": "cover",
+            "duration": "timelen",
+            "durationScale": 1
+          },
+          "extra": {
+            "sign": "kugou-web"
+          }
+        },
+        "url": {
+          "method": "GET",
+          "path": "https://www.kugou.com/yy/index.php",
+          "params": {
+            "r": "play/getdata",
+            "hash": "{id}",
+            "album_id": "{albumId}"
+          },
+          "resultPaths": [
+            "data.play_url",
+            "url"
+          ],
+          "vipRule": {
+            "emptyIsVip": true,
+            "bodyContains": [
+              "VIP",
+              "付费"
+            ]
+          }
+        },
+        "lyric": {
+          "method": "GET",
+          "path": "https://www.kugou.com/yy/index.php",
+          "params": {
+            "r": "play/getdata",
+            "hash": "{id}"
+          },
+          "resultPaths": [
+            "data.lyrics",
+            "lyric"
+          ]
+        }
+      },
+      "login": {
+        "methods": [
+          "cookie",
+          "qrcode"
+        ],
+        "_note": "酷狗音乐为内置实现：扫码走 AuthManager 的原生链路（login-user.kugou.com/v2/qrcode 出二维码，v2/get_userinfo_qrcode 轮询 status，成功后用 token+userid 组成登录 Cookie），签名按 web keyparam 规则在 KugouProtocol 里完成。手机号+密码登录需要 RSA 且依赖 App 端参数，未内置。playlistDetail 用于点开自己的歌单：酷狗个人歌单的 id 是 global_collection_id（不是公开歌单的 specialid），所以走 App 网关的 /pubsongs/ 路由而不是游客态的 pubsongscdn。",
+        "playlistDetail": {
+          "method": "GET",
+          "path": "https://gateway.kugou.com/pubsongs/v2/get_other_list_file_nofilt",
+          "params": {
+            "appid": "{kgAppid}",
+            "clientver": "{kgClientver}",
+            "clienttime": "{kgClienttime}",
+            "mid": "{kgMid}",
+            "uuid": "{kgUuid}",
+            "dfid": "{kgDfid}",
+            "token": "{kgToken}",
+            "userid": "{kgUserid}",
+            "area_code": "1",
+            "plat": "1",
+            "type": "1",
+            "mode": "1",
+            "personal_switch": "1",
+            "extend_fields": "abtags,hot_cmt,popularization",
+            "begin_idx": "{offset}",
+            "pagesize": "{limit}",
+            "global_collection_id": "{id}"
+          },
+          "headers": {
+            "kg-rc": "1",
+            "User-Agent": "Android15-1070-11083-46-0-DiscoveryDRADProtocol-wifi"
+          },
+          "root": "data.songs",
+          "fields": {
+            "id": "hash",
+            "title": "name",
+            "artist": "singerinfo[].name",
+            "album": "albuminfo.name",
+            "albumId": "album_id",
+            "cover": "cover",
+            "duration": "timelen",
+            "durationScale": 1
+          },
+          "extra": {
+            "sign": "kugou-app",
+            "codePath": "error_code",
+            "messagePath": "errmsg",
+            "successValues": [
+              "0"
+            ],
+            "authCodes": [
+              "20010",
+              "20017",
+              "20018"
+            ]
+          }
+        }
+      },
+      "userApi": {
+        "driver": "direct",
+        "base": "",
+        "headers": {},
+        "extraMethods": [],
+        "extra": {
+          "favoritePlaylistName": "我喜欢",
+          "_note": "酷狗没有单独的收藏接口：「我喜欢」本身就是歌单列表里的一个歌单（服务端标记 is_def=2），靠标题从列表里认出来当收藏同步。"
+        },
+        "_note": "内置直连：用扫码拿到的 token+userid 直接请求酷狗 App 网关 gateway.kugou.com，不经过任何第三方服务。实测规矩：签名用安卓 keyparam（用错退 20006）、必须带 x-router 指明后端服务（路由先于签名：缺头或域名不存在退 502，路径不认识退 60020）、请求体不能为空（空体退 20010）；另有一类接口把服务名写在路径里（/pubsongs/...），这种不用 x-router。token 绑定 appid，与扫码用的 appid 不一致退 20018；退 20017 表示签名已通过、只是登录态不行。设备公共参数与 kgToken/kgUserid 由 Kugou::addDeviceVars/addAuthVars 从登录 Cookie 摊出来，签名由 MusicSource::buildUrl 按 extra.sign=\"kugou-app\" 补算。",
+        "endpoints": {
+          "playlists": {
+            "method": "POST",
+            "path": "https://gateway.kugou.com/v7/get_all_list",
+            "contentType": "json",
+            "params": {
+              "appid": "{kgAppid}",
+              "clientver": "{kgClientver}",
+              "clienttime": "{kgClienttime}",
+              "mid": "{kgMid}",
+              "uuid": "{kgUuid}",
+              "dfid": "{kgDfid}",
+              "plat": "1",
+              "userid": "{kgUserid}",
+              "token": "{kgToken}"
+            },
+            "jsonBody": {
+              "userid": "{kgUserid}",
+              "token": "{kgToken}",
+              "total_ver": 979,
+              "type": 2,
+              "page": 1,
+              "pagesize": 100
+            },
+            "headers": {
+              "x-router": "cloudlist.service.kugou.com",
+              "kg-rc": "1",
+              "Content-Type": "application/json; charset=UTF-8",
+              "User-Agent": "Android15-1070-11083-46-0-DiscoveryDRADProtocol-wifi"
+            },
+            "root": "data.info",
+            "fields": {
+              "id": "global_collection_id",
+              "title": "name",
+              "cover": "pic",
+              "count": "count"
+            },
+            "extra": {
+              "sign": "kugou-app",
+              "codePath": "error_code",
+              "messagePath": "errmsg",
+              "successValues": [
+                "0"
+              ],
+              "authCodes": [
+                "20010",
+                "20017",
+                "20018"
+              ]
+            }
+          },
+          "playlistSongs": {
+            "method": "GET",
+            "path": "https://gateway.kugou.com/pubsongs/v2/get_other_list_file_nofilt",
+            "params": {
+              "appid": "{kgAppid}",
+              "clientver": "{kgClientver}",
+              "clienttime": "{kgClienttime}",
+              "mid": "{kgMid}",
+              "uuid": "{kgUuid}",
+              "dfid": "{kgDfid}",
+              "token": "{kgToken}",
+              "userid": "{kgUserid}",
+              "area_code": "1",
+              "plat": "1",
+              "type": "1",
+              "mode": "1",
+              "personal_switch": "1",
+              "extend_fields": "abtags,hot_cmt,popularization",
+              "begin_idx": "{offset}",
+              "pagesize": "{limit}",
+              "global_collection_id": "{id}"
+            },
+            "headers": {
+              "kg-rc": "1",
+              "User-Agent": "Android15-1070-11083-46-0-DiscoveryDRADProtocol-wifi"
+            },
+            "root": "data.songs",
+            "fields": {
+              "id": "hash",
+              "title": "name",
+              "artist": "singerinfo[].name",
+              "album": "albuminfo.name",
+              "albumId": "album_id",
+              "cover": "cover",
+              "duration": "timelen",
+              "durationScale": 1
+            },
+            "extra": {
+              "sign": "kugou-app",
+              "codePath": "error_code",
+              "messagePath": "errmsg",
+              "successValues": [
+                "0"
+              ],
+              "authCodes": [
+                "20010",
+                "20017",
+                "20018"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "kuwo",
+      "name": "酷我音乐",
+      "color": "#FF9500",
+      "base": "https://www.kuwo.cn",
+      "enabled": true,
+      "headers": {
+        "Referer": "https://www.kuwo.cn/",
+        "User-Agent": "Mozilla/5.0 FuruiMusic/1.0",
+        "Cookie": "{cookie}",
+        "csrf": "{csrf}"
+      },
+      "endpoints": {
+        "search": {
+          "method": "GET",
+          "path": "/api/www/search/searchMusicBykeyWord",
+          "params": {
+            "key": "{keyword}",
+            "pn": "{page}",
+            "rn": "{limit}",
+            "httpsStatus": "1"
+          },
+          "root": "data.list",
+          "fields": {
+            "id": "rid",
+            "title": "name",
+            "artist": "artist",
+            "album": "album",
+            "cover": "pic",
+            "duration": "duration",
+            "durationScale": 1000,
+            "vip": "isVIP",
+            "vipValues": [
+              "1",
+              "true"
+            ]
+          }
+        },
+        "rank": {
+          "method": "GET",
+          "path": "/api/www/bang/bang/bangMenu",
+          "params": {
+            "httpsStatus": "1"
+          },
+          "root": "data[0].list",
+          "fields": {
+            "id": "bangId",
+            "title": "name",
+            "cover": "pic",
+            "count": "num"
+          }
+        },
+        "playlistDetail": {
+          "method": "GET",
+          "path": "/api/www/bang/bang/musicList",
+          "params": {
+            "bangId": "{id}",
+            "pn": "{page}",
+            "rn": "{limit}",
+            "httpsStatus": "1"
+          },
+          "root": "data.musicList",
+          "fields": {
+            "id": "rid",
+            "title": "name",
+            "artist": "artist",
+            "album": "album",
+            "cover": "pic",
+            "duration": "duration",
+            "durationScale": 1000
+          }
+        },
+        "url": {
+          "method": "GET",
+          "path": "/api/v1/www/music/playUrl",
+          "params": {
+            "mid": "{id}",
+            "type": "music",
+            "httpsStatus": "1"
+          },
+          "resultPaths": [
+            "data.url",
+            "url"
+          ],
+          "vipRule": {
+            "emptyIsVip": true,
+            "equals": [
+              {
+                "path": "code",
+                "values": [
+                  404,
+                  -1
+                ]
+              }
+            ],
+            "bodyContains": [
+              "VIP",
+              "付费",
+              "试听"
+            ]
+          }
+        },
+        "lyric": {
+          "method": "GET",
+          "path": "/api/www/music/musicInfo",
+          "params": {
+            "mid": "{id}"
+          },
+          "resultPaths": [
+            "data.lrc",
+            "lrc"
+          ]
+        }
+      },
+      "login": {
+        "methods": [
+          "cookie"
+        ],
+        "_note": "仅 Cookie 登录为内置能力；二维码/手机号由账号 API 服务声明 extraMethods 并实现端点后自动出现在登录页"
+      },
+      "userApi": {
+        "driver": "",
+        "base": "",
+        "headers": {},
+        "extraMethods": [],
+        "_note": "未内置直连：实测该平台的用户歌单接口在游客态拿不到数据（www 接口被风控拒绝，或要求先登录），要同步歌单请部署账号 API 服务并在设置里填写 accountApiBase，或改用已内置直连的网易云 / QQ / 酷狗。",
+        "endpoints": {
+          "favorites": {
+            "method": "GET",
+            "path": "/user/favorites",
+            "params": {
+              "source": "{source}",
+              "cookie": "{cookie}",
+              "uid": "{uid}",
+              "limit": "{limit}"
+            },
+            "root": "songs",
+            "fields": {
+              "id": "id",
+              "title": "title",
+              "artist": "artist",
+              "album": "album",
+              "cover": "cover",
+              "duration": "duration",
+              "durationScale": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "migu",
+      "name": "咪咕音乐",
+      "color": "#E5436C",
+      "base": "https://m.music.migu.cn",
+      "enabled": true,
+      "headers": {
+        "User-Agent": "Mozilla/5.0 FuruiMusic/1.0",
+        "Referer": "https://m.music.migu.cn/",
+        "Cookie": "{cookie}"
+      },
+      "endpoints": {
+        "search": {
+          "method": "GET",
+          "path": "/migu/remoting/scr_search_tag",
+          "params": {
+            "keyword": "{keyword}",
+            "pgc": "{page}",
+            "rows": "{limit}",
+            "type": "2"
+          },
+          "root": "musics",
+          "fields": {
+            "id": "copyrightId",
+            "title": "songName",
+            "artist": "singerName",
+            "album": "albumName",
+            "cover": "cover",
+            "duration": "duration",
+            "durationScale": 1000,
+            "vip": "vip",
+            "vipValues": [
+              "1",
+              "true"
+            ]
+          }
+        },
+        "rank": {
+          "method": "GET",
+          "path": "/migu/remoting/rank_list",
+          "root": "list",
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "cover": "pic",
+            "count": "count"
+          }
+        },
+        "playlistDetail": {
+          "method": "GET",
+          "path": "/migu/remoting/playlist_detail",
+          "params": {
+            "id": "{id}",
+            "rows": "{limit}",
+            "pgc": "{page}"
+          },
+          "root": "musics",
+          "fields": {
+            "id": "copyrightId",
+            "title": "songName",
+            "artist": "singerName",
+            "album": "albumName",
+            "duration": "duration",
+            "durationScale": 1000
+          }
+        },
+        "url": {
+          "method": "GET",
+          "path": "https://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/sub/listenUrl.do",
+          "params": {
+            "copyrightId": "{id}",
+            "resourceType": "2",
+            "toneFlag": "{toneFlag}"
+          },
+          "resultPaths": [
+            "data.url",
+            "url",
+            "data.listenUrl"
+          ],
+          "vipRule": {
+            "emptyIsVip": true,
+            "equals": [
+              {
+                "path": "code",
+                "values": [
+                  "000001",
+                  404
+                ]
+              }
+            ],
+            "bodyContains": [
+              "VIP",
+              "付费",
+              "试听"
+            ]
+          }
+        },
+        "lyric": {
+          "method": "GET",
+          "path": "/migu/remoting/lyric",
+          "params": {
+            "copyrightId": "{id}"
+          },
+          "resultPaths": [
+            "data.lyric",
+            "lyric"
+          ]
+        }
+      },
+      "login": {
+        "methods": [
+          "cookie"
+        ],
+        "_note": "仅 Cookie 登录为内置能力；二维码/手机号由账号 API 服务声明 extraMethods 并实现端点后自动出现在登录页"
+      },
+      "userApi": {
+        "driver": "",
+        "base": "",
+        "headers": {},
+        "extraMethods": [],
+        "_note": "未内置直连：实测该平台的用户歌单接口在游客态拿不到数据（www 接口被风控拒绝，或要求先登录），要同步歌单请部署账号 API 服务并在设置里填写 accountApiBase，或改用已内置直连的网易云 / QQ / 酷狗。",
+        "endpoints": {
+          "favorites": {
+            "method": "GET",
+            "path": "/user/favorites",
+            "params": {
+              "source": "{source}",
+              "cookie": "{cookie}",
+              "uid": "{uid}",
+              "limit": "{limit}"
+            },
+            "root": "songs",
+            "fields": {
+              "id": "id",
+              "title": "title",
+              "artist": "artist",
+              "album": "album",
+              "cover": "cover",
+              "duration": "duration",
+              "durationScale": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "qishui",
+      "name": "汽水音乐",
+      "color": "#12D4C6",
+      "base": "https://api.qishui.com",
+      "driver": "qishui",
+      "enabled": true,
+      "_note": "真实汽水（抖音旗下）端点直连（用户选的路线）。实测匿名搜索 /luna/pc/search/track 返回 HTTP 200 空响应，需登录态 Cookie（设置里填抖音/汽水 Cookie）才可能返回数据；X-Helios/X-Medusa 签名为可选 config，未内置。搜索/歌单详情返回是双层嵌套 result_groups[].data[].entity.track_wrapper.track（歌单详情为 media_resources[].entity.track_wrapper.track），框架通用 JsonMapper 不展平子数组，故在 MusicSource 加了 driver=\"qishui\" 做展平解析。播放/歌词走 /luna/h5/seo_track（Web UA + 可选 Cookie），返回 LRC + 播放变体，但 seo_track 可能是 H5/HTML，resultPaths 按常见字段 best-effort，命中即取、不命中回退跨源；若实测为 HTML 需后续加解析。字段映射依据 guowenye/qishui-api 的 normalizers.js。",
+      "headers": {
+        "User-Agent": "LunaPC/3.0.0(290101097)",
+        "Referer": "https://www.qishui.com/",
+        "Cookie": "{cookie}"
+      },
+      "endpoints": {
+        "search": {
+          "method": "GET",
+          "path": "/luna/pc/search/track",
+          "contentType": "json",
+          "params": {
+            "aid": "386088",
+            "app_name": "luna_pc",
+            "region": "cn",
+            "geo_region": "cn",
+            "os_region": "cn",
+            "device_platform": "windows",
+            "device_type": "Windows",
+            "os_version": "Windows 11",
+            "version_name": "3.0.0",
+            "version_code": "30000000",
+            "channel": "official",
+            "build_mode": "master",
+            "ac": "wifi",
+            "tz_name": "Asia/Shanghai",
+            "device_id": "00000000-0000-0000-0000-000000000000",
+            "iid": "000000000000000",
+            "fp": "00000000-0000-0000-0000-000000000000",
+            "q": "{keyword}",
+            "cursor": "{offset}"
+          },
+          "root": "result_groups",
+          "fields": {
+            "id": "data[].entity.track_wrapper.track.id",
+            "title": "data[].entity.track_wrapper.track.name",
+            "artist": "data[].entity.track_wrapper.track.artists[].name",
+            "album": "data[].entity.track_wrapper.track.album.name",
+            "cover": "data[].entity.track_wrapper.track.album.url_cover",
+            "duration": "data[].entity.track_wrapper.track.duration",
+            "durationScale": 1
+          }
+        },
+        "playlistDetail": {
+          "method": "POST",
+          "path": "/luna/playlist/detail",
+          "contentType": "json",
+          "jsonBody": {
+            "playlist_id": "{id}",
+            "count": "{limit}"
+          },
+          "root": "media_resources",
+          "fields": {
+            "id": "entity.track_wrapper.track.id",
+            "title": "entity.track_wrapper.track.name",
+            "artist": "entity.track_wrapper.track.artists[].name",
+            "album": "entity.track_wrapper.track.album.name",
+            "cover": "entity.track_wrapper.track.album.url_cover",
+            "duration": "entity.track_wrapper.track.duration",
+            "durationScale": 1
+          }
+        },
+        "url": {
+          "method": "GET",
+          "path": "/luna/h5/seo_track",
+          "params": {
+            "track_id": "{id}",
+            "device_platform": "web"
+          },
+          "resultPaths": [
+            "data.url",
+            "url",
+            "play_url",
+            "audio.url",
+            "data.play_url"
+          ]
+        },
+        "lyric": {
+          "method": "GET",
+          "path": "/luna/h5/seo_track",
+          "params": {
+            "track_id": "{id}",
+            "device_platform": "web"
+          },
+          "resultPaths": [
+            "lyric",
+            "lrc.lyric",
+            "data.lyric"
+          ]
+        }
+      },
+      "login": {
+        "methods": [
+          "cookie"
+        ],
+        "_note": "仅 Cookie 登录为内置能力（填抖音/汽水登录态 Cookie）。汽水原生扫码登录需已登录抖音 App 扫码且涉及 X-Helios 签名，暂未内置。"
+      },
+      "userApi": {
+        "driver": "",
+        "base": "",
+        "headers": {},
+        "extraMethods": [],
+        "_note": "汽水音乐的「我的歌单/收藏」需登录态且依赖签名，未配置。可部署自建账号 API 服务并在设置填写 accountApiBase 后自动接入（契约见 userApiContract）。"
+      }
+    }
+  ],
+  "searchPlaylistEndpoints": {
+    "netease": {
+      "method": "GET",
+      "path": "/api/search/get",
+      "params": {
+        "s": "{keyword}",
+        "type": "1000",
+        "offset": "{offset}",
+        "limit": "{limit}"
+      },
+      "root": "result.playlists",
+      "fields": {
+        "id": "id",
+        "title": "name",
+        "cover": "coverImgUrl",
+        "count": "trackCount",
+        "owner": "creator.nickname"
+      }
+    },
+    "qq": {
+      "method": "GET",
+      "path": "/soso/fcgi-bin/client_search_cp",
+      "params": {
+        "w": "{keyword}",
+        "p": "{page}",
+        "n": "{limit}",
+        "t": "2",
+        "format": "json"
+      },
+      "root": "data.list",
+      "fields": {
+        "id": "dissid",
+        "title": "dissname",
+        "cover": "imgurl",
+        "count": "song_count",
+        "owner": "creator.name"
+      }
+    },
+    "kugou": {
+      "method": "GET",
+      "path": "https://www.kugou.com/yy/special/index/{page}.html",
+      "params": {
+        "keyword": "{keyword}"
+      },
+      "root": "data.list",
+      "fields": {
+        "id": "specialid",
+        "title": "specialname",
+        "cover": "imgurl",
+        "count": "songcount",
+        "owner": "nickname"
+      }
+    },
+    "kuwo": {
+      "method": "GET",
+      "path": "/api/www/search/searchPlayListBykeyWord",
+      "params": {
+        "key": "{keyword}",
+        "pn": "{page}",
+        "rn": "{limit}",
+        "httpsStatus": "1"
+      },
+      "root": "data.list",
+      "fields": {
+        "id": "id",
+        "title": "name",
+        "cover": "img",
+        "count": "total",
+        "owner": "uname"
+      }
+    },
+    "migu": {
+      "method": "GET",
+      "path": "/migu/remoting/scr_search_tag",
+      "params": {
+        "keyword": "{keyword}",
+        "pgc": "{page}",
+        "rows": "{limit}",
+        "type": "6"
+      },
+      "root": "songLists",
+      "fields": {
+        "id": "id",
+        "title": "name",
+        "cover": "pic",
+        "count": "musicNum",
+        "owner": "createName"
+      }
+    },
+    "qishui": {
+      "method": "GET",
+      "path": "/luna/pc/search/playlist",
+      "contentType": "json",
+      "params": {
+        "aid": "386088",
+        "app_name": "luna_pc",
+        "region": "cn",
+        "device_platform": "windows",
+        "device_type": "Windows",
+        "os_version": "Windows 11",
+        "version_name": "3.0.0",
+        "version_code": "30000000",
+        "channel": "official",
+        "ac": "wifi",
+        "tz_name": "Asia/Shanghai",
+        "device_id": "00000000-0000-0000-0000-000000000000",
+        "iid": "000000000000000",
+        "fp": "00000000-0000-0000-0000-000000000000",
+        "q": "{keyword}",
+        "cursor": "{offset}"
+      },
+      "root": "result_groups",
+      "_note": "driver=qishui 时本端点的 root/fields 由 MusicSource::qishuiSearchPlaylists 的展平逻辑接管（通用 JsonMapper 不展平子数组），这里保留的是字段对照文档与关闭 driver 后的回退映射，字段路径按已解包后的 playlist 实体书写。",
+      "fields": {
+        "id": "id",
+        "title": "title",
+        "cover": "cover_url",
+        "count": "count_tracks",
+        "owner": "owner.nickname"
+      }
+    }
+  },
+  "customSourceContract": {
+    "_note": "自定义音源用于替换 VIP / 不可播放的歌曲。只把你拥有合法授权的内容接入：自建 HTTP 服务或本地音乐目录。",
+    "http": {
+      "musicUrl": "GET {base}/musicUrl?name={name}&artist={artist}&album={album}&id={id}&source={source}&quality={quality}  -> {url, lyric, cover}",
+      "search": "GET {base}/search?keyword={keyword}&limit={limit} -> {list:[{id,title,artist,album,cover,duration}]}",
+      "lyric": "GET {base}/lyric?name={name}&artist={artist}&id={id} -> {lyric}"
+    },
+    "local": "扫描用户指定的本地目录，按歌名+歌手模糊匹配 mp3/flac/m4a/wav/ogg/aac 文件"
+  },
+  "userApiContract": {
+    "_note": "自建账号 API 服务的统一契约；C++ 侧 http 驱动按此调用，实现参考 tools/account_api_server.py",
+    "headers": {
+      "X-Account-Cookie": "<cookie>"
+    },
+    "endpoints": {
+      "verify": {
+        "GET": "/user/verify?source=&cookie=",
+        "返回": "{ok, profile:{uid,nickname,avatar}}"
+      },
+      "profile": {
+        "GET": "/user/profile?source=&cookie=",
+        "返回": "{ok, profile:{uid,nickname,avatar}}"
+      },
+      "playlists": {
+        "GET": "/user/playlists?source=&cookie=&uid=&limit=&offset=",
+        "返回": "{ok, playlists:[{id,title,cover,count,owner}]}"
+      },
+      "favorites": {
+        "GET": "/user/favorites?source=&cookie=&uid=&limit=",
+        "返回": "{ok, songs:[{id,title,artist,album,cover,duration}]}"
+      },
+      "playlistSongs": {
+        "GET": "/user/playlistSongs?source=&cookie=&uid=&id=&limit=",
+        "返回": "{ok, songs:[...]}"
+      }
+    }
+  }
+}
