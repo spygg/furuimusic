@@ -32,6 +32,7 @@ jobs:
             # Qt 包本身不含编译器；按 install-qt-action 语法装 MinGW 8.1 工具链
             # （tools_mingw + 变体 qt.tools.win64_mingw810，落到 Tools/mingw810_64）
             tools: 'tools_mingw,qt.tools.win64_mingw810'
+            modules: ''
             artifact: FuruiMusic-windows-x64.zip
           # Linux 构建配置与本地脚本一致，CI 环境尚未实跑
           - name: Linux (x86_64)
@@ -42,6 +43,7 @@ jobs:
             target: desktop
             arch: gcc_64
             tools: ''
+            modules: ''
             artifact: FuruiMusic-linux-x86_64.AppImage
           # Qt 5.15.2 的旧 macdeployqt 在新 Xcode 下解析 otool 失败，故 macOS 用 Qt 6.8.3；
           # CMake 在 Qt 6 下自动切到 C++17（见 CMakeLists.txt）
@@ -53,6 +55,8 @@ jobs:
             target: desktop
             arch: clang_64
             tools: ''
+            # Qt 6 把 Multimedia 拆成独立模块，基础包不含 Qt6Multimedia
+            modules: 'qtmultimedia'
             artifact: FuruiMusic-macos-x86_64.zip
     steps:
       - name: Checkout
@@ -66,6 +70,7 @@ jobs:
           target: ${{ matrix.config.target }}
           arch: ${{ matrix.config.arch }}
           tools: ${{ matrix.config.tools }}
+          modules: ${{ matrix.config.modules }}
           cache: false
 
       # Qt 5.15.2 的官方 Linux 二进制依赖这些系统库；linuxdeployqt 解析 ldd 时也需要它们
@@ -122,7 +127,11 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          wget -q https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage -O linuxdeployqt.AppImage
+          # GitHub 上的 release 资产偶发 504 / 断流，带重试；失败时让 wget 自身报错
+          wget --tries=5 --retry-connrefused --waitretry=5 --timeout=30 \
+            https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage \
+            -O linuxdeployqt.AppImage
+          test -s linuxdeployqt.AppImage
           chmod +x linuxdeployqt.AppImage
           ./linuxdeployqt.AppImage --appimage-extract >/dev/null
           mkdir -p app/usr/bin app/usr/share/applications app/usr/share/icons/hicolor/256x256/apps
