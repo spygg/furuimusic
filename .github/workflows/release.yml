@@ -128,20 +128,8 @@ jobs:
           ./linuxdeployqt.AppImage --appimage-extract >/dev/null
           mkdir -p app/usr/bin app/usr/share/applications app/usr/share/icons/hicolor/256x256/apps
           cp build/FuruiMusic app/usr/bin/
-          # linuxdeployqt 在 AppDir 的 usr/share 下找 desktop 文件与图标，找不到会拒绝打 AppImage
-          python3 - <<'PY'
-          import struct, zlib
-          def chunk(t, data):
-              c = t + data
-              return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c))
-          w = h = 256
-          raw = b''.join(b'\x00' + b'\x3d\x7c\xff' * w for _ in range(h))
-          png = (b'\x89PNG\r\n\x1a\n'
-                 + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
-                 + chunk(b'IDAT', zlib.compress(raw))
-                 + chunk(b'IEND', b''))
-          open('app/usr/share/icons/hicolor/256x256/apps/FuruiMusic.png', 'wb').write(png)
-          PY
+          # 复用仓库里的真实应用图标，AppImage 与桌面 dock 才能显示 FuruiMusic 图标
+          cp src/ui/icons/app-256.png app/usr/share/icons/hicolor/256x256/apps/FuruiMusic.png
           cat > app/usr/share/applications/FuruiMusic.desktop <<'EOF'
           [Desktop Entry]
           Type=Application

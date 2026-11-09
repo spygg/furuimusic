@@ -102,15 +102,8 @@ Rectangle {
             Layout.alignment: Qt.AlignVCenter
             text: app.appName
             color: theme.text
-            font.pixelSize: theme.fontSm
+            font.pixelSize: theme.fontMd
             font.bold: true
-        }
-
-        Text {
-            Layout.alignment: Qt.AlignVCenter
-            text: "多平台聚合"
-            color: theme.mutedText
-            font.pixelSize: theme.fontXs
         }
 
         Item { Layout.fillWidth: true }

@@ -44,29 +44,29 @@ ApplicationWindow {
         ResizeHandle {
             targetWindow: win
             edges: Qt.LeftEdge
-            x: 0; y: corner
+            x: 0; y: resizeLayer.corner
             width: resizeLayer.edge
-            height: parent.height - corner * 2
+            height: parent.height - resizeLayer.corner * 2
         }
         ResizeHandle {
             targetWindow: win
             edges: Qt.RightEdge
-            x: parent.width - resizeLayer.edge; y: corner
+            x: parent.width - resizeLayer.edge; y: resizeLayer.corner
             width: resizeLayer.edge
-            height: parent.height - corner * 2
+            height: parent.height - resizeLayer.corner * 2
         }
         ResizeHandle {
             targetWindow: win
             edges: Qt.TopEdge
-            x: corner; y: 0
-            width: parent.width - corner * 2
+            x: resizeLayer.corner; y: 0
+            width: parent.width - resizeLayer.corner * 2
             height: resizeLayer.edge
         }
         ResizeHandle {
             targetWindow: win
             edges: Qt.BottomEdge
-            x: corner; y: parent.height - resizeLayer.edge
-            width: parent.width - corner * 2
+            x: resizeLayer.corner; y: parent.height - resizeLayer.edge
+            width: parent.width - resizeLayer.corner * 2
             height: resizeLayer.edge
         }
         ResizeHandle {

@@ -74,7 +74,7 @@ Rectangle {
                     spacing: 2
                     Text {
                         Layout.fillWidth: true
-                        text: app.currentTitle.length > 0 ? app.currentTitle : "福瑞音乐"
+                        text: app.currentTitle.length > 0 ? app.currentTitle : "尚未开始播放"
                         color: cText
                         font.pixelSize: 14
                         font.bold: true
@@ -82,7 +82,7 @@ Rectangle {
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: app.currentArtist.length > 0 ? app.currentArtist : "尚未播放"
+                        text: app.currentArtist.length > 0 ? app.currentArtist : "从搜索或音乐库选歌"
                         color: cSub
                         font.pixelSize: 11
                         elide: Text.ElideRight
@@ -132,7 +132,7 @@ Rectangle {
             Layout.alignment: Qt.AlignVCenter
 
             ControlButton {
-                text: "上一首"
+                icon: "prev"
                 textColor: cSub
                 accentColor: cPrimary
                 softColor: cSoft
@@ -147,11 +147,11 @@ Rectangle {
                     GradientStop { position: 0.0; color: theme.heroStart }
                     GradientStop { position: 1.0; color: theme.heroEnd }
                 }
-                Text {
+                GlyphIcon {
                     anchors.centerIn: parent
-                    text: app.playing ? "暂停" : "播放"
+                    name: app.playing ? "pause" : "play"
+                    size: 18
                     color: "#FFFFFF"
-                    font.pixelSize: 12
                 }
                 MouseArea {
                     anchors.fill: parent
@@ -159,7 +159,7 @@ Rectangle {
                 }
             }
             ControlButton {
-                text: "下一首"
+                icon: "next"
                 textColor: cSub
                 accentColor: cPrimary
                 softColor: cSoft

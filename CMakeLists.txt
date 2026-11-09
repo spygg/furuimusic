@@ -11,6 +11,10 @@ option(FURUI_BUILD_LEGACY_WIDGETS "构建迁移期 Widgets 旧前端" OFF)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(WIN32)
+    # 用 windres 把 app.ico 嵌进 exe，任务栏/Alt+Tab/资源管理器都能拿到 FuruiMusic 图标
+    enable_language(RC)
+endif()
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
@@ -71,6 +75,7 @@ set(UI_FILES
     src/ui/PlatformAdapter.h src/ui/PlatformAdapter.cpp
     src/ui/ThemeManager.h src/ui/ThemeManager.cpp
     src/ui/qml.qrc
+    src/ui/icons/icons.qrc
     src/ui/qml/Main.qml
     src/ui/qml/MainDesktop.qml
     src/ui/qml/TitleBar.qml
@@ -129,8 +134,17 @@ else()
             MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
             MACOSX_BUNDLE_GUI_IDENTIFIER "cn.furui.music"
-            MACOSX_BUNDLE_ICON_FILE ""
+            MACOSX_BUNDLE_ICON_FILE "FuruiMusic.icns"
         )
+        # macOS 的 Dock 图标只认 bundle 里的 .icns，运行时 setWindowIcon 不生效
+        set_source_files_properties(src/ui/icons/FuruiMusic.icns PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources")
+        target_sources(FuruiMusic PRIVATE src/ui/icons/FuruiMusic.icns)
+    endif()
+
+    if(WIN32)
+        configure_file(src/ui/icons/app.rc.in ${CMAKE_CURRENT_BINARY_DIR}/app.rc @ONLY)
+        target_sources(FuruiMusic PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/app.rc)
     endif()
 
     if(FURUI_BUILD_LEGACY_WIDGETS)

@@ -70,6 +70,25 @@ Item {
                 ctx.lineTo(0.78 * w, 0.5 * h)
                 ctx.closePath()
                 ctx.fill()
+            } else if (root.name === "prev" || root.name === "next") {
+                // 上一首/下一首：竖条 + 实心三角，next 为 prev 的水平镜像
+                var next = root.name === "next"
+                var barX = next ? 0.76 : 0.18
+                ctx.beginPath()
+                ctx.rect(barX * w, 0.2 * h, 0.07 * w, 0.6 * h)
+                ctx.fill()
+                ctx.beginPath()
+                if (next) {
+                    ctx.moveTo(0.32 * w, 0.2 * h)
+                    ctx.lineTo(0.32 * w, 0.8 * h)
+                    ctx.lineTo(0.70 * w, 0.5 * h)
+                } else {
+                    ctx.moveTo(0.68 * w, 0.2 * h)
+                    ctx.lineTo(0.68 * w, 0.8 * h)
+                    ctx.lineTo(0.30 * w, 0.5 * h)
+                }
+                ctx.closePath()
+                ctx.fill()
             } else if (root.name === "pause") {
                 ctx.beginPath()
                 ctx.rect(0.32 * w, 0.24 * h, 0.11 * w, 0.52 * h)

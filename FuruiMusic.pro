@@ -95,7 +95,7 @@ CONFIG(legacy_widgets) {
     TARGET = FuruiMusic
     HEADERS += src/ui/PlatformAdapter.h src/ui/ThemeManager.h
     SOURCES += src/ui/main.cpp src/ui/PlatformAdapter.cpp src/ui/ThemeManager.cpp
-    RESOURCES += src/ui/qml.qrc
+    RESOURCES += src/ui/qml.qrc src/ui/icons/icons.qrc
     OTHER_FILES += \
         src/ui/qml/Main.qml \
         src/ui/qml/MainDesktop.qml \

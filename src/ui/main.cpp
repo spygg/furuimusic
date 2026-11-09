@@ -1,6 +1,7 @@
 // 福瑞音乐 - 桌面与移动共用的 QML 入口
 #include <QFile>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
@@ -23,6 +24,15 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("福瑞音乐"));
     QGuiApplication::setOrganizationName(QStringLiteral("Furui"));
+
+    // 自绘无边框窗口不会自动继承 exe 图标：显式设置窗口图标，任务栏与 Alt+Tab 才能显示
+    QIcon appIcon;
+    static const int kIconSizes[] = {16, 24, 32, 48, 64, 128, 256, 512};
+    for (int size : kIconSizes)
+        appIcon.addFile(QStringLiteral(":/icons/app-%1.png").arg(size));
+    QGuiApplication::setWindowIcon(appIcon);
+    // Linux Wayland 用 desktop file 名匹配应用图标（与 CI AppImage 的 FuruiMusic.desktop 一致）
+    QGuiApplication::setDesktopFileName(QStringLiteral("FuruiMusic"));
 
     // 应用名与数据目录确定后再创建门面单例
     Furui::PlatformAdapter platform;
