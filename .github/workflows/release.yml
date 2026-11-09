@@ -203,7 +203,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          generate_release_notes: true
+          # 三个矩阵 job 并发触发时，若都自动生成说明，Release 正文会出现重复段落；
+          # 只让 Windows job 生成一次，其余 job 只上传资产、保留已有正文
+          generate_release_notes: ${{ matrix.config.key == 'windows-x64' }}
           files: ${{ matrix.config.artifact }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
