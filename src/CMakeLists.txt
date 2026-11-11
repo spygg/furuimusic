@@ -5,7 +5,7 @@
 #   FuruiMusicWidgets  迁移期保留的 Widgets 旧前端（默认不构建）
 # Qt 5 Android 的 APK 打包仍使用 qmake（见 FuruiMusic.pro）。
 cmake_minimum_required(VERSION 3.16)
-project(FuruiMusic VERSION 1.0.0 LANGUAGES C CXX)
+project(FuruiMusic VERSION 1.1.0 LANGUAGES C CXX)
 
 option(FURUI_BUILD_LEGACY_WIDGETS "构建迁移期 Widgets 旧前端" OFF)
 
@@ -22,7 +22,7 @@ if(MSVC)
     add_compile_options(/utf-8)
 endif()
 
-set(QT_COMPONENTS Core Gui Network Sql Multimedia Qml Quick)
+set(QT_COMPONENTS Core Gui Network Sql Multimedia Qml Quick QuickControls2)
 if(FURUI_BUILD_LEGACY_WIDGETS AND NOT ANDROID)
     list(APPEND QT_COMPONENTS Widgets)
 endif()
@@ -37,78 +37,80 @@ if(QT_VERSION_MAJOR GREATER_EQUAL 6)
 endif()
 
 # sources.json 内容变化时让 AUTORCC 重新生成 qrc_config.cpp
-set_source_files_properties(src/core/config.qrc PROPERTIES
+set_source_files_properties(core/config.qrc PROPERTIES
     AUTORCC_DEPENDENCIES "${CMAKE_CURRENT_SOURCE_DIR}/config/sources.json")
 
 set(CORE_FILES
 
-    src/core/Types.h src/core/Types.cpp
-    src/core/Settings.h src/core/JsonMapper.h
-    src/core/HttpClient.h src/core/HttpClient.cpp
-    src/core/SourceConfig.h src/core/SourceConfig.cpp
-    src/core/Library.h src/core/Library.cpp
-    src/core/MusicSource.h src/core/MusicSource.cpp
-    src/core/CustomSource.h src/core/CustomSource.cpp
-    src/core/ScriptEngine.h src/core/ScriptEngine.cpp
-    src/core/ScriptSource.h src/core/ScriptSource.cpp
-    src/core/3rd/quickjs/quickjs.c
-    src/core/3rd/quickjs/cutils.c
-    src/core/3rd/quickjs/libregexp.c
-    src/core/3rd/quickjs/libunicode.c
-    src/core/3rd/quickjs/libbf.c
-    src/core/SourceManager.h src/core/SourceManager.cpp
-    src/core/AuthManager.h src/core/AuthManager.cpp
-    src/core/PlayerController.h src/core/PlayerController.cpp
-    src/core/AppController.h src/core/AppController.cpp
-    src/core/OpenApiServer.h src/core/OpenApiServer.cpp
-    src/core/Aes128.h src/core/Aes128.cpp
-    src/core/UserApi.h src/core/UserApi.cpp
-    src/core/NeteaseCrypto.h src/core/NeteaseCrypto.cpp
-    src/core/QqProtocol.h src/core/QqProtocol.cpp
-    src/core/KugouProtocol.h src/core/KugouProtocol.cpp
-    src/core/3rd/qrcodegen.hpp src/core/3rd/qrcodegen.cpp
-    src/core/config.qrc
+    core/Types.h core/Types.cpp
+    core/Settings.h core/JsonMapper.h
+    core/HttpClient.h core/HttpClient.cpp
+    core/SourceConfig.h core/SourceConfig.cpp
+    core/Library.h core/Library.cpp
+    core/MusicSource.h core/MusicSource.cpp
+    core/CustomSource.h core/CustomSource.cpp
+    core/GdMusicSource.h core/GdMusicSource.cpp
+    core/ScriptEngine.h core/ScriptEngine.cpp
+    core/ScriptSource.h core/ScriptSource.cpp
+    core/3rd/quickjs/quickjs.c
+    core/3rd/quickjs/cutils.c
+    core/3rd/quickjs/libregexp.c
+    core/3rd/quickjs/libunicode.c
+    core/3rd/quickjs/libbf.c
+    core/SourceManager.h core/SourceManager.cpp
+    core/AuthManager.h core/AuthManager.cpp
+    core/PlayerController.h core/PlayerController.cpp
+    core/AppController.h core/AppController.cpp
+    core/OpenApiServer.h core/OpenApiServer.cpp
+    core/Aes128.h core/Aes128.cpp
+    core/UserApi.h core/UserApi.cpp
+    core/NeteaseCrypto.h core/NeteaseCrypto.cpp
+    core/QqProtocol.h core/QqProtocol.cpp
+    core/RsaPkcs1.h
+    core/KugouProtocol.h core/KugouProtocol.cpp
+    core/KugouLoginCrypto.h core/KugouLoginCrypto.cpp
+    core/3rd/qrcodegen.hpp core/3rd/qrcodegen.cpp
+    core/config.qrc
 )
 
 set(UI_FILES
-    src/ui/main.cpp
-    src/ui/PlatformAdapter.h src/ui/PlatformAdapter.cpp
-    src/ui/ThemeManager.h src/ui/ThemeManager.cpp
-    src/ui/qml.qrc
-    src/ui/icons/icons.qrc
-    src/ui/qml/Main.qml
-    src/ui/qml/MainDesktop.qml
-    src/ui/qml/TitleBar.qml
-    src/ui/qml/ResizeHandle.qml
-    src/ui/qml/GlyphIcon.qml
-    src/ui/qml/MainMobile.qml
-    src/ui/qml/SearchPage.qml
-    src/ui/qml/LibraryPage.qml
-    src/ui/qml/LoginPage.qml
-    src/ui/qml/PlayerPage.qml
-    src/ui/qml/SettingsPage.qml
-    src/ui/qml/PlayBar.qml
-    src/ui/qml/QueueDrawer.qml
-    src/ui/qml/ControlButton.qml
-    src/ui/qml/NavButton.qml
-    src/ui/qml/SongRow.qml
-    src/ui/qml/AlbumCard.qml
-    src/ui/qml/PlatformChip.qml
-    src/ui/qml/EmptyState.qml
+    ui/main.cpp
+    ui/PlatformAdapter.h ui/PlatformAdapter.cpp
+    ui/ThemeManager.h ui/ThemeManager.cpp
+    ui/GlyphImageProvider.h ui/GlyphImageProvider.cpp
+    ui/qml.qrc
+    ui/icons/icons.qrc
+    ui/qml/Main.qml
+    ui/qml/MainDesktop.qml
+    ui/qml/TitleBar.qml
+    ui/qml/ResizeHandle.qml
+    ui/qml/GlyphIcon.qml
+    ui/qml/MainMobile.qml
+    ui/qml/LibraryPage.qml
+    ui/qml/LoginPage.qml
+    ui/qml/PlayerPage.qml
+    ui/qml/SettingsPage.qml
+    ui/qml/PlayBar.qml
+    ui/qml/QueueDrawer.qml
+    ui/qml/ControlButton.qml
+    ui/qml/NavButton.qml
+    ui/qml/SongRow.qml
+    ui/qml/AlbumCard.qml
+    ui/qml/EmptyState.qml
 )
 
 set(LEGACY_WIDGETS_FILES
-    src/desktop/main_desktop.cpp
-    src/desktop/MainWindow.h src/desktop/MainWindow.cpp
-    src/desktop/Theme.h src/desktop/Theme.cpp src/desktop/ThemeStyle.cpp
-    src/desktop/PlayerWidgets.h src/desktop/PlayerWidgets.cpp
-    src/desktop/LoginDialog.h src/desktop/LoginDialog.cpp
-    src/desktop/SettingsDialog.h src/desktop/SettingsDialog.cpp
-    src/desktop/LyricsWindow.h src/desktop/LyricsWindow.cpp
+    desktop/main_desktop.cpp
+    desktop/MainWindow.h desktop/MainWindow.cpp
+    desktop/Theme.h desktop/Theme.cpp desktop/ThemeStyle.cpp
+    desktop/PlayerWidgets.h desktop/PlayerWidgets.cpp
+    desktop/LoginDialog.h desktop/LoginDialog.cpp
+    desktop/SettingsDialog.h desktop/SettingsDialog.cpp
+    desktop/LyricsWindow.h desktop/LyricsWindow.cpp
 )
 
 add_library(FuruiCore STATIC ${CORE_FILES})
-target_include_directories(FuruiCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(FuruiCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(FuruiCore PUBLIC
     ${QT}::Core ${QT}::Gui ${QT}::Network ${QT}::Sql ${QT}::Multimedia)
 
@@ -117,15 +119,35 @@ if(ANDROID)
         message(FATAL_ERROR "CMake 的 Android 打包需要 Qt 6；Qt 5 Android 请用 FuruiMusic.pro + qmake")
     endif()
     qt_add_executable(FuruiMusic MANUAL_FINALIZATION ${UI_FILES})
+    # androiddeployqt 不会自动读 project() 的 VERSION，缺省写死 1.0/1；
+    # 这里显式传进去，保证「应用关于页显示的版本 = git tag」。
+    math(EXPR FURUI_ANDROID_VERSION_CODE
+         "${PROJECT_VERSION_MAJOR} * 10000 + ${PROJECT_VERSION_MINOR} * 100 + ${PROJECT_VERSION_PATCH}")
     set_target_properties(FuruiMusic PROPERTIES
         QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android_qt6"
+        QT_ANDROID_VERSION_NAME "${PROJECT_VERSION}"
+        QT_ANDROID_VERSION_CODE ${FURUI_ANDROID_VERSION_CODE}
         QT_ANDROID_MIN_SDK_VERSION 23
         QT_ANDROID_TARGET_SDK_VERSION 35)
-    target_link_libraries(FuruiMusic PRIVATE FuruiCore ${QT}::Qml ${QT}::Quick)
+
+    # Android 系统只提供 BoringSSL，Qt 6 的 OpenSSL 后端会按 _3 后缀查找
+    # libssl_3.so / libcrypto_3.so。缺失时 QSslSocket::supportsSsl() 为 false，
+    # 所有 HTTPS 音源和在线脚本都会取链失败，因此把预编译库随 APK 一起打包。
+    set(FURUI_ANDROID_OPENSSL_LIBS
+        "${CMAKE_CURRENT_SOURCE_DIR}/android_qt6/libs/${ANDROID_ABI}/libssl_3.so"
+        "${CMAKE_CURRENT_SOURCE_DIR}/android_qt6/libs/${ANDROID_ABI}/libcrypto_3.so")
+    foreach(_ssl_lib IN LISTS FURUI_ANDROID_OPENSSL_LIBS)
+        if(EXISTS "${_ssl_lib}")
+            set_property(TARGET FuruiMusic APPEND PROPERTY
+                QT_ANDROID_EXTRA_LIBS "${_ssl_lib}")
+        endif()
+    endforeach()
+
+    target_link_libraries(FuruiMusic PRIVATE FuruiCore ${QT}::Qml ${QT}::Quick ${QT}::QuickControls2)
     qt_finalize_executable(FuruiMusic)
 else()
     add_executable(FuruiMusic WIN32 MACOSX_BUNDLE ${UI_FILES})
-    target_link_libraries(FuruiMusic PRIVATE FuruiCore ${QT}::Qml ${QT}::Quick)
+    target_link_libraries(FuruiMusic PRIVATE FuruiCore ${QT}::Qml ${QT}::Quick ${QT}::QuickControls2)
     set_target_properties(FuruiMusic PROPERTIES OUTPUT_NAME "FuruiMusic")
 
     if(APPLE)
@@ -137,13 +159,13 @@ else()
             MACOSX_BUNDLE_ICON_FILE "FuruiMusic.icns"
         )
         # macOS 的 Dock 图标只认 bundle 里的 .icns，运行时 setWindowIcon 不生效
-        set_source_files_properties(src/ui/icons/FuruiMusic.icns PROPERTIES
+        set_source_files_properties(ui/icons/FuruiMusic.icns PROPERTIES
             MACOSX_PACKAGE_LOCATION "Resources")
-        target_sources(FuruiMusic PRIVATE src/ui/icons/FuruiMusic.icns)
+        target_sources(FuruiMusic PRIVATE ui/icons/FuruiMusic.icns)
     endif()
 
     if(WIN32)
-        configure_file(src/ui/icons/app.rc.in ${CMAKE_CURRENT_BINARY_DIR}/app.rc @ONLY)
+        configure_file(ui/icons/app.rc.in ${CMAKE_CURRENT_BINARY_DIR}/app.rc @ONLY)
         target_sources(FuruiMusic PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/app.rc)
     endif()
 
@@ -160,13 +182,13 @@ set_target_properties(FuruiCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # 现存 LX 音源脚本无一例外要用到这些语法，所以必须用独立引擎）。
 # MinGW 8.1 在 -O2 + SEH 下会让 quickjs 汇编出错，固定 -O1。
 set(QUICKJS_SOURCES
-    src/core/3rd/quickjs/quickjs.c
-    src/core/3rd/quickjs/cutils.c
-    src/core/3rd/quickjs/libregexp.c
-    src/core/3rd/quickjs/libunicode.c
-    src/core/3rd/quickjs/libbf.c
+    core/3rd/quickjs/quickjs.c
+    core/3rd/quickjs/cutils.c
+    core/3rd/quickjs/libregexp.c
+    core/3rd/quickjs/libunicode.c
+    core/3rd/quickjs/libbf.c
 )
 if(NOT MSVC)
     set_source_files_properties(${QUICKJS_SOURCES} PROPERTIES COMPILE_FLAGS
-        "-O1 -std=gnu99 -D_GNU_SOURCE -include ${CMAKE_CURRENT_SOURCE_DIR}/src/core/3rd/quickjs/qjs_config.h")
+        "-O1 -std=gnu99 -D_GNU_SOURCE -include ${CMAKE_CURRENT_SOURCE_DIR}/core/3rd/quickjs/qjs_config.h")
 endif()

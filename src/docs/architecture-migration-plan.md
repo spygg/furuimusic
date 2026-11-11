@@ -26,7 +26,7 @@
   - `FuruiCore` 静态库：`src/core/*`
   - 桌面：`FuruiMusicDesktop`（Widgets）+ `FuruiMusicMobile`（Quick 预览）
   - Android：仅 Qt 6 支持 `qt_add_executable` 打 APK
-- `scripts/build_windows.bat` / `build_linux.sh` / `build_macos.sh` / `build_android_qt6.bat` 已存在，但分别围绕两套前端。
+- `src/scripts/build_windows.bat` / `build_linux.sh` / `build_macos.sh` / `build_android_qt6.bat` 已存在，但分别围绕两套前端。
 
 问题：同一份 QML 只属于 Android 目标；桌面没有 QML 入口；两套界面长期并存，功能会持续分叉。
 
@@ -54,7 +54,7 @@
 
 - **CMake 为主**：桌面（Qt 5 / Qt 6）与 Qt 6 Android 全部由同一份 `CMakeLists.txt` 产出同一套目标，跨平台一致性最好。
 - **qmake 为兼容层**：Qt 5.15 的 Android APK 打包链路（`ANDROID_PACKAGE_SOURCE_DIR`、`android_openssl`）仍依赖 qmake，因此保留 `FuruiMusic.pro`，但源文件清单与目标命名必须与 CMake 对齐，并且同样只产出 QML 前端。
-- 不再把 qmake 作为桌面首选构建方式；`scripts/build_windows.bat` 后续改为 CMake 优先。
+- 不再把 qmake 作为桌面首选构建方式；`src/scripts/build_windows.bat` 后续改为 CMake 优先。
 
 目标组织（两端一致）：
 

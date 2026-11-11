@@ -24,12 +24,33 @@ Rectangle {
         color: theme.line
     }
 
-    // 拖动区：铺满整条标题栏，窗口按钮声明在后面自然盖住它
+    // 拖动区：铺满整条标题栏，窗口按钮声明在后面自然盖住它。
+    // startSystemMove() 在少数 Wayland / X11 环境下会返回 false，此时退化成手算窗口位置，
+    // 否则这些平台上无边框窗口将完全拖不动。
     MouseArea {
+        id: dragArea
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton
-        onPressed: platform.startSystemMove(root.win)
-        onDoubleClicked: platform.toggleMaximize(root.win)
+        property bool manualMove: false
+        property point pressPos
+        property point windowPos
+        onPressed: {
+            if (!root.win)
+                return
+            manualMove = !platform.startSystemMove(root.win)
+            pressPos = Qt.point(mouse.x, mouse.y)
+            windowPos = Qt.point(root.win.x, root.win.y)
+        }
+        onPositionChanged: {
+            if (!pressed || !manualMove || !root.win)
+                return
+            root.win.x = windowPos.x + (mouse.x - pressPos.x)
+            root.win.y = windowPos.y + (mouse.y - pressPos.y)
+        }
+        onDoubleClicked: {
+            if (root.win)
+                platform.toggleMaximize(root.win)
+        }
     }
 
     RowLayout {
@@ -42,7 +63,7 @@ Rectangle {
         Row {
             visible: root.isMac
             spacing: 8
-            anchors.verticalCenter: parent.verticalCenter
+            Layout.alignment: Qt.AlignVCenter
 
             Repeater {
                 model: [
@@ -79,8 +100,10 @@ Rectangle {
             }
         }
 
-        // 品牌
+        // 品牌：移动端（Android/iOS）顶部本来就拥挤，且系统已有应用名，不再重复展示；
+        // 桌面端保留作为窗口标题栏的品牌区
         Rectangle {
+            visible: !platform.isMobile
             Layout.alignment: Qt.AlignVCenter
             implicitWidth: 22
             implicitHeight: 22
@@ -99,6 +122,7 @@ Rectangle {
         }
 
         Text {
+            visible: !platform.isMobile
             Layout.alignment: Qt.AlignVCenter
             text: app.appName
             color: theme.text
@@ -135,11 +159,12 @@ Rectangle {
             }
         }
 
-        // Windows / Linux 窗口按钮
+        // Windows / Linux 窗口按钮：仅桌面端（支持无边框窗口）显示；
+        // Android/iOS 等系统窗口平台没有最小化/最大化/关闭的概念，强行显示会与系统栏叠在一起
         Row {
-            visible: !root.isMac
+            visible: !root.isMac && platform.framelessSupported
             spacing: 2
-            anchors.verticalCenter: parent.verticalCenter
+            Layout.alignment: Qt.AlignVCenter
 
             Repeater {
                 model: ["min", "max", "close"]

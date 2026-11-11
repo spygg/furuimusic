@@ -5,6 +5,7 @@
 #include <QAbstractListModel>
 #include <QObject>
 #include <QVariant>
+#include <QVariantList>
 
 #include "Types.h"
 
@@ -26,6 +27,8 @@ public:
     void setSongs(const QVector<Song> &songs);
     void appendSongs(const QVector<Song> &songs);
     void refreshRow(int row);
+    // 播放时异步补到封面后，把同一首歌在结果/队列模型里的行一起刷新
+    void setCover(const QString &uid, const QString &cover);
     const QVector<Song> &songs() const { return m_songs; }
     void clear();
 private:
@@ -82,6 +85,9 @@ class AppController : public QObject {
     Q_PROPERTY(SongListModel *results READ results CONSTANT)
     Q_PROPERTY(SongListModel *queue READ queue CONSTANT)
     Q_PROPERTY(PlaylistListModel *playlists READ playlists CONSTANT)
+    // 公开榜单/推荐歌单：不依赖任何账号登录，未登录时音乐库也有内容
+    Q_PROPERTY(PlaylistListModel *discovery READ discovery CONSTANT)
+    Q_PROPERTY(bool discoveryLoading READ discoveryLoading NOTIFY discoveryChanged)
     Q_PROPERTY(AccountListModel *accounts READ accounts CONSTANT)
     // ---- 播放器状态 ----
     Q_PROPERTY(QString currentTitle READ currentTitle NOTIFY playerChanged)
@@ -95,10 +101,13 @@ class AppController : public QObject {
     Q_PROPERTY(int currentQueueIndex READ currentQueueIndex NOTIFY playerChanged)
     Q_PROPERTY(bool currentFavorite READ currentFavorite NOTIFY playerChanged)
     Q_PROPERTY(QString theme READ theme NOTIFY settingsChanged)
-    Q_PROPERTY(int volume READ volume NOTIFY settingsChanged)
+    Q_PROPERTY(int volume READ volume NOTIFY volumeChanged)
     Q_PROPERTY(int playMode READ playMode NOTIFY settingsChanged)
     Q_PROPERTY(QString playModeName READ playModeName NOTIFY settingsChanged)
     Q_PROPERTY(QString lyricsText READ lyricsText NOTIFY lyricsChanged)
+    Q_PROPERTY(QStringList lyricLines READ lyricLines NOTIFY lyricsChanged)
+    Q_PROPERTY(QVariantList lyricTimes READ lyricTimes NOTIFY lyricsChanged)
+    Q_PROPERTY(bool lyricsTimed READ lyricsTimed NOTIFY lyricsChanged)
     Q_PROPERTY(QString currentLyricLine READ currentLyricLine NOTIFY lyricsChanged)
     Q_PROPERTY(int currentLyricIndex READ currentLyricIndex NOTIFY lyricsChanged)
     // ---- 全局状态 ----
@@ -120,6 +129,8 @@ class AppController : public QObject {
     Q_PROPERTY(QString qrStatus READ qrStatus NOTIFY qrChanged)
     Q_PROPERTY(QString qrSource READ qrSource NOTIFY qrChanged)
     Q_PROPERTY(bool qrActive READ qrActive NOTIFY qrChanged)
+    // 图形验证码（酷我账号密码 / 短信登录共用一张，点图即换）
+    Q_PROPERTY(QString captchaImagePath READ captchaImagePath NOTIFY captchaChanged)
     // 自建账号 API 服务地址（未配置时只有网易云是内置真实实现）
     Q_PROPERTY(QString accountApiBase READ accountApiBase WRITE setAccountApiBase NOTIFY settingsChanged)
     Q_PROPERTY(QVariantList scriptSources READ scriptSources NOTIFY scriptSourcesChanged)
@@ -134,6 +145,8 @@ public:
     SongListModel *results() const { return m_results; }
     SongListModel *queue() const { return m_queue; }
     PlaylistListModel *playlists() const { return m_playlists; }
+    PlaylistListModel *discovery() const { return m_discovery; }
+    bool discoveryLoading() const;
     AccountListModel *accounts() const { return m_accounts; }
 
     QString currentTitle() const;
@@ -150,6 +163,9 @@ public:
     int playMode() const;
     QString playModeName() const;
     QString lyricsText() const;
+    QStringList lyricLines() const;
+    QVariantList lyricTimes() const;
+    bool lyricsTimed() const;
     QString currentLyricLine() const;
     int currentLyricIndex() const;
     QString statusMessage() const;
@@ -171,6 +187,7 @@ public:
     QString qrSource() const;
     // 扫码会话是否仍在轮询（终态后为 false），界面用它判断二维码是否已失效
     bool qrActive() const;
+    QString captchaImagePath() const;
     QString accountApiBase() const;
     void setAccountApiBase(const QString &value);
     QString appName() const { return QStringLiteral("福瑞音乐"); }
@@ -181,6 +198,11 @@ public:
     Q_INVOKABLE void setSearchType(const QString &type);   // song / songlist / album / singer
     Q_INVOKABLE void search(const QString &keyword, const QString &sourceId = QString());
     Q_INVOKABLE void loadRank(const QString &sourceId);
+    // 并发拉取所有已配置 rank 端点的平台公开榜单（无需登录），写入 discovery 模型
+    Q_INVOKABLE void loadDiscovery();
+    // 打开 discovery 里的公开歌单：走公共 playlistDetail 端点，不触碰本地账号歌单
+    Q_INVOKABLE void openDiscoveryPlaylist(const QString &playlistUid);
+    Q_INVOKABLE int playlistCount() const;
     Q_INVOKABLE void loadPlaylist(const QString &playlistUid);
     Q_INVOKABLE void loadFavorites();
     Q_INVOKABLE void loadHistory();
@@ -210,23 +232,32 @@ public:
     Q_INVOKABLE void previous();
     Q_INVOKABLE void seek(qint64 positionMs);
     Q_INVOKABLE void setVolume(int value);       // 0..100
+    Q_INVOKABLE void toggleMute();               // 静音/取消静音，回到静音前档位
     Q_INVOKABLE void setPlayMode(int mode);      // 0 顺序 1 列表循环 2 单曲循环 3 随机
     Q_INVOKABLE void cyclePlayMode();
 
     // ---- 登录 ----
     Q_INVOKABLE QStringList loginMethods(const QString &sourceId) const; // qrcode / cookie / password / phone
+    // 扫码时提示用哪个 App（QQ 音乐要用手机 QQ 扫，不能写平台全名）
+    Q_INVOKABLE QString loginAppName(const QString &sourceId) const;
+    // accounts 是 QAbstractListModel，QML 侧拿不到 length，这里补一个总数
+    Q_INVOKABLE int accountTotal() const;
+    Q_INVOKABLE int loggedAccountCount() const;
+    Q_INVOKABLE bool accountLogged(const QString &sourceId) const;
     Q_INVOKABLE QString accountApiStatus(const QString &sourceId) const; // 该平台账号接口的如实状态
     // 逐平台账号 API 服务地址：未内置直连的平台配好后即可同步歌单与收藏
     Q_INVOKABLE QString accountApiBaseFor(const QString &sourceId) const;
     Q_INVOKABLE void setAccountApiBaseFor(const QString &sourceId, const QString &value);
     Q_INVOKABLE bool userApiAvailable(const QString &sourceId) const;    // 登录后能否直接同步歌单
     Q_INVOKABLE QString qrUnavailableReason(const QString &sourceId) const; // 没有扫码方式时的说明
-    Q_INVOKABLE QString cookieLoginHint(const QString &sourceId) const;     // Cookie 页的说明
+    Q_INVOKABLE QString loginUnavailableReason(const QString &sourceId) const; // 完全无法应用内登录时的说明
     Q_INVOKABLE void startQrLogin(const QString &sourceId);
     Q_INVOKABLE void cancelQrLogin();
-    Q_INVOKABLE void loginByCookie(const QString &sourceId, const QString &cookie);
-    Q_INVOKABLE void loginByPassword(const QString &sourceId, const QString &account, const QString &password);
-    Q_INVOKABLE void sendPhoneCode(const QString &sourceId, const QString &phone);
+    Q_INVOKABLE void loginByPassword(const QString &sourceId, const QString &account,
+                                     const QString &password, const QString &captcha = QString());
+    Q_INVOKABLE void sendPhoneCode(const QString &sourceId, const QString &phone,
+                                   const QString &captcha = QString());
+    Q_INVOKABLE void refreshCaptcha(const QString &sourceId);
     Q_INVOKABLE void loginByPhone(const QString &sourceId, const QString &phone, const QString &code);
     Q_INVOKABLE void logout(const QString &sourceId);
     Q_INVOKABLE void syncUserLibrary(const QString &sourceId);
@@ -254,6 +285,7 @@ signals:
     void statusChanged();
     void playerChanged();
     void playingChanged();
+    void volumeChanged();
     void positionChanged();
     void lyricsChanged();
     void settingsChanged();
@@ -261,12 +293,16 @@ signals:
     void scriptSourcesChanged();
     void scriptSourceMessage(const QString &id, bool ok, const QString &message);
     void searchStarted();
-    void searchFinished(int count);
+    // kind: "song"（歌曲结果）/ "playlist"（歌单结果）/ ""（打开歌单、榜单等）；
+    // count < 0 表示这次搜索已被新操作作废，界面只需收起 loading，不要弹完成提示。
+    void searchFinished(int count, const QString &kind);
     void playlistsLoaded();
+    void discoveryChanged();
     // 某个平台的登录后同步结果（歌单/收藏），供登录页显示逐平台状态
     void syncFinished(const QString &sourceId, bool ok, const QString &message);
     void loginStateChanged(const QString &sourceId, bool ok, const QString &message);
     void qrChanged();
+    void captchaChanged();
     void substituteInfo(const QString &text);
     void downloadFinished(const QString &path);
 
@@ -278,11 +314,14 @@ private:
     // 按 Impl::playlistFilter 把本地全部歌单过滤后写入模型
     void applyPlaylistFilter();
     void syncCustomModel();
+    // 有新操作接管列表时调用：作废挂起的搜索，并补发终止信号，避免界面卡在「正在搜索…」
+    void cancelPendingSearch();
     struct Impl;
     Impl *d;
     SongListModel *m_results;
     SongListModel *m_queue;
     PlaylistListModel *m_playlists;
+    PlaylistListModel *m_discovery;
     AccountListModel *m_accounts;
     static AppController *s_instance;
 };

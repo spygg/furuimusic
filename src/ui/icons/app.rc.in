@@ -1,2 +1,2 @@
 // Windows 可执行文件图标资源；路径由 CMake configure_file 注入绝对路径
-IDI_ICON1 ICON "@CMAKE_CURRENT_SOURCE_DIR@/src/ui/icons/app.ico"
+IDI_ICON1 ICON "@CMAKE_CURRENT_SOURCE_DIR@/ui/icons/app.ico"

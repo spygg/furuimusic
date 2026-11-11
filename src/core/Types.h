@@ -82,6 +82,8 @@ struct LyricLine {
 QString normalize(const QString &s);
 // 编辑距离相似度 0..1
 qreal similarity(const QString &a, const QString &b);
+// 同上，但参数必须已经 normalize（批量匹配时预计算归一化结果，避免重复归一化）
+qreal similarityNormalized(const QString &normalizedA, const QString &normalizedB);
 // 解析 LRC
 QVector<LyricLine> parseLrc(const QString &lrc);
 // 从 "a=1; b=2" 形式的 Cookie 串里按候选名（忽略大小写）取第一个非空值

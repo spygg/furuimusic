@@ -8,9 +8,12 @@
 /bin/
 *.exe
 *.dll
-# 例外：Release 包要带上的 OpenSSL 1.1 运行库（见 packaging/windows/openssl/README.txt）
-!packaging/windows/openssl/*.dll
+# 例外：Release 包要带上的 OpenSSL 1.1 运行库（见 src/packaging/windows/openssl/README.txt）
+!src/packaging/windows/openssl/*.dll
 *.so
+# 例外：Android Qt 6 APK 打包必需的 OpenSSL 3 运行库（共约 4.6M，缺了 APK 的 HTTPS 全部失效）
+!src/android_qt6/libs/arm64-v8a/libssl_3.so
+!src/android_qt6/libs/arm64-v8a/libcrypto_3.so
 *.dylib
 *.a
 *.lib
@@ -25,6 +28,8 @@ qrc_*.cpp
 
 # 第三方参考源码副本（仅本地研究用，含 AGPL 项目，不入库）
 /reference/
+# 多平台 Release 配置的本地参考副本（同 reference/，不入库）
+/.github参考/
 
 # 本地临时目录 / 助手状态 / 截图草稿
 /.scratch_jsprobe/
@@ -56,3 +61,6 @@ scan*.log
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 本地排障用的截图/探针产物
+/.probe/

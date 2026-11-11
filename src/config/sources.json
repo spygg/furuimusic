@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_note": "福瑞音乐平台描述文件。公共检索类端点为示例模板，可替换为你自己的合规聚合服务。账号相关能力统一由 userApi 节描述：netease 为内置真实实现（Cookie + linuxapi + /api/linux/forward）；其余平台需配置自建账号 API 服务（设置项 accountApiBase 或 accountApiBase/<source>），契约见 tools/account_api_server.py。未配置时登录会明确报错，不会请求不存在的 URL。数据目录下同名文件可覆盖内置配置。",
+  "_note": "福瑞音乐平台描述文件。公共检索类端点为示例模板，可替换为你自己的合规聚合服务。账号相关能力统一由 userApi 节描述：netease 为内置真实实现（Cookie + linuxapi + /api/linux/forward）；其余平台需配置自建账号 API 服务（设置项 accountApiBase 或 accountApiBase/<source>），契约见 src/tools/account_api_server.py。未配置时登录会明确报错，不会请求不存在的 URL。数据目录下同名文件可覆盖内置配置。",
   "defaults": {
     "pageSize": 30,
     "timeout": 12
@@ -134,15 +134,26 @@
             "lrc.lyric",
             "lyric"
           ]
+        },
+        "cover": {
+          "method": "GET",
+          "path": "/api/song/detail",
+          "params": {
+            "ids": "[{id}]"
+          },
+          "resultPaths": [
+            "songs[0].album.picUrl",
+            "songs[0].album.blurPicUrl",
+            "songs[0].al.picUrl"
+          ]
         }
       },
       "login": {
         "methods": [
-          "cookie",
-          "qrcode",
-          "password"
+          "password",
+          "qrcode"
         ],
-        "_note": "网易云为内置真实实现：Cookie 验证、原生 weapi 二维码登录（/weapi/login/qrcode/*）、原生 weapi 密码登录（手机号 /weapi/login/cellphone、邮箱 /weapi/login，密码 MD5）。其余平台仍需账号 API 服务声明 extraMethods 并实现端点。"
+        "_note": "对齐 AlgerMusicPlayer 内置的 netease-cloud-music-api-alger v4.32.0。① 启动先 POST /weapi/register/anonimous 取匿名令牌 MUSIC_A，username = base64(deviceId + 空格 + base64(md5(deviceId 与 3go8amp 密钥逐字节异或)))，之后所有请求都带设备指纹 Cookie（deviceId/os/osver/appver/channel/WNMCID/_ntes_nnid/WEVNSM）；缺这两样，扫码能出码但手机确认阶段会被 8821 拦。② 密码登录 POST /weapi/w/login/cellphone（注意 w/ 前缀，老的 /weapi/login/cellphone 会一直回 502），body = type=1 与 https=true 与 phone 与 countrycode=86 与 password=md5 与 remember=true。③ 扫码 /api/login/qrcode/unikey 与 /client/login 走 eapi 加密通道（interface.music.163.com/eapi/...，AES-128-ECB 密钥 e82ckenh8dichen8），type=3，二维码内容为 https://music.163.com/login?codekey=<unikey>。"
       },
       "userApi": {
         "driver": "netease",
@@ -247,6 +258,7 @@
             "artist": "singer[].name",
             "album": "albumname",
             "albumId": "albummid",
+            "coverTemplate": "https://y.gtimg.cn/music/photo_new/T002R300x300M000{albumId}.jpg",
             "duration": "interval",
             "durationScale": 1000,
             "vip": "pay.pay_play",
@@ -257,17 +269,56 @@
         },
         "rank": {
           "method": "GET",
-          "path": "/v8/fcg-bin/fcg_v8_toplist_opt.fcg",
+          "_note": "老的 fcg_v8_toplist_opt.fcg 已失效（304 get message failed），改用 lx-music 同款匿名端点 fcg_myqq_toplist.fcg，实测 code 0 返回 25 个榜单",
+          "path": "/v8/fcg-bin/fcg_myqq_toplist.fcg",
           "params": {
-            "page": "index",
-            "format": "json"
+            "g_tk": "1928093487",
+            "inCharset": "utf-8",
+            "outCharset": "utf-8",
+            "notice": "0",
+            "format": "json",
+            "uin": "0",
+            "needNewCode": "1",
+            "platform": "h5"
           },
-          "root": "topList",
+          "root": "data.topList",
           "fields": {
             "id": "id",
             "title": "topTitle",
-            "cover": "picUrl",
-            "count": "songNum"
+            "cover": "picUrl"
+          }
+        },
+        "rankDetail": {
+          "method": "POST",
+          "path": "https://u.y.qq.com/cgi-bin/musicu.fcg",
+          "contentType": "json",
+          "_note": "lx-music 同款 GetDetail；topid/num 必须是 JSON 数字（字符串会返回 toplist.code=10006 → 0 首），故用 {id:int}/{limit:int} 数字占位符；歌曲在 toplist.data.songInfoList",
+          "jsonBody": {
+            "toplist": {
+              "module": "musicToplist.ToplistInfoServer",
+              "method": "GetDetail",
+              "param": {
+                "topid": "{id:int}",
+                "num": "{limit:int}"
+              }
+            },
+            "comm": {
+              "uin": 0,
+              "format": "json",
+              "ct": 20,
+              "cv": 1859
+            }
+          },
+          "root": "toplist.data.songInfoList",
+          "fields": {
+            "id": "mid",
+            "title": "title",
+            "artist": "singer[].name",
+            "album": "album.name",
+            "albumId": "album.mid",
+            "coverTemplate": "https://y.gtimg.cn/music/photo_new/T002R300x300M000{albumId}.jpg",
+            "duration": "interval",
+            "durationScale": 1000
           }
         },
         "playlistDetail": {
@@ -285,6 +336,8 @@
             "title": "songname",
             "artist": "singer[].name",
             "album": "albumname",
+            "albumId": "albummid",
+            "coverTemplate": "https://y.gtimg.cn/music/photo_new/T002R300x300M000{albumId}.jpg",
             "duration": "interval",
             "durationScale": 1000
           }
@@ -337,10 +390,9 @@
       },
       "login": {
         "methods": [
-          "cookie",
           "qrcode"
         ],
-        "_note": "QQ 音乐为内置实现：扫码走 AuthManager 的原生 ptlogin 链路（ptqrshow/ptqrlogin → 沿重定向取 code → musicu QQLogin 换 musickey），Cookie 走 QQLogin 校验并读取资料。手机号+密码登录需图形验证码与 RSA，未内置。"
+        "_note": "QQ 音乐为内置实现：原生扫码（ptqrshow/ptqrlogin → 沿重定向取 code → musicu QQLogin 换 musickey）、Cookie 走 QQLogin 校验并读取资料。手机号+密码登录需图形验证码与 RSA，未内置。"
       },
       "userApi": {
         "driver": "direct",
@@ -452,6 +504,7 @@
               "artist": "singer[].name",
               "album": "albumname",
               "albumId": "albummid",
+              "coverTemplate": "https://y.gtimg.cn/music/photo_new/T002R300x300M000{albumId}.jpg",
               "duration": "interval",
               "durationScale": 1000,
               "vip": "pay.pay_play",
@@ -490,6 +543,53 @@
             "durationScale": 1000
           }
         },
+        "rank": {
+          "method": "GET",
+          "_note": "酷狗此前没有配 rank 端点，发现榜单一直缺酷狗；v5/rank/list 游客态实测 200 返回 57 个榜单（rankid/rankname/imgurl）",
+          "path": "http://mobilecdnbj.kugou.com/api/v5/rank/list",
+          "params": {
+            "version": "9108",
+            "plat": "0",
+            "showtype": "2",
+            "parentid": "0",
+            "apiver": "6",
+            "area_code": "1"
+          },
+          "headers": {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 11_0 like Mac OS X) AppleWebKit/604.1.38 (KHTML, like Gecko) Version/11.0 Mobile/15A372 Safari/604.1"
+          },
+          "root": "data.info",
+          "fields": {
+            "id": "rankid",
+            "title": "rankname",
+            "cover": "imgurl"
+          }
+        },
+        "rankDetail": {
+          "method": "GET",
+          "_note": "v3/rank/song 游客态可读，rankid 即 rank 列表返回的 id；字段：songname/hash/authors[].author_name/duration 秒（durationScale=1000 换算成 Song.duration 约定的毫秒）",
+          "path": "http://mobilecdnbj.kugou.com/api/v3/rank/song",
+          "params": {
+            "rankid": "{id}",
+            "page": "{page}",
+            "pagesize": "{limit}",
+            "ranktype": "1",
+            "area_code": "1"
+          },
+          "headers": {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 11_0 like Mac OS X) AppleWebKit/604.1.38 (KHTML, like Gecko) Version/11.0 Mobile/15A372 Safari/604.1"
+          },
+          "root": "data.info",
+          "fields": {
+            "id": "hash",
+            "title": "songname",
+            "artist": "authors[].author_name",
+            "albumId": "album_id",
+            "cover": "album_sizable_cover",
+            "duration": "duration",
+            "durationScale": 1000
+          }
+        },
         "playlistDetail": {
           "method": "GET",
           "path": "https://pubsongscdn.kugou.com/v2/get_other_list_file",
@@ -516,7 +616,7 @@
           "root": "data.info",
           "fields": {
             "id": "hash",
-            "title": "remark",
+            "title": "name",
             "artist": "singerinfo[].name",
             "album": "albuminfo.name",
             "albumId": "album_id",
@@ -530,43 +630,25 @@
         },
         "url": {
           "method": "GET",
-          "path": "https://www.kugou.com/yy/index.php",
+          "path": "https://m.kugou.com/app/i/getSongInfo.php",
           "params": {
-            "r": "play/getdata",
+            "cmd": "playInfo",
             "hash": "{id}",
             "album_id": "{albumId}"
           },
           "resultPaths": [
-            "data.play_url",
-            "url"
+            "url",
+            "backup_url[0]"
           ],
-          "vipRule": {
-            "emptyIsVip": true,
-            "bodyContains": [
-              "VIP",
-              "付费"
-            ]
-          }
-        },
-        "lyric": {
-          "method": "GET",
-          "path": "https://www.kugou.com/yy/index.php",
-          "params": {
-            "r": "play/getdata",
-            "hash": "{id}"
-          },
-          "resultPaths": [
-            "data.lyrics",
-            "lyric"
-          ]
+          "_note": "play/getdata 已失效（返回 data:[]/err_code 20010），改用移动端 getSongInfo.php?cmd=playInfo，直接返回 url / backup_url[0] 可播 MP3 直链（已实测 200 audio/mpeg）。"
         }
       },
       "login": {
         "methods": [
-          "cookie",
-          "qrcode"
+          "qrcode",
+          "password"
         ],
-        "_note": "酷狗音乐为内置实现：扫码走 AuthManager 的原生链路（login-user.kugou.com/v2/qrcode 出二维码，v2/get_userinfo_qrcode 轮询 status，成功后用 token+userid 组成登录 Cookie），签名按 web keyparam 规则在 KugouProtocol 里完成。手机号+密码登录需要 RSA 且依赖 App 端参数，未内置。playlistDetail 用于点开自己的歌单：酷狗个人歌单的 id 是 global_collection_id（不是公开歌单的 specialid），所以走 App 网关的 /pubsongs/ 路由而不是游客态的 pubsongscdn。",
+        "_note": "酷狗音乐为内置实现：扫码走 AuthManager 的原生链路（login-user.kugou.com/v2/qrcode 出二维码，v2/get_userinfo_qrcode 轮询 status，成功后用 token+userid 组成登录 Cookie），签名按 web keyparam 规则在 KugouProtocol 里完成。密码登录走 /v9/login_by_pwd（AES-256-CBC + RSA_NO_PADDING + Android 签名），2026-11-10 已用真实请求验证协议可用；服务端对新设备/异常登录会返回 error_code 20028「请验证」并下发 ssa-code 滑块会话，按产品约定不伪造行为指纹绕过，登录页如实提示用户改用二维码或先在官方客户端完成验证。playlistDetail 用于点开自己的歌单：酷狗个人歌单的 id 是 global_collection_id（不是公开歌单的 specialid），所以走 App 网关的 /pubsongs/ 路由而不是游客态的 pubsongscdn。",
         "playlistDetail": {
           "method": "GET",
           "path": "https://gateway.kugou.com/pubsongs/v2/get_other_list_file_nofilt",
@@ -774,21 +856,21 @@
         },
         "rank": {
           "method": "GET",
-          "path": "/api/www/bang/bang/bangMenu",
+          "_note": "www.kuwo.cn 的 /api/www 会回 The request is illegal!；官网实际走 wapi.kuwo.cn，实测 200。榜单 id 用 sourceid（详情接口 bangId 要的就是它）",
+          "path": "https://wapi.kuwo.cn/api/www/bang/bang/bangMenu",
           "params": {
             "httpsStatus": "1"
           },
           "root": "data[0].list",
           "fields": {
-            "id": "bangId",
+            "id": "sourceid",
             "title": "name",
-            "cover": "pic",
-            "count": "num"
+            "cover": "pic"
           }
         },
         "playlistDetail": {
           "method": "GET",
-          "path": "/api/www/bang/bang/musicList",
+          "path": "https://wapi.kuwo.cn/api/www/bang/bang/musicList",
           "params": {
             "bangId": "{id}",
             "pn": "{page}",
@@ -850,9 +932,11 @@
       },
       "login": {
         "methods": [
-          "cookie"
+          "password",
+          "phone",
+          "qrcode"
         ],
-        "_note": "仅 Cookie 登录为内置能力；二维码/手机号由账号 API 服务声明 extraMethods 并实现端点后自动出现在登录页"
+        "_note": "2026-11 实测：passport.kuwo.cn 整站 502，但站点登录弹层真正的网关是 wapi.kuwo.cn，以下三条链路全部内置、纯 HTTP 完成，无需浏览器。① 图形验证码 GET /api/common/captcha/getcode → {data:{img:data:image/png;base64,token}}，提交一次即失效，报错后要立刻换一张。② 账号密码 POST /api/www/login/loginByKw，body {uname,password,verifyCode,verifyCodeToken,userIp}，密码为明文（站点前端不做 md5），响应 data.cookies 是键值对，直接拼成 Cookie 串；错误码 -10001 账号或密码错、-102 图形验证码错。③ 手机短信 POST /api/sms/mobileLoginCode {mobile,verifyCode,verifyCodeToken,userIp} 返回 data.tm，再 POST /api/www/login/loginByMobile {mobile,verifyCode,smsCode,tm}；错误码 1100 非大陆号码、1107 短信码过期、1108 短信码错、1157 30 天内重复注册。④ 微信扫码（第三方）：wx41c1275bb3e28427 的 snsapi_login，出码 connect/qrconnect → 图片 connect/qrcode/<uuid> → 长轮询 long.open.weixin.qq.com/connect/l/qrconnect（408 未扫 / 404 已扫 / 403 取消 / 402 过期 / 200 带 wx_code），拿到 code 后打 i.kuwo.cn/US/platform/WeixinCallback.jsp 逐跳收 Cookie。所有请求体必须是 JSON（form 提交回 415）；www.kuwo.cn/api/www 那条老路对非浏览器指纹一律回 The request is illegal!，不要再走。QQ / 微博是 HTML 弹窗回调，本工程未链 WebEngine，故未内置。"
       },
       "userApi": {
         "driver": "",
@@ -923,6 +1007,7 @@
         },
         "rank": {
           "method": "GET",
+          "_note": "2026-11 实测：m.music.migu.cn 的老 remoting 接口（rank_list / cms_list_tag）已全部返回反爬 HTML 页（1.7KB 的 doctype 页），不再吐 JSON，咪咕榜单因此暂为空；修好需要复刻新版签名，改为留空不影响其它平台聚合",
           "path": "/migu/remoting/rank_list",
           "root": "list",
           "fields": {
@@ -995,9 +1080,10 @@
       },
       "login": {
         "methods": [
-          "cookie"
+          "qrcode",
+          "password"
         ],
-        "_note": "仅 Cookie 登录为内置能力；二维码/手机号由账号 API 服务声明 extraMethods 并实现端点后自动出现在登录页"
+        "_note": "内置两种应用内登录。扫码：GET passport.migu.cn/api/qrcWeb/qrcLogin?sourceid=208003 取 base64 二维码与 qrc_sessionid，再用 GET /api/qrcWeb/qrcquery?qrc_sessionid=… 轮询（4074 未扫码 / 4073 已扫码待确认 / 2000 成功 / 4072 超时）；必须手动带 JSESSIONID —— 服务端把它的 Path 设成 /normandy，不手拼 Cookie 一律回 4072。密码：POST /password/publickey 取 1024 位 hex 公钥，loginID 与 enpassword 各做 RSA PKCS#1 v1.5 加密后 POST /authn。密码长度上限 117 字节。歌单同步需配置账号 API 服务。"
       },
       "userApi": {
         "driver": "",
@@ -1129,16 +1215,18 @@
       },
       "login": {
         "methods": [
-          "cookie"
+          "qrcode"
         ],
-        "_note": "仅 Cookie 登录为内置能力（填抖音/汽水登录态 Cookie）。汽水原生扫码登录需已登录抖音 App 扫码且涉及 X-Helios 签名，暂未内置。"
+        "_note": "汽水的登录接口由字节 secsdk 保护（x-helios/x-medusa 设备签名），客户端算不出签名，扫码闭环放在账号 API 服务侧：客户端只跑 GET /auth/qrcode -> POST /auth/qrcode/status -> POST /auth/me（契约同 src/tools/qishui_login_flow_test.py）。未配置 accountApiBase 时会提示先启动账号 API 服务。"
       },
       "userApi": {
         "driver": "",
         "base": "",
         "headers": {},
-        "extraMethods": [],
-        "_note": "汽水音乐的「我的歌单/收藏」需登录态且依赖签名，未配置。可部署自建账号 API 服务并在设置填写 accountApiBase 后自动接入（契约见 userApiContract）。"
+        "extraMethods": [
+          "qrcode"
+        ],
+        "_note": "汽水的账号接口同样受设备签名保护：部署账号 API 服务（src/tools/account_api_server.py，或自行接 guowenye/qishui-api）并在设置里填 accountApiBase 后，客户端用 /auth 扫码登录、用 userApiContract 同步歌单与收藏。"
       }
     }
   ],
@@ -1274,7 +1362,7 @@
     "local": "扫描用户指定的本地目录，按歌名+歌手模糊匹配 mp3/flac/m4a/wav/ogg/aac 文件"
   },
   "userApiContract": {
-    "_note": "自建账号 API 服务的统一契约；C++ 侧 http 驱动按此调用，实现参考 tools/account_api_server.py",
+    "_note": "自建账号 API 服务的统一契约；C++ 侧 http 驱动按此调用，实现参考 src/tools/account_api_server.py",
     "headers": {
       "X-Account-Cookie": "<cookie>"
     },

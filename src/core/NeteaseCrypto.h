@@ -25,6 +25,14 @@ QByteArray weapiBuild(const QJsonObject &payload, const QByteArray &secretKey);
 // 仅做 AES-128-CBC（PKCS7）加密并返回小写 hex，供单元测试与 linuxapi 之外的用途复用
 QByteArray aes128CbcHex(const QByteArray &plain, const QByteArray &key, const QByteArray &iv);
 
+// 生成 eapi 请求体：返回 URL-encoded 的 "params=<大写 hex>"
+// 算法（NeteaseCloudMusicApi util/crypto.js 的 eapi 分支）：
+//   message = "nobody" + apiPath + "use" + json + "md5forencrypt"
+//   digest  = md5(message).hex
+//   data    = apiPath + "-36cd479b6b5-" + json + "-36cd479b6b5-" + digest
+//   params  = AES-128-ECB(data, "e82ckenh8dichen8").hex().upper()
+QByteArray eapiForm(const QString &apiPath, const QJsonObject &payload);
+
 // 自检：AES-128（FIPS-197 ECB 块向量）+ RSA 模幂（与 Python pow 参考实现对照）。返回是否全部通过。
 bool selfTest();
 

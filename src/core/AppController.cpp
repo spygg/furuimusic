@@ -5,6 +5,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <QSslSocket>
+#include <QTimer>
 #include <QUrl>
 
 #include "AuthManager.h"
@@ -90,6 +92,17 @@ void SongListModel::refreshRow(int row)
     if (row < 0 || row >= m_songs.size()) return;
     const QModelIndex idx = index(row, 0);
     emit dataChanged(idx, idx, {FavoriteRole});
+}
+
+void SongListModel::setCover(const QString &uid, const QString &cover)
+{
+    if (uid.isEmpty() || cover.isEmpty()) return;
+    for (int i = 0; i < m_songs.size(); ++i) {
+        if (m_songs.at(i).uid != uid || m_songs.at(i).cover == cover) continue;
+        m_songs[i].cover = cover;
+        const QModelIndex idx = index(i, 0);
+        emit dataChanged(idx, idx, {CoverRole});
+    }
 }
 
 void SongListModel::clear() { setSongs(QVector<Song>()); }
@@ -192,10 +205,22 @@ struct AppController::Impl {
     QString playlistFilter;
     // 每次切歌递增：歌词是异步回来的，旧请求后到会把上一首的歌词盖到当前这首上
     quint64 lyricGen = 0;
+    // 封面补齐同样是异步的，切歌后迟到的结果不能盖到新歌上
+    quint64 coverGen = 0;
     // 异步搜索/榜单/歌单请求的内容代次：慢请求返回时若用户已发起新操作就丢弃，
     // 避免旧结果覆盖新结果（与 lyricGen 同一模式）
-    quint64 resultGen = 0;
+    // searchRequestId：任何会接管结果区/搜索状态的操作都会 +1（歌曲搜索、歌单搜索、
+    // 打开歌单、收藏/历史、榜单），旧回调据此整条链路作废。
+    quint64 searchRequestId = 0;
+    // 挂起中的搜索类型（"" / "song" / "playlist"），用于判断该不该补发终止信号
+    QString searchKind;
+    bool searching = false;
+    // 只服务于歌单模型：本地库刷新（applyPlaylistFilter）时作废挂起的歌单/榜单请求，
+    // 但不应误伤正在进行的歌曲搜索
     quint64 playlistGen = 0;
+    bool discoveryLoading = false;
+    // 取链是异步的：用户连点两首歌时，慢的那首不能把当前播放替换掉
+    quint64 resolveGen = 0;
 };
 
 AppController *AppController::s_instance = nullptr;
@@ -213,6 +238,7 @@ AppController::AppController(QObject *parent)
     m_results   = new SongListModel(this);
     m_queue     = new SongListModel(this);
     m_playlists = new PlaylistListModel(this);
+    m_discovery = new PlaylistListModel(this);
     m_accounts  = new AccountListModel(this);
 
     d->quality = Settings::string(QStringLiteral("quality"), QStringLiteral("standard"));
@@ -239,6 +265,7 @@ AppController::AppController(QObject *parent)
     });
     connect(player, &PlayerController::mediaChanged, this, [this] { emit playerChanged(); });
     connect(player, &PlayerController::positionChanged, this, [this] { emit positionChanged(); });
+    connect(player, &PlayerController::volumeChanged, this, [this] { emit volumeChanged(); });
     connect(player, &PlayerController::lyricsChanged, this, [this] { emit lyricsChanged(); });
     connect(player, &PlayerController::queueChanged, this, [this] {
         syncQueueModel();
@@ -254,6 +281,7 @@ AppController::AppController(QObject *parent)
     AuthManager *auth = AuthManager::instance();
     connect(auth, &AuthManager::toast, this, [this](const QString &msg) { emit toast(msg); });
     connect(auth, &AuthManager::qrChanged, this, [this] { emit qrChanged(); });
+    connect(auth, &AuthManager::captchaChanged, this, [this] { emit captchaChanged(); });
     connect(auth, &AuthManager::accountsChanged, this, [this] { syncAccountModel(); });
     connect(auth, &AuthManager::loginStateChanged, this,
             [this](const QString &id, bool ok, const QString &msg) {
@@ -286,6 +314,38 @@ AppController::AppController(QObject *parent)
     syncAccountModel();
     syncCustomModel();
     refreshPlaylists();
+
+    // 从 build/cmake 之类没有 OpenSSL DLL 的目录直接启动时，Qt 会在所有 HTTPS
+    // 请求上返回「TLS initialization failed」，表现就是「音源导入了却取不到链接」。
+    // 这里主动自检并说清楚原因，避免用户误以为是 VIP 判定或音源失效。
+    // 注意：只有 Windows 才依赖随包分发的 OpenSSL DLL，而且 Qt5 要 1.1、Qt6 要 3.x，
+    // 文案必须按当前构建实际期望的库名给，否则会把用户引向错误方向。
+    if (!QSslSocket::supportsSsl()) {
+        const QString buildVersion = QSslSocket::sslLibraryBuildVersionString();
+#if defined(Q_OS_WIN)
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        const QString sslMsg = QStringLiteral(
+            "未检测到 OpenSSL 运行库（libssl-3-x64.dll / libcrypto-3-x64.dll）："
+            "HTTPS 音源与在线脚本将无法取链。当前构建期望 %1，"
+            "请把程序 bin/ 目录加入 PATH，或从 bin/ 启动").arg(buildVersion);
+#else
+        const QString sslMsg = QStringLiteral(
+            "未检测到 OpenSSL 运行库（libssl-1_1-x64.dll / libcrypto-1_1-x64.dll）："
+            "HTTPS 音源与在线脚本将无法取链。当前构建期望 %1，"
+            "请把程序 bin/ 目录加入 PATH，或从 bin/ 启动").arg(buildVersion);
+#endif
+#elif defined(Q_OS_ANDROID)
+        const QString sslMsg = QStringLiteral(
+            "当前安装包缺少 OpenSSL 运行库：HTTPS 音源与在线脚本将无法取链。"
+            "请更新到包含 TLS 组件的安装包");
+#else
+        const QString sslMsg = QStringLiteral(
+            "当前环境缺少 TLS/SSL 运行库：HTTPS 音源与在线脚本将无法取链。"
+            "当前构建期望 %1，请安装后重新启动").arg(buildVersion);
+#endif
+        setStatus(sslMsg);
+        QTimer::singleShot(1500, this, [this, sslMsg] { emit toast(sslMsg); });
+    }
 }
 
 AppController::~AppController() { delete d; }
@@ -338,6 +398,35 @@ void AppController::syncCustomModel()
 QString AppController::sourceName(const QString &id) const
 { return SourceConfig::instance()->nameOf(id); }
 
+// 扫码时该提示用户打开哪个 App：QQ 音乐要用「QQ」扫，写平台全名会让人去开错应用
+QString AppController::loginAppName(const QString &id) const
+{
+    if (id == QLatin1String("netease")) return QStringLiteral("网易云音乐");
+    if (id == QLatin1String("qq"))      return QStringLiteral("手机 QQ");
+    if (id == QLatin1String("kugou"))   return QStringLiteral("酷狗音乐");
+    if (id == QLatin1String("migu"))    return QStringLiteral("咪咕音乐");
+    // 酷我的内置扫码是「微信扫码」（走开放平台 snsapi_login + i.kuwo.cn 回调），
+    // 提示文案必须说微信，不能写酷我 App —— 拿酷我 App 扫这张码是扫不动的
+    if (id == QLatin1String("kuwo"))    return QStringLiteral("微信");
+    if (id == QLatin1String("qishui"))  return QStringLiteral("汽水音乐");
+    const QString n = SourceConfig::instance()->nameOf(id);
+    return n.isEmpty() ? QStringLiteral("官方 App") : n;
+}
+
+int AppController::accountTotal() const
+{ return SourceConfig::instance()->ids().size(); }
+
+int AppController::loggedAccountCount() const
+{
+    int n = 0;
+    for (const Account &a : AuthManager::instance()->accounts())
+        if (a.logged) ++n;
+    return n;
+}
+
+bool AppController::accountLogged(const QString &sourceId) const
+{ return AuthManager::instance()->account(sourceId).logged; }
+
 QString AppController::currentTitle() const { return PlayerController::instance()->current().title; }
 QString AppController::currentArtist() const { return PlayerController::instance()->current().artist; }
 QString AppController::currentCover() const { return PlayerController::instance()->current().cover; }
@@ -352,6 +441,9 @@ int AppController::volume() const { return PlayerController::instance()->volume(
 int AppController::playMode() const { return PlayerController::instance()->mode(); }
 QString AppController::playModeName() const { return PlayerController::instance()->modeName(); }
 QString AppController::lyricsText() const { return PlayerController::instance()->lyricsText(); }
+QStringList AppController::lyricLines() const { return PlayerController::instance()->lyricLines(); }
+QVariantList AppController::lyricTimes() const { return PlayerController::instance()->lyricTimes(); }
+bool AppController::lyricsTimed() const { return PlayerController::instance()->lyricsTimed(); }
 QString AppController::currentLyricLine() const { return PlayerController::instance()->currentLyricLine(); }
 int AppController::currentLyricIndex() const { return PlayerController::instance()->currentLyricIndex(); }
 QString AppController::statusMessage() const { return d->status; }
@@ -373,6 +465,7 @@ QString AppController::qrHint() const { return AuthManager::instance()->qrHint()
 QString AppController::qrStatus() const { return AuthManager::instance()->qrStatus(); }
 QString AppController::qrSource() const { return AuthManager::instance()->qrSource(); }
 bool AppController::qrActive() const { return AuthManager::instance()->qrActive(); }
+QString AppController::captchaImagePath() const { return AuthManager::instance()->captchaImagePath(); }
 QString AppController::accountApiBase() const
 { return Settings::string(QStringLiteral("accountApiBase")); }
 void AppController::setAccountApiBase(const QString &value)
@@ -395,52 +488,118 @@ bool AppController::userApiAvailable(const QString &sourceId) const
 QString AppController::qrUnavailableReason(const QString &sourceId) const
 { return UserApi::instance()->qrUnavailableReason(sourceId); }
 
-QString AppController::cookieLoginHint(const QString &sourceId) const
-{ return UserApi::instance()->cookieLoginHint(sourceId); }
+QString AppController::loginUnavailableReason(const QString &sourceId) const
+{ return UserApi::instance()->loginUnavailableReason(sourceId); }
 
 void AppController::setSearchType(const QString &type)
 { setSetting(QStringLiteral("searchType"), type); }
+
+void AppController::cancelPendingSearch()
+{
+    if (!d->searching) return;
+    // 只是丢弃挂起请求、收起 loading；count=-1 让界面不弹「搜索完成」
+    d->searching = false;
+    d->searchKind.clear();
+    emit searchFinished(-1, QString());
+}
 
 void AppController::search(const QString &keyword, const QString &sourceId)
 {
     if (keyword.trimmed().isEmpty()) return;
     Library::instance()->addSearchHistory(keyword.trimmed());
     emit searchStarted();
+    // 任何新搜索都接管搜索状态：上一条（无论歌曲还是歌单）的迟到结果全部作废
+    const quint64 req = ++d->searchRequestId;
+    d->searching = true;
     setStatus(QStringLiteral("正在聚合搜索「%1」…").arg(keyword));
     const int limit = Settings::integer(QStringLiteral("pageSize"), 30);
 
     // 歌单模式（对标洛雪搜索页的「歌曲 / 歌单」类型切换）
     if (d->searchType == QLatin1String("songlist")) {
+        d->searchKind = QStringLiteral("playlist");
         const quint64 gen = ++d->playlistGen;
         SourceManager::instance()->searchPlaylists(keyword.trimmed(), sourceId, limit,
-            [this, keyword, gen](const QVector<Playlist> &list) {
-                if (gen != d->playlistGen) return;   // 已有更新的歌单操作，丢弃这次迟到结果
-                Library::instance()->savePlaylists(list);
+            [this, keyword, req, gen](const QVector<Playlist> &list) {
+                if (req != d->searchRequestId || gen != d->playlistGen) return;
+                // 只更新内存模型：搜索出来的歌单不属于本地音乐库，不能写进 playlists 表，
+                // 否则会污染「音乐库 → 歌单」，同名 uid 还会覆盖真实用户歌单的类型。
                 m_playlists->setPlaylists(list);
+                d->searching = false;
+                d->searchKind.clear();
                 setStatus(QStringLiteral("歌单搜索「%1」完成，共 %2 个歌单").arg(keyword).arg(list.size()));
                 emit playlistsLoaded();
-                emit searchFinished(list.size());
+                emit searchFinished(list.size(), QStringLiteral("playlist"));
             });
         return;
     }
 
-    const quint64 gen = ++d->resultGen;
+    d->searchKind = QStringLiteral("song");
     SourceManager::instance()->search(keyword.trimmed(), sourceId, limit,
-        [this, keyword, gen](const QVector<Song> &songs) {
-            if (gen != d->resultGen) return;         // 已有更新的结果操作，丢弃这次迟到结果
+        [this, keyword, req](const QVector<Song> &songs) {
+            if (req != d->searchRequestId) return;
             m_results->setSongs(songs);
+            d->searching = false;
+            d->searchKind.clear();
             setStatus(QStringLiteral("搜索「%1」完成，共 %2 条结果").arg(keyword).arg(songs.size()));
-            emit searchFinished(songs.size());
+            emit searchFinished(songs.size(), QStringLiteral("song"));
+        });
+}
+
+bool AppController::discoveryLoading() const { return d->discoveryLoading; }
+
+int AppController::playlistCount() const { return m_playlists->rowCount(); }
+
+void AppController::loadDiscovery()
+{
+    if (d->discoveryLoading) return;
+    d->discoveryLoading = true;
+    emit discoveryChanged();
+    setStatus(QStringLiteral("正在加载各平台公开榜单（无需登录）…"));
+    // sourceId 为空 = 全部平台；未配置 rank 端点的音源会立即回调空列表，不会卡住聚合
+    SourceManager::instance()->rank(QString(), 30,
+        [this](const QVector<Playlist> &list) {
+            d->discoveryLoading = false;
+            m_discovery->setPlaylists(list);
+            setStatus(list.isEmpty()
+                          ? QStringLiteral("公开榜单暂不可用，请检查网络后点「刷新榜单」重试")
+                          : QStringLiteral("已加载 %1 个公开榜单/歌单（无需登录）").arg(list.size()));
+            emit discoveryChanged();
+        });
+}
+
+void AppController::openDiscoveryPlaylist(const QString &playlistUid)
+{
+    Playlist target;
+    for (const Playlist &p : m_discovery->playlists())
+        if (p.uid == playlistUid) { target = p; break; }
+    if (target.uid.isEmpty()) { emit toast(QStringLiteral("未找到该榜单")); return; }
+
+    ++d->searchRequestId;
+    cancelPendingSearch();
+    const quint64 gen = d->searchRequestId;
+    setStatus(QStringLiteral("正在加载榜单「%1」…").arg(target.title));
+    SourceManager::instance()->playlistDetail(target,
+        [this, target, gen](const QVector<Song> &songs) {
+            if (gen != d->searchRequestId) return;
+            m_results->setSongs(songs);
+            setStatus(songs.isEmpty()
+                          ? QStringLiteral("榜单「%1」暂未读到歌曲（该平台公共接口可能不可用）")
+                                .arg(target.title)
+                          : QStringLiteral("榜单「%1」共 %2 首").arg(target.title).arg(songs.size()));
+            emit searchFinished(songs.size(), QString());
         });
 }
 
 void AppController::loadRank(const QString &sourceId)
 {
+    ++d->searchRequestId;
+    cancelPendingSearch();
     setStatus(QStringLiteral("正在加载榜单…"));
     const quint64 gen = ++d->playlistGen;
     SourceManager::instance()->rank(sourceId, 100, [this, gen](const QVector<Playlist> &list) {
         if (gen != d->playlistGen) return;
-        Library::instance()->savePlaylists(list);
+        // 不再写进本地歌单库：榜单是「每次拉取的公开数据」，落库后会污染
+        // 「我的歌单」（历史版本会把酷狗/QQ 榜单当成用户歌单显示，且数量为 0）
         m_playlists->setPlaylists(list);
         setStatus(QStringLiteral("已加载 %1 个榜单/歌单").arg(list.size()));
         emit playlistsLoaded();
@@ -459,14 +618,16 @@ void AppController::loadPlaylist(const QString &playlistUid)
     if (target.uid.isEmpty()) { emit toast(QStringLiteral("未找到该歌单")); return; }
 
     // 本次歌单打开作废旧请求：用户可能连续点开多个歌单，慢的那个不能覆盖最后点的
-    const quint64 gen = ++d->resultGen;
+    ++d->searchRequestId;
+    cancelPendingSearch();
+    const quint64 gen = d->searchRequestId;
 
     // 登录同步时已把用户歌单的歌曲写入本地库，优先直接展示
     const QVector<Song> cached = Library::instance()->playlistSongs(target.uid);
     if (!cached.isEmpty()) {
         m_results->setSongs(cached);
         setStatus(QStringLiteral("歌单「%1」共 %2 首（本地已同步）").arg(target.title).arg(cached.size()));
-        emit searchFinished(cached.size());
+        emit searchFinished(cached.size(), QString());
         return;
     }
 
@@ -480,7 +641,7 @@ void AppController::loadPlaylist(const QString &playlistUid)
             setStatus(QStringLiteral("正在从账号读取歌单「%1」…").arg(target.title));
             UserApi::instance()->fetchPlaylistSongs(target.source, cookie, target.sourceId,
                 [this, target, gen](const QVector<Song> &songs) {
-                    if (gen != d->resultGen) return;
+                    if (gen != d->searchRequestId) return;
                     if (!songs.isEmpty()) {
                         Library::instance()->saveSongs(songs);
                         Library::instance()->setPlaylistSongs(target.uid, songs);
@@ -489,7 +650,7 @@ void AppController::loadPlaylist(const QString &playlistUid)
                     setStatus(songs.isEmpty()
                         ? QStringLiteral("歌单「%1」未读到歌曲，请检查 Cookie 或先同步账号歌单").arg(target.title)
                         : QStringLiteral("歌单「%1」共 %2 首").arg(target.title).arg(songs.size()));
-                    emit searchFinished(songs.size());
+                    emit searchFinished(songs.size(), QString());
                 });
             return;
         }
@@ -498,10 +659,10 @@ void AppController::loadPlaylist(const QString &playlistUid)
     }
     setStatus(QStringLiteral("正在加载歌单「%1」…").arg(target.title));
     SourceManager::instance()->playlistDetail(target, [this, target, gen](const QVector<Song> &songs) {
-        if (gen != d->resultGen) return;
+        if (gen != d->searchRequestId) return;
         m_results->setSongs(songs);
         setStatus(QStringLiteral("歌单「%1」共 %2 首").arg(target.title).arg(songs.size()));
-        emit searchFinished(songs.size());
+        emit searchFinished(songs.size(), QString());
     });
 }
 
@@ -511,7 +672,9 @@ void AppController::loadHistory() { loadHistoryBySource(QString()); }
 
 void AppController::loadFavoritesBySource(const QString &sourceId)
 {
-    ++d->resultGen;   // 同步结果直接落地，同时作废旧异步请求
+    // 同步结果直接落地，同时作废所有挂起的异步请求（否则迟到的搜索结果会覆盖收藏列表）
+    ++d->searchRequestId;
+    cancelPendingSearch();
     const QString id = sourceId == QLatin1String("all") ? QString() : sourceId;
     QVector<Song> list;
     for (const Song &s : Library::instance()->favorites())
@@ -525,7 +688,8 @@ void AppController::loadFavoritesBySource(const QString &sourceId)
 
 void AppController::loadHistoryBySource(const QString &sourceId)
 {
-    ++d->resultGen;
+    ++d->searchRequestId;
+    cancelPendingSearch();
     const QString id = sourceId == QLatin1String("all") ? QString() : sourceId;
     QVector<Song> list;
     for (const Song &s : Library::instance()->history())
@@ -555,6 +719,12 @@ QStringList AppController::searchHistory() const
 void AppController::applyPlaylistFilter()
 {
     ++d->playlistGen;   // 同步重设歌单列表，作废挂起的榜单/歌单搜索回调
+    // 只收起「歌单搜索」的 loading；正在进行的歌曲搜索不受影响
+    if (d->searching && d->searchKind == QLatin1String("playlist")) {
+        d->searching = false;
+        d->searchKind.clear();
+        emit searchFinished(-1, QString());
+    }
     QVector<Playlist> list = Library::instance()->playlists();
     if (!d->playlistFilter.isEmpty()) {
         QVector<Playlist> filtered;
@@ -577,7 +747,32 @@ void AppController::resolveAndPlay(const Song &song)
 {
     if (song.title.isEmpty()) return;
     setStatus(QStringLiteral("正在解析「%1」的播放地址…").arg(song.title));
-    SourceManager::instance()->resolve(song, d->quality, [this, song](const Playable &p) {
+
+    // 歌词/封面在「切歌」这一刻就开始取，不等播放地址解析结果。
+    // 原来这段写在 p.ok 分支里：VIP 歌曲取链失败直接 return，歌词请求根本
+    // 没发出，界面就一直停在「暂无歌词」，封面也只剩占位图。
+    const quint64 lyricGeneration = ++d->lyricGen;
+    SourceManager::instance()->lyric(song, [this, lyricGeneration](const QString &lrc) {
+        if (lyricGeneration != d->lyricGen) return;   // 已切歌，迟到结果丢弃
+        PlayerController::instance()->setLyrics(lrc);
+    });
+
+    const quint64 coverGeneration = ++d->coverGen;
+    if (song.cover.trimmed().isEmpty() && !song.sourceId.isEmpty()) {
+        const QString uid = song.uid.isEmpty()
+            ? song.source + QLatin1Char(':') + song.sourceId : song.uid;
+        SourceManager::instance()->cover(song, [this, coverGeneration, uid](const QString &url) {
+            if (coverGeneration != d->coverGen || url.isEmpty()) return;
+            PlayerController::instance()->setCurrentCover(url);
+            m_results->setCover(uid, url);
+            m_queue->setCover(uid, url);
+            emit playerChanged();
+        });
+    }
+
+    const quint64 resolveGeneration = ++d->resolveGen;
+    SourceManager::instance()->resolve(song, d->quality, [this, song, resolveGeneration](const Playable &p) {
+        if (resolveGeneration != d->resolveGen) return;   // 已切到别的歌，丢弃迟到的取链结果
         if (!p.ok) {
             setStatus(p.message);
             emit toast(p.message);
@@ -593,11 +788,6 @@ void AppController::resolveAndPlay(const Song &song)
         Library::instance()->addHistory(song);
         setStatus(p.substituted ? p.message : QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist));
         if (p.substituted) emit substituteInfo(p.message);
-        const quint64 gen = ++d->lyricGen;      // 本次播放的歌词代次
-        SourceManager::instance()->lyric(song, [this, gen](const QString &lrc) {
-            if (gen != d->lyricGen) return;     // 已经切歌，迟到的歌词丢掉，别盖到新一首上
-            PlayerController::instance()->setLyrics(lrc);
-        });
         emit playerChanged();
     });
 }
@@ -606,8 +796,8 @@ void AppController::playResult(int index)
 {
     const QVector<Song> &songs = m_results->songs();
     if (index < 0 || index >= songs.size()) return;
+    // setQueue 已经发 queueChanged，队列模型会自动同步，无需再手动 syncQueueModel
     PlayerController::instance()->setQueue(songs, index);
-    syncQueueModel();
     resolveAndPlay(songs.at(index));
 }
 
@@ -623,7 +813,6 @@ void AppController::addResultToQueue(int index)
     const QVector<Song> &songs = m_results->songs();
     if (index < 0 || index >= songs.size()) return;
     PlayerController::instance()->addQueue(QVector<Song>() << songs.at(index));
-    syncQueueModel();
     emit toast(QStringLiteral("已加入播放队列"));
 }
 
@@ -632,7 +821,6 @@ void AppController::addPlaylistToQueue(const QString &playlistUid)
     const QVector<Song> songs = Library::instance()->playlistSongs(playlistUid);
     if (songs.isEmpty()) { emit toast(QStringLiteral("该歌单暂无本地缓存，请先打开一次")); return; }
     PlayerController::instance()->addQueue(songs);
-    syncQueueModel();
     emit toast(QStringLiteral("已把歌单加入播放队列"));
 }
 
@@ -686,10 +874,10 @@ void AppController::toggleFavoriteCurrent()
 }
 
 void AppController::removeQueue(int index)
-{ PlayerController::instance()->removeQueue(index); syncQueueModel(); }
+{ PlayerController::instance()->removeQueue(index); }
 
 void AppController::clearQueue()
-{ PlayerController::instance()->clearQueue(); syncQueueModel(); }
+{ PlayerController::instance()->clearQueue(); }
 
 void AppController::downloadResult(int index)
 {
@@ -705,23 +893,17 @@ void AppController::downloadResult(int index)
         QString name = (song.artist.isEmpty() ? song.title : song.artist + QStringLiteral(" - ") + song.title);
         name.remove(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|]")));
         const QString path = dir + QLatin1Char('/') + name + QLatin1Char('.') + extensionForUrl(p.url);
-        HttpClient::instance()->request(QStringLiteral("GET"), p.url, p.headers, QByteArray(),
-            [this, path](const HttpClient::Reply &r) {
-                if (!r.ok || r.body.isEmpty()) {
-                    emit toast(QStringLiteral("下载失败：") + r.error);
+        // 流式写盘：整首 FLAC 动辄几十 MB，原来走 Reply::body 会把这些字节全留在内存里
+        HttpClient::instance()->download(p.url, p.headers, path,
+            [this, path](bool ok, const QString &error) {
+                if (!ok) {
+                    emit toast(QStringLiteral("下载失败：") + error);
                     return;
                 }
-                QFile f(path);
-                if (f.open(QIODevice::WriteOnly)) {
-                    f.write(r.body);
-                    f.close();
-                    setStatus(QStringLiteral("已下载到 %1").arg(path));
-                    emit downloadFinished(path);
-                    emit toast(QStringLiteral("下载完成"));
-                } else {
-                    emit toast(QStringLiteral("无法写入下载文件"));
-                }
-            }, 120000);
+                setStatus(QStringLiteral("已下载到 %1").arg(path));
+                emit downloadFinished(path);
+                emit toast(QStringLiteral("下载完成"));
+            }, 600000);
     });
 }
 
@@ -729,7 +911,8 @@ void AppController::togglePause() { PlayerController::instance()->togglePause();
 void AppController::next() { PlayerController::instance()->next(); }
 void AppController::previous() { PlayerController::instance()->previous(); }
 void AppController::seek(qint64 positionMs) { PlayerController::instance()->seek(positionMs); }
-void AppController::setVolume(int value) { PlayerController::instance()->setVolume(value); emit settingsChanged(); }
+void AppController::setVolume(int value) { PlayerController::instance()->setVolume(value); }
+void AppController::toggleMute() { PlayerController::instance()->toggleMute(); }
 void AppController::setPlayMode(int mode) { PlayerController::instance()->setMode(mode); emit settingsChanged(); }
 void AppController::cyclePlayMode() { PlayerController::instance()->cycleMode(); emit settingsChanged(); }
 
@@ -737,12 +920,15 @@ QStringList AppController::loginMethods(const QString &sourceId) const
 { return AuthManager::instance()->methods(sourceId); }
 void AppController::startQrLogin(const QString &sourceId) { AuthManager::instance()->startQrLogin(sourceId); }
 void AppController::cancelQrLogin() { AuthManager::instance()->cancelQrLogin(); }
-void AppController::loginByCookie(const QString &sourceId, const QString &cookie)
-{ AuthManager::instance()->loginByCookie(sourceId, cookie); }
-void AppController::loginByPassword(const QString &sourceId, const QString &account, const QString &password)
-{ AuthManager::instance()->loginByPassword(sourceId, account, password); }
-void AppController::sendPhoneCode(const QString &sourceId, const QString &phone)
-{ AuthManager::instance()->sendPhoneCode(sourceId, phone); }
+void AppController::loginByPassword(const QString &sourceId, const QString &account,
+                                    const QString &password, const QString &captcha)
+{ AuthManager::instance()->loginByPassword(sourceId, account, password, captcha); }
+void AppController::sendPhoneCode(const QString &sourceId, const QString &phone, const QString &captcha)
+{ AuthManager::instance()->sendPhoneCode(sourceId, phone, captcha); }
+void AppController::refreshCaptcha(const QString &sourceId)
+{
+    if (sourceId == QLatin1String("kuwo")) AuthManager::instance()->refreshKuwoCaptcha();
+}
 void AppController::loginByPhone(const QString &sourceId, const QString &phone, const QString &code)
 { AuthManager::instance()->loginByPhone(sourceId, phone, code); }
 void AppController::logout(const QString &sourceId) { AuthManager::instance()->logout(sourceId); }

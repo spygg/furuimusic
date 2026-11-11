@@ -1,7 +1,8 @@
 #pragma once
 // 福瑞音乐 - 自定义音源（VIP 歌曲替代链）
-// 两类：① 用户自建的合规 HTTP 接口；② 用户自己的本地音乐目录。
-// 项目不内置任何第三方音源，也不提供绕过付费/DRM 的能力。
+// 三级：① 用户自建的合规 HTTP 接口；② 用户自己的本地音乐目录；
+//       ③ 内置默认音源 GD音乐台（gdMusicSource 可关）→ 用户导入的 LX 在线脚本音源。
+// 项目不提供绕过付费/DRM 的能力，请仅使用你拥有合法授权的内容。
 #include <QObject>
 #include <QVector>
 #include <functional>
@@ -47,10 +48,12 @@ signals:
 private:
     explicit CustomSourceManager(QObject *parent = nullptr);
     void resolveAt(int index, const Song &song, const QString &quality, PlayableCallback cb);
+    void lyricAt(int index, const Song &song, StringCallback cb);
     void scanLocal();
     Playable matchLocal(const Song &song) const;
     QVector<Item> m_items;
-    struct LocalFile { QString path; QString name; };
+    // norm：预先归一化过的文件名，匹配时免去逐个 normalize（否则要编译几千次正则）
+    struct LocalFile { QString path; QString name; QString norm; };
     QVector<LocalFile> m_localFiles;
     QString m_scannedDir;
 };

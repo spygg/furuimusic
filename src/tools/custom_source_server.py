@@ -5,12 +5,12 @@
 #       用于替换 VIP / 不可播放的歌曲。不内置任何第三方音源，不访问任何在线音乐平台。
 #
 # 用法：
-#   python tools/custom_source_server.py "D:/MyMusic" --port 9763
+#   python src/tools/custom_source_server.py "D:/MyMusic" --port 9763
 # 然后在 福瑞音乐 -> 设置 -> 自定义音源 -> 添加 HTTP 音源：
 #   名称：本地示例音源
 #   地址：http://127.0.0.1:9763
 #
-# 接口契约（与 config/sources.json 的 customSourceContract 一致）：
+# 接口契约（与 src/config/sources.json 的 customSourceContract 一致）：
 #   GET /musicUrl?name=&artist=&album=&id=&source=&quality=  -> {"url": "http://.../file/<id>"}
 #   GET /search?keyword=&limit=                            -> {"list":[{id,title,artist,album,cover,duration}]}
 #   GET /lyric?name=&artist=&id=                            -> {"lyric": "[00:00.00]..."}

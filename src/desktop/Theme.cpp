@@ -78,7 +78,8 @@ const Tokens &apply(const QString &key)
     // 所以按 logicalDpi/96 折算一次，保证 150%/200% 下文字与控件同步放大。
     qreal scale = 1.0;
     if (QGuiApplication::primaryScreen())
-        scale = qMax(0.85, QGuiApplication::primaryScreen()->logicalDotsPerInch() / 96.0);
+        // 上限同样要夹住：车机/电视的 logicalDpi 常报到 140~190，不夹就会把版式撑散
+        scale = qBound(0.85, QGuiApplication::primaryScreen()->logicalDotsPerInch() / 96.0, 1.5);
     g_scale = scale;
 
     qApp->setStyleSheet(styleSheet(t, scale));

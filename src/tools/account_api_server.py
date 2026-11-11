@@ -7,7 +7,7 @@
 「我的歌单 / 我喜欢的音乐」。网易云不需要本服务（客户端已内置真实实现）。
 
 启动（用于链路验证）：
-    python tools/account_api_server.py --demo --port 9764
+    python src/tools/account_api_server.py --demo --port 9764
 然后在客户端「设置 -> 网络 -> 账号 API 服务」填写 http://127.0.0.1:9764，
 在登录页粘贴任意 Cookie（演示模式不校验），即可看到歌单与收藏被同步下来。
 
@@ -16,16 +16,32 @@
 （例如自建的 QQMusicApi 服务 /user/detail、/user/songlist、/user/collect/songlist），
 不要在此实现任何绕过付费或 DRM 的逻辑。
 
-统一契约（与 config/sources.json 的 userApiContract 一致）：
+统一契约（与 src/config/sources.json 的 userApiContract 一致）：
     GET /health
     GET /user/verify?source=&cookie=          -> {ok, profile:{uid,nickname,avatar}}
     GET /user/profile?source=&cookie=         -> {ok, profile:{uid,nickname,avatar}}
     GET /user/playlists?source=&cookie=&uid=&limit=&offset= -> {ok, playlists:[{id,title,cover,count,owner}]}
     GET /user/favorites?source=&cookie=&uid=&limit=         -> {ok, songs:[{id,title,artist,album,cover,duration}]}
     GET /user/playlistSongs?source=&cookie=&uid=&id=&limit= -> {ok, songs:[...]}
+
+汽水登录契约（客户端 AuthManager::startQishuiQr 按此实现，探针见 src/tools/qishui_login_flow_test.py）：
+    GET  /auth/qrcode         -> {ok, token, qrcode_index_url, expire_time}
+    POST /auth/qrcode/status  -> {ok, status, sessionid?}   # 扫码确认后返回 sessionid
+    POST /auth/me             -> {ok, profile:{uid,nickname,avatar}, cookie?}
+
+汽水的真实出码/换会话需要字节 secsdk 的 x-helios / x-medusa 设备签名，纯 Python 依然算不出来，
+所以这里提供两条路：
+    --qishui-upstream http://127.0.0.1:3300   转发到你自建的 qishui-api（guowenye/qishui-api 等）
+    不带 --qishui-upstream                     演示模式：出码 -> 轮询两次 -> 自动确认，
+                                               用于验证客户端整条登录链路（不是真实登录）
 """
 import argparse
 import json
+import os
+import time
+import urllib.error
+import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -96,9 +112,14 @@ class Upstream:
 
 class Handler(BaseHTTPRequestHandler):
     upstream = None
+    qishui_upstream = ""
+    # 演示模式的扫码状态机：token -> 已轮询次数
+    qr_polls = {}
 
     def log_message(self, fmt, *args):
-        print("[account-api] " + (fmt % args))
+        # flush=True：被重定向到管道/日志文件时 stdout 是块缓冲的，
+        # 不显式 flush 会让日志看起来「一条都没有」，排查扫码链路时非常误导
+        print("[account-api] " + (fmt % args), flush=True)
 
     def send_json(self, obj, status=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -125,6 +146,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({
                 "ok": True, "demo": self.upstream.demo,
                 "platforms": list(PLATFORMS.keys()),
+                "qishuiAuth": "upstream" if self.qishui_upstream else "demo",
                 "note": "账号 API 服务契约参考实现",
             })
 
@@ -152,6 +174,116 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": False, "error": err})
             return self.send_json({"ok": True, "songs": songs, "demo": self.upstream.demo})
 
+        if path == "/auth/qrcode":
+            return self.do_auth_qrcode()
+
+        return self.send_json({"ok": False, "error": "未知端点 %s" % path}, 404)
+
+    # ---------- 汽水扫码登录契约 ----------
+    def read_json_body(self):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        raw = self.rfile.read(length) if length > 0 else b""
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw.decode("utf-8", "replace"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def proxy_qishui(self, method, path):
+        """把 /auth/* 原样转发给自建的 qishui-api（由 --qishui-upstream 指定）。"""
+        url = self.qishui_upstream.rstrip("/") + path
+        body = None
+        headers = {"Content-Type": "application/json"}
+        if method == "POST":
+            payload = self.read_json_body()
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                raw = resp.read()
+                self.send_response(resp.status)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+        except urllib.error.HTTPError as e:
+            raw = e.read()
+            self.send_response(e.code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+        except Exception as e:
+            self.send_json({"ok": False, "error": "上游不可达：%s: %s" % (type(e).__name__, e)}, 502)
+
+    def do_auth_qrcode(self):
+        if self.qishui_upstream:
+            return self.proxy_qishui("GET", "/auth/qrcode")
+        token = uuid.uuid4().hex
+        self.qr_polls[token] = 0
+        # 演示用：二维码内容是一个纯文本 URL，客户端会自己画成二维码
+        self.send_json({
+            "ok": True,
+            "demo": True,
+            "token": token,
+            "qrcode_index_url": "https://music.douyin.com/qishui/demo-login?token=" + token,
+            "qrcode": "https://music.douyin.com/qishui/demo-login?token=" + token,
+            "expire_time": 300,
+            "note": "演示二维码：轮询两次后会自动「确认」，用于验证客户端登录链路",
+        })
+
+    def do_auth_status(self):
+        if self.qishui_upstream:
+            return self.proxy_qishui("POST", "/auth/qrcode/status")
+        body = self.read_json_body()
+        token = str(body.get("token") or "")
+        if not token:
+            return self.send_json({"ok": False, "error": "缺少 token"}, 400)
+        polls = self.qr_polls.get(token, 0) + 1
+        self.qr_polls[token] = polls
+        if polls <= 2:
+            return self.send_json({"ok": True, "demo": True, "status": "waiting",
+                                   "token": token})
+        session = "demo-session-" + token[:16]
+        return self.send_json({
+            "ok": True, "demo": True, "status": "confirmed",
+            "token": token, "sessionid": session,
+            "cookie": "sessionid=" + session,
+        })
+
+    def do_auth_me(self):
+        if self.qishui_upstream:
+            return self.proxy_qishui("POST", "/auth/me")
+        body = self.read_json_body()
+        session = str(body.get("sessionid") or "")
+        if not session:
+            return self.send_json({"ok": False, "error": "缺少 sessionid"}, 400)
+        profile = {
+            "uid": "qishui_demo_user",
+            "nickname": "汽水演示账号",
+            "avatar": "",
+        }
+        # 同步返回一次账号资料，模拟真实服务把 profile 也带上
+        self.upstream.demo_profile = profile
+        return self.send_json({
+            "ok": True, "demo": True, "profile": profile,
+            "cookie": "sessionid=" + session,
+        })
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        if path in ("/auth/qrcode/status", "/auth/status"):
+            return self.do_auth_status()
+        if path in ("/auth/me", "/auth/profile"):
+            return self.do_auth_me()
+        if path == "/auth/qrcode":
+            return self.do_auth_qrcode()
         return self.send_json({"ok": False, "error": "未知端点 %s" % path}, 404)
 
 
@@ -161,10 +293,15 @@ def main():
     ap.add_argument("--port", type=int, default=9764)
     ap.add_argument("--demo", action="store_true",
                     help="返回明确标注的演示数据，用于验证登录同步链路")
+    ap.add_argument("--qishui-upstream", default=os.environ.get("QISHUI_API_BASE", ""),
+                    help="汽水账号服务基地址（如 http://127.0.0.1:3300）；不填则 /auth/* 走演示状态机")
     args = ap.parse_args()
     Handler.upstream = Upstream(demo=args.demo)
+    Handler.qishui_upstream = args.qishui_upstream.strip()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print("账号 API 服务已启动: http://%s:%d  demo=%s" % (args.host, args.port, args.demo))
+    print("账号 API 服务已启动: http://%s:%d  demo=%s  qishuiAuth=%s"
+          % (args.host, args.port, args.demo,
+             Handler.qishui_upstream or "demo"))
     try:
         server.serve_forever()
     except KeyboardInterrupt:

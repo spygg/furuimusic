@@ -8,7 +8,6 @@ Item {
     signal closeRequested()
 
     readonly property bool isDark: theme.dark
-    readonly property color cCard: theme.card
     readonly property color cText: theme.text
     readonly property color cSub: theme.subText
     readonly property color cPrimary: theme.accent
@@ -17,7 +16,9 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: cCard
+        // 卡片底色交给容器画：桌面抽屉的外层 Rectangle 已经是 cCard，
+        // 窄屏底部面板要保留圆角，这里再铺一层方角底色就会把圆角盖掉。
+        color: "transparent"
 
         ColumnLayout {
             anchors.fill: parent
@@ -25,7 +26,8 @@ Item {
 
             RowLayout {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 48
+                // 头部行高与两枚按钮都跟触控最小值走：车机上手指比鼠标难点得中
+                Layout.preferredHeight: theme.touchMin
                 Layout.leftMargin: 12
                 Layout.rightMargin: 12
                 spacing: 8
@@ -38,15 +40,15 @@ Item {
                 }
                 Item { Layout.fillWidth: true }
                 Rectangle {
-                    width: 44
-                    height: 26
-                    radius: 13
+                    width: theme.touchMin
+                    height: theme.touchMin
+                    radius: height / 2
                     color: cSoft
                     Text {
                         anchors.centerIn: parent
                         text: "清空"
                         color: cSub
-                        font.pixelSize: 11
+                        font.pixelSize: theme.fontSm
                     }
                     MouseArea {
                         anchors.fill: parent
@@ -54,9 +56,9 @@ Item {
                     }
                 }
                 Rectangle {
-                    width: 26
-                    height: 26
-                    radius: 13
+                    width: theme.touchMin
+                    height: theme.touchMin
+                    radius: width / 2
                     color: "transparent"
                     border.color: cLine
                     Text {
@@ -82,6 +84,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
+                cacheBuffer: height * 2   // 预渲染两屏：默认只多备 100px，长队列滚动时委托反复重建
                 model: app.queue
                 spacing: 2
                 topMargin: 6
@@ -89,7 +92,7 @@ Item {
 
                 delegate: Rectangle {
                     width: ListView.view.width
-                    height: 54
+                    height: Math.max(54, theme.touchMin)
                     radius: 6
                     color: index === app.currentQueueIndex ? cSoft : "transparent"
 
@@ -108,7 +111,7 @@ Item {
                         Text {
                             text: index + 1
                             color: cSub
-                            font.pixelSize: 11
+                            font.pixelSize: theme.fontSm
                             Layout.preferredWidth: 18
                             horizontalAlignment: Text.AlignHCenter
                         }
@@ -126,14 +129,19 @@ Item {
                                 Layout.fillWidth: true
                                 text: artist + (sourceName.length > 0 ? " · " + sourceName : "")
                                 color: cSub
-                                font.pixelSize: 10
+                                font.pixelSize: theme.fontXs
                                 elide: Text.ElideRight
                             }
                         }
                         Text {
                             text: "移除"
                             color: cSub
-                            font.pixelSize: 10
+                            font.pixelSize: theme.fontXs
+                            // 文字即按钮：热区撑到触控最小值，不然只有两字宽的手指点不到
+                            Layout.preferredWidth: Math.max(theme.touchMin, implicitWidth)
+                            Layout.preferredHeight: theme.touchMin
+                            verticalAlignment: Text.AlignVCenter
+                            horizontalAlignment: Text.AlignHCenter
                             MouseArea {
                                 anchors.fill: parent
                                 onClicked: app.removeQueue(index)

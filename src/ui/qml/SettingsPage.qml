@@ -18,12 +18,16 @@ Item {
     readonly property color cPrimaryHover: Qt.lighter(theme.accent, 1.1)
 
     readonly property var qualityKeys: ["standard", "high", "lossless", "hires"]
+    // 响应式左右留白
+    readonly property real sideMargin: Math.max(16, Math.min(36, Math.round(root.width * 0.035)))
 
+    // themeCombo.currentIndex 已经绑到 theme.mode，外部（标题栏快捷按钮）改主题时会自动跟随，
+    // 这里再用 Connections 赋值等于把绑定改成一次性数值，反而让后续变化失效
     Component.onCompleted: {
-        qualityCombo.currentIndex = Math.max(0, root.qualityKeys.indexOf(app.quality))
         downloadDirField.text = app.setting("downloadDir", "")
         proxyField.text = app.setting("proxy", "")
         timeoutField.text = app.setting("timeout", "")
+        realIpField.text = app.setting("neteaseRealIp", "")
         accountApiField.text = app.accountApiBase
         localDirField.text = app.customLocalDirectory
         app.refreshCustomSources()
@@ -32,34 +36,42 @@ Item {
     Flickable {
         anchors.fill: parent
         contentWidth: width
-        contentHeight: formCol.height + 24
+        contentHeight: formCol.height + formCol.anchors.topMargin + 24
         clip: true
 
         ColumnLayout {
             id: formCol
-            anchors.left: parent.left
-            anchors.right: parent.right
+            anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
-            anchors.margins: 12
+            width: Math.max(240, Math.min(parent.width - 2 * root.sideMargin, 860))
+            anchors.topMargin: root.width < 700 ? 16 : 28
             height: implicitHeight
             spacing: 8
 
+            // 大标题（与搜索/音乐库同版式）
             Text {
                 Layout.fillWidth: true
                 text: "设置"
                 color: cText
-                font.pixelSize: 17
+                font.pixelSize: 30
                 font.bold: true
+                font.letterSpacing: -0.5
+            }
+            Text {
+                Layout.fillWidth: true
+                text: "外观、音质、下载与账号 API"
+                color: cSub
+                font.pixelSize: 14
             }
 
             Text { Layout.fillWidth: true; text: "外观主题"; color: cSub; font.pixelSize: 12 }
-            RowLayout {
+            ColumnLayout {
                 Layout.fillWidth: true
-                spacing: 8
+                spacing: 6
                 ComboBox {
                     id: themeCombo
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 36
+                    Layout.preferredHeight: theme.touchMin
                     // 跟随系统 / 浅色 / 深色，选择后立即生效并写入设置
                     model: ["跟随系统", "浅色", "深色"]
                     currentIndex: theme.mode === "light" ? 1 : (theme.mode === "dark" ? 2 : 0)
@@ -75,9 +87,24 @@ Item {
                 }
                 Text {
                     visible: !theme.systemThemeSupported
+                    Layout.fillWidth: true
                     text: "当前平台不支持跟随系统"
                     color: cSub
-                    font.pixelSize: 11
+                    font.pixelSize: theme.fontSm
+                    wrapMode: Text.Wrap
+                }
+            }
+
+            // 车机/触屏主机跑的常是桌面外壳，但输入是手指：不打开就会丢掉只在 hover 出现的入口
+            RowLayout {
+                visible: platform.isDesktop
+                Layout.fillWidth: true
+                spacing: 8
+                Text { Layout.fillWidth: true; text: "触控优先（车机/触屏）"; color: cText; font.pixelSize: theme.fontMd }
+                Switch {
+                    Layout.preferredHeight: theme.touchMin
+                    checked: platform.touchPrimary
+                    onToggled: platform.setTouchPrimary(checked)
                 }
             }
 
@@ -88,8 +115,10 @@ Item {
                 ComboBox {
                     id: qualityCombo
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 36
+                    Layout.preferredHeight: theme.touchMin
                     model: ["标准", "高品", "无损", "Hi-Res"]
+                    // 绑定而不是在 onCompleted 里赋一次值：开放接口/其它页面改 app.quality 时这里才不会留在旧档
+                    currentIndex: Math.max(0, root.qualityKeys.indexOf(app.quality))
                     background: Rectangle { color: cCard; radius: 6; border.color: cLine }
                     contentItem: Text {
                         text: qualityCombo.displayText
@@ -136,7 +165,7 @@ Item {
                 Layout.fillWidth: true
                 text: app.openApiEnabled ? ("服务地址 " + app.openApiAddress + "  /status /lyric /play /pause /skip-next") : "开放 API 未启用"
                 color: cSub
-                font.pixelSize: 11
+                font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap
             }
 
@@ -155,13 +184,13 @@ Item {
                         font.pixelSize: 13
                         elide: Text.ElideRight
                     }
-                    Text { text: modelData; color: cSub; font.pixelSize: 10 }
+                    Text { text: modelData; color: cSub; font.pixelSize: theme.fontXs }
                     Rectangle {
-                        Layout.preferredWidth: 48
-                        Layout.preferredHeight: 28
+                        Layout.preferredWidth: Math.max(48, theme.touchMin)
+                        Layout.preferredHeight: theme.touchMin
                         radius: 5
                         color: cPrimarySoft
-                        Text { anchors.centerIn: parent; text: "删除"; color: cPrimary; font.pixelSize: 11 }
+                        Text { anchors.centerIn: parent; text: "删除"; color: cPrimary; font.pixelSize: theme.fontSm }
                         MouseArea { anchors.fill: parent; onClicked: app.removeCustomSource(modelData) }
                     }
                 }
@@ -172,7 +201,7 @@ Item {
                 TextField {
                     id: httpName
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     placeholderText: "音源名称"
                     color: cText
                     font.pixelSize: 12
@@ -182,7 +211,7 @@ Item {
                 TextField {
                     id: httpUrl
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     placeholderText: "接口地址 BaseUrl"
                     color: cText
                     font.pixelSize: 12
@@ -193,7 +222,7 @@ Item {
                     id: addHttpBtn
                     text: "添加"
                     Layout.preferredWidth: 56
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     background: Rectangle { radius: 6; color: addHttpBtn.down ? cPrimaryPress : cPrimary }
                     contentItem: Text { text: addHttpBtn.text; color: "#FFFFFF"; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     onClicked: {
@@ -210,7 +239,7 @@ Item {
                 TextField {
                     id: localDirField
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     placeholderText: "本地音乐目录"
                     color: cText
                     font.pixelSize: 12
@@ -221,7 +250,7 @@ Item {
                     id: localDirBtn
                     text: "保存"
                     Layout.preferredWidth: 56
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     background: Rectangle { radius: 6; color: localDirBtn.down ? cPrimaryPress : cPrimary }
                     contentItem: Text { text: localDirBtn.text; color: "#FFFFFF"; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     onClicked: app.setCustomLocalDirectory(localDirField.text)
@@ -241,10 +270,10 @@ Item {
                 }
                 Rectangle {
                     Layout.preferredWidth: 72
-                    Layout.preferredHeight: 28
+                    Layout.preferredHeight: theme.touchMin
                     radius: 6
                     color: cPrimarySoft
-                    Text { anchors.centerIn: parent; text: "全部检查"; color: cPrimary; font.pixelSize: 11 }
+                    Text { anchors.centerIn: parent; text: "全部检查"; color: cPrimary; font.pixelSize: theme.fontSm }
                     MouseArea { anchors.fill: parent; onClicked: app.checkAllScriptSources() }
                 }
             }
@@ -252,7 +281,7 @@ Item {
                 Layout.fillWidth: true
                 text: "支持在线 JS 音源（洛雪 LX 协议）。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方。"
                 color: cSub
-                font.pixelSize: 11
+                font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap
             }
             RowLayout {
@@ -261,7 +290,7 @@ Item {
                 TextField {
                     id: scriptUrlField
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     placeholderText: "https://.../latest.js"
                     color: cText
                     font.pixelSize: 12
@@ -272,7 +301,7 @@ Item {
                     id: importScriptBtn
                     text: "导入"
                     Layout.preferredWidth: 56
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     background: Rectangle { radius: 6; color: importScriptBtn.down ? cPrimaryPress : cPrimary }
                     contentItem: Text { text: importScriptBtn.text; color: "#FFFFFF"; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     onClicked: {
@@ -299,23 +328,30 @@ Item {
                             elide: Text.ElideRight
                         }
                         Rectangle {
-                            Layout.preferredWidth: 44
+                            // 状态徽标不可点，宽度跟着文字走：字号随 uiScale 放大才不会挤出边界
+                            Layout.preferredWidth: Math.max(44, statusLabel.implicitWidth + 12)
                             Layout.preferredHeight: 20
                             radius: 4
                             color: modelData.status === "ok" ? cPrimarySoft
                                  : (modelData.status === "error" ? "#33FF5A5A" : cLine)
                             Text {
+                                id: statusLabel
                                 anchors.centerIn: parent
                                 text: modelData.statusText
                                 color: modelData.status === "ok" ? cPrimary
-                                     : (modelData.status === "error" ? "#FF6B6B" : cSub)
-                                font.pixelSize: 10
+                                     : (modelData.status === "error" ? theme.danger : cSub)
+                                font.pixelSize: theme.fontXs
                             }
                         }
                         Text {
                             text: modelData.enabled ? "禁用" : "启用"
                             color: cSub
-                            font.pixelSize: 11
+                            font.pixelSize: theme.fontSm
+                            // 行内文字按钮：热区撑到触控最小值，否则两个字宽手指点不准
+                            Layout.preferredWidth: Math.max(theme.touchMin, implicitWidth)
+                            Layout.preferredHeight: theme.touchMin
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
                             MouseArea {
                                 anchors.fill: parent
                                 onClicked: app.setScriptSourceEnabled(modelData.id, !modelData.enabled)
@@ -329,25 +365,37 @@ Item {
                             Layout.fillWidth: true
                             text: modelData.capability
                             color: cSub
-                            font.pixelSize: 11
+                            font.pixelSize: theme.fontSm
                             elide: Text.ElideRight
                         }
                         Text {
                             text: "更新"
                             color: cPrimary
-                            font.pixelSize: 11
+                            font.pixelSize: theme.fontSm
+                            Layout.preferredWidth: Math.max(theme.touchMin, implicitWidth)
+                            Layout.preferredHeight: theme.touchMin
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
                             MouseArea { anchors.fill: parent; onClicked: app.updateScriptSource(modelData.id) }
                         }
                         Text {
                             text: "检查"
                             color: cPrimary
-                            font.pixelSize: 11
+                            font.pixelSize: theme.fontSm
+                            Layout.preferredWidth: Math.max(theme.touchMin, implicitWidth)
+                            Layout.preferredHeight: theme.touchMin
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
                             MouseArea { anchors.fill: parent; onClicked: app.checkScriptSource(modelData.id) }
                         }
                         Text {
                             text: "删除"
-                            color: "#FF6B6B"
-                            font.pixelSize: 11
+                            color: theme.danger
+                            font.pixelSize: theme.fontSm
+                            Layout.preferredWidth: Math.max(theme.touchMin, implicitWidth)
+                            Layout.preferredHeight: theme.touchMin
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
                             MouseArea { anchors.fill: parent; onClicked: app.removeScriptSource(modelData.id) }
                         }
                     }
@@ -356,22 +404,22 @@ Item {
                         visible: modelData.sourcesText.length > 0
                         text: modelData.sourcesText
                         color: cSub
-                        font.pixelSize: 10
+                        font.pixelSize: theme.fontXs
                         wrapMode: Text.Wrap
                     }
                     Text {
                         Layout.fillWidth: true
                         visible: modelData.status === "error" && modelData.errorMsg.length > 0
                         text: "失败原因（" + modelData.errorType + "）：" + modelData.errorMsg
-                        color: "#FF6B6B"
-                        font.pixelSize: 10
+                        color: theme.danger
+                        font.pixelSize: theme.fontXs
                         wrapMode: Text.Wrap
                     }
                     Text {
                         Layout.fillWidth: true
                         text: "检查于 " + modelData.checkedText + " · 更新于 " + modelData.updatedText
                         color: cSub
-                        font.pixelSize: 10
+                        font.pixelSize: theme.fontXs
                     }
                 }
             }
@@ -386,7 +434,7 @@ Item {
                 TextField {
                     id: downloadDirField
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     color: cText
                     font.pixelSize: 12
                     leftPadding: 8
@@ -396,7 +444,7 @@ Item {
                     id: downloadDirBtn
                     text: "保存"
                     Layout.preferredWidth: 52
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
                     contentItem: Text { text: downloadDirBtn.text; color: cPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     onClicked: app.setSetting("downloadDir", downloadDirField.text)
@@ -409,7 +457,7 @@ Item {
                 TextField {
                     id: proxyField
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     color: cText
                     font.pixelSize: 12
                     leftPadding: 8
@@ -419,7 +467,7 @@ Item {
                     id: proxyBtn
                     text: "保存"
                     Layout.preferredWidth: 52
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
                     contentItem: Text { text: proxyBtn.text; color: cPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     onClicked: app.setSetting("proxy", proxyField.text)
@@ -432,7 +480,7 @@ Item {
                 TextField {
                     id: timeoutField
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     color: cText
                     font.pixelSize: 12
                     leftPadding: 8
@@ -442,7 +490,7 @@ Item {
                     id: timeoutBtn
                     text: "保存"
                     Layout.preferredWidth: 52
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
                     contentItem: Text { text: timeoutBtn.text; color: cPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     onClicked: {
@@ -458,7 +506,7 @@ Item {
                 TextField {
                     id: accountApiField
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     placeholderText: "http://127.0.0.1:9764"
                     color: cText
                     font.pixelSize: 12
@@ -469,17 +517,44 @@ Item {
                     id: accountApiBtn
                     text: "保存"
                     Layout.preferredWidth: 52
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.touchMin
                     background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
                     contentItem: Text { text: accountApiBtn.text; color: cPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     onClicked: app.setSetting("accountApiBase", accountApiField.text.trim())
                 }
             }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Text { text: "网易云IP"; color: cText; font.pixelSize: 12; Layout.preferredWidth: 60 }
+                TextField {
+                    id: realIpField
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: theme.touchMin
+                    placeholderText: "可选：出口 IP 被判异常时填国内住宅 IP"
+                    color: cText
+                    placeholderTextColor: cSub
+                    font.pixelSize: 12
+                    leftPadding: 8
+                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
+                }
+                Button {
+                    id: realIpBtn
+                    text: "保存"
+                    Layout.preferredWidth: 52
+                    Layout.preferredHeight: theme.touchMin
+                    background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
+                    contentItem: Text { text: realIpBtn.text; color: cPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignHCenter }
+                    onClicked: app.setSetting("neteaseRealIp", realIpField.text.trim())
+                }
+            }
             Text {
                 Layout.fillWidth: true
-                text: "QQ音乐 / 酷狗 / 酷我 / 咪咕 的用户歌单与收藏需自建合规账号 API 服务（示例 tools/account_api_server.py）；网易云为内置真实实现，无需此项。"
+                text: "登录全部在应用内完成：网易云 / QQ / 酷狗 / 咪咕支持内置二维码登录，网易云与咪咕另支持账号密码登录；"
+                      + "无内置二维码的平台需在「设置」里配置自建账号 API 服务（示例 src/tools/account_api_server.py）后同步歌单。"
+                      + "「网易云IP」仅在返回 460（出口 IP 异常）时按需填写，留空即可。"
                 color: cSub
-                font.pixelSize: 11
+                font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap
             }
 

@@ -46,7 +46,7 @@ struct LoginConfig {
 // 账号 API：登录后读取用户自己的资料 / 歌单 / 收藏
 // driver = "netease" 走内置真实实现（linuxapi 加密 + /api/linux/forward）
 // driver = "direct"  走内置直连实现（用登录 Cookie 直接请求该平台官方接口，端点见 userApi.endpoints）
-// driver = "http"    走用户自建的合规账号 API 服务（契约见 tools/account_api_server.py）
+// driver = "http"    走用户自建的合规账号 API 服务（契约见 src/tools/account_api_server.py）
 // driver 为空表示未配置，登录会给出明确提示而不是请求一个不存在的 URL
 struct UserApiConfig {
     QString driver;

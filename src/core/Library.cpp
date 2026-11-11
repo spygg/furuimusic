@@ -17,6 +17,15 @@
 
 namespace Furui {
 
+// 写库失败以前是静默的：内存态已经按「成功」更新、界面也提示了，重启才发现收藏和歌单没了。
+// 统一在这里报警，调用方据此决定是否更新内存态。
+static bool execWrite(QSqlQuery &q, const char *what)
+{
+    if (q.exec()) return true;
+    qWarning() << "[FuruiMusic] Library" << what << "写入失败:" << q.lastError().text();
+    return false;
+}
+
 Library *Library::instance()
 {
     static Library *l = new Library();
@@ -46,6 +55,9 @@ void Library::init()
         return;
     }
     m_ready = true;
+    // WAL + NORMAL：移动端每次自动提交都要 fsync，播放/收藏这类高频写入会明显卡顿
+    exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+    exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
     exec(QStringLiteral("CREATE TABLE IF NOT EXISTS songs (uid TEXT PRIMARY KEY, source TEXT, source_id TEXT, title TEXT, artist TEXT, album TEXT, cover TEXT, duration INTEGER, vip INTEGER, extra TEXT)"));
     exec(QStringLiteral("CREATE TABLE IF NOT EXISTS playlists (uid TEXT PRIMARY KEY, source TEXT, source_id TEXT, title TEXT, cover TEXT, owner TEXT, count INTEGER, type TEXT, extra TEXT)"));
     exec(QStringLiteral("CREATE TABLE IF NOT EXISTS playlist_songs (playlist_uid TEXT, song_uid TEXT, pos INTEGER)"));
@@ -55,6 +67,41 @@ void Library::init()
     exec(QStringLiteral("CREATE TABLE IF NOT EXISTS custom_sources (id TEXT PRIMARY KEY, name TEXT, type TEXT, value TEXT, enabled INTEGER)"));
     exec(QStringLiteral("CREATE TABLE IF NOT EXISTS script_sources (id TEXT PRIMARY KEY, name TEXT, url TEXT, version TEXT, script TEXT, hash TEXT, enabled INTEGER, status TEXT, error_type TEXT, error_msg TEXT, actions TEXT, qualities TEXT, sources TEXT, updated INTEGER, checked INTEGER)"));
     exec(QStringLiteral("CREATE TABLE IF NOT EXISTS search_history (keyword TEXT PRIMARY KEY, ts INTEGER)"));
+    // 高频查询的索引：歌单曲目按 pos 排序、历史按播放时间倒序、歌曲按来源筛选
+    exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_playlist_songs_pos ON playlist_songs(playlist_uid, pos)"));
+    // 老版本的 history 是「每次播放插一行」，先把重复行压成每首一条，
+    // 再建唯一索引，addHistory 才能用 INSERT OR REPLACE 把表控制在歌曲数量级。
+    // 这段只在从旧库升级时跑一次：NOT IN 全表扫是纯开机开销，唯一索引建好后它永远是空操作。
+    QSqlQuery ver(m_db);
+    int schemaVer = 0;
+    if (ver.exec(QStringLiteral("PRAGMA user_version")) && ver.next())
+        schemaVer = ver.value(0).toInt();
+    if (schemaVer < 2) {
+        exec(QStringLiteral("DELETE FROM history WHERE id NOT IN (SELECT MAX(id) FROM history GROUP BY song_uid)"));
+        exec(QStringLiteral("CREATE UNIQUE INDEX IF NOT EXISTS idx_history_song ON history(song_uid)"));
+        // (song_uid, played) 与上面的唯一索引前缀重复，只会拖慢写入，升级时一并清掉
+        exec(QStringLiteral("DROP INDEX IF EXISTS idx_history_song_played"));
+        exec(QStringLiteral("PRAGMA user_version = 2"));
+    }
+    // 历史版本把「加载榜单」的结果当用户歌单存了进来（数量为 0、点开是公开榜单）。
+    // 榜单属于每次拉取的公开数据，不该留在本地歌单表里，升级时清一次。
+    if (schemaVer < 3) {
+        exec(QStringLiteral("DELETE FROM playlists WHERE type='rank'"));
+        exec(QStringLiteral("PRAGMA user_version = 3"));
+    }
+    exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_favorites_added ON favorites(added)"));
+    exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_songs_source ON songs(source)"));
+    exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_songs_source_id ON songs(source, source_id)"));
+    reloadFavoriteCache();
+}
+
+void Library::reloadFavoriteCache()
+{
+    m_favoriteUids.clear();
+    if (!m_ready) return;
+    QSqlQuery q(m_db);
+    if (q.exec(QStringLiteral("SELECT song_uid FROM favorites")))
+        while (q.next()) m_favoriteUids.insert(q.value(0).toString());
 }
 
 Song Library::songFromQuery(const QSqlQuery &q)
@@ -94,8 +141,29 @@ void Library::insertSong(const Song &s)
 
 void Library::saveSongs(const QVector<Song> &list)
 {
-    if (!m_ready) return;
-    for (const Song &s : list) insertSong(s);
+    if (!m_ready || list.isEmpty()) return;
+    // 一次搜索动辄 30 首歌：原来每首单独 INSERT 且自动提交，等于 30 次 fsync。
+    // 包进事务 + 复用一条 prepared statement，写库时间从几十毫秒降到个位数。
+    m_db.transaction();
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT OR REPLACE INTO songs (uid,source,source_id,title,artist,album,cover,duration,vip,extra) "
+                             "VALUES (?,?,?,?,?,?,?,?,?,?)"));
+    for (const Song &s : list) {
+        q.bindValue(0, s.uid);
+        q.bindValue(1, s.source);
+        q.bindValue(2, s.sourceId);
+        q.bindValue(3, s.title);
+        q.bindValue(4, s.artist);
+        q.bindValue(5, s.album);
+        q.bindValue(6, s.cover);
+        q.bindValue(7, s.duration);
+        q.bindValue(8, s.vip ? 1 : 0);
+        q.bindValue(9, QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(s.extra))
+                                             .toJson(QJsonDocument::Compact)));
+        if (!q.exec())
+            qWarning() << "[FuruiMusic] saveSongs:" << q.lastError().text();
+    }
+    m_db.commit();
 }
 
 Song Library::song(const QString &uid)
@@ -157,7 +225,27 @@ void Library::savePlaylist(const Playlist &p)
 
 void Library::savePlaylists(const QVector<Playlist> &list)
 {
-    for (const Playlist &p : list) savePlaylist(p);
+    if (!m_ready || list.isEmpty()) return;
+    // 和 saveSongs 一致：一条 prepared statement + 一个事务，
+    // 避免每个歌单一次自动提交（几十次 fsync）
+    m_db.transaction();
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT OR REPLACE INTO playlists (uid,source,source_id,title,cover,owner,count,type,extra) "
+                             "VALUES (?,?,?,?,?,?,?,?,?)"));
+    for (const Playlist &p : list) {
+        q.bindValue(0, p.uid);
+        q.bindValue(1, p.source);
+        q.bindValue(2, p.sourceId);
+        q.bindValue(3, p.title);
+        q.bindValue(4, p.cover);
+        q.bindValue(5, p.owner);
+        q.bindValue(6, p.count);
+        q.bindValue(7, p.type);
+        q.bindValue(8, QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(p.extra))
+                                             .toJson(QJsonDocument::Compact)));
+        if (!q.exec()) qWarning() << "[FuruiMusic] savePlaylists:" << q.lastError().text();
+    }
+    m_db.commit();
     emit changed();
 }
 
@@ -167,27 +255,56 @@ void Library::removePlaylist(const QString &uid)
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("DELETE FROM playlists WHERE uid=?"));
     q.addBindValue(uid);
-    q.exec();
+    execWrite(q, "deletePlaylist(playlists)");
     q.prepare(QStringLiteral("DELETE FROM playlist_songs WHERE playlist_uid=?"));
     q.addBindValue(uid);
-    q.exec();
+    execWrite(q, "deletePlaylist(playlist_songs)");
 }
 
 void Library::setPlaylistSongs(const QString &playlistUid, const QVector<Song> &songs)
 {
     if (!m_ready) return;
-    saveSongs(songs);
-    QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("DELETE FROM playlist_songs WHERE playlist_uid=?"));
-    q.addBindValue(playlistUid);
-    q.exec();
-    for (int i = 0; i < songs.size(); ++i) {
-        q.prepare(QStringLiteral("INSERT INTO playlist_songs (playlist_uid,song_uid,pos) VALUES (?,?,?)"));
-        q.addBindValue(playlistUid);
-        q.addBindValue(songs.at(i).uid);
-        q.addBindValue(i);
-        q.exec();
+    m_db.transaction();
+
+    QSqlQuery songQuery(m_db);
+    songQuery.prepare(QStringLiteral("INSERT OR REPLACE INTO songs (uid,source,source_id,title,artist,album,cover,duration,vip,extra) "
+                                     "VALUES (?,?,?,?,?,?,?,?,?,?)"));
+    for (const Song &s : songs) {
+        songQuery.bindValue(0, s.uid);
+        songQuery.bindValue(1, s.source);
+        songQuery.bindValue(2, s.sourceId);
+        songQuery.bindValue(3, s.title);
+        songQuery.bindValue(4, s.artist);
+        songQuery.bindValue(5, s.album);
+        songQuery.bindValue(6, s.cover);
+        songQuery.bindValue(7, s.duration);
+        songQuery.bindValue(8, s.vip ? 1 : 0);
+        songQuery.bindValue(9, QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(s.extra))
+                                                     .toJson(QJsonDocument::Compact)));
+        if (!songQuery.exec())
+            qWarning() << "[FuruiMusic] setPlaylistSongs song:" << songQuery.lastError().text();
     }
+
+    QSqlQuery del(m_db);
+    del.prepare(QStringLiteral("DELETE FROM playlist_songs WHERE playlist_uid=?"));
+    del.addBindValue(playlistUid);
+    execWrite(del, "setPlaylistSongs clear");
+
+    QSqlQuery ins(m_db);
+    ins.prepare(QStringLiteral("INSERT INTO playlist_songs (playlist_uid,song_uid,pos) VALUES (?,?,?)"));
+    int failed = 0;
+    for (int i = 0; i < songs.size(); ++i) {
+        ins.bindValue(0, playlistUid);
+        ins.bindValue(1, songs.at(i).uid);
+        ins.bindValue(2, i);
+        if (!ins.exec())
+            ++failed;
+    }
+    // 循环里逐条报警会把日志刷满，只在有失败时汇总一次；少掉的行就是界面上「歌单变短」的原因
+    if (failed > 0)
+        qWarning() << "[FuruiMusic] Library setPlaylistSongs 丢失" << failed << "/"
+                   << songs.size() << "行:" << ins.lastError().text();
+    m_db.commit();
     emit changed();
 }
 
@@ -206,21 +323,25 @@ QVector<Song> Library::playlistSongs(const QString &playlistUid)
 bool Library::isFavorite(const QString &uid)
 {
     if (!m_ready) return false;
-    QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("SELECT 1 FROM favorites WHERE song_uid=?"));
-    q.addBindValue(uid);
-    return q.exec() && q.next();
+    return m_favoriteUids.contains(uid);
 }
 
 void Library::addFavorite(const Song &s)
 {
     if (!m_ready) return;
+    // 歌曲信息 + 收藏关系是一次用户动作，放同一个事务里只 fsync 一次
+    m_db.transaction();
     insertSong(s);
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("INSERT OR REPLACE INTO favorites (song_uid,added) VALUES (?,?)"));
     q.addBindValue(s.uid);
     q.addBindValue(QDateTime::currentMSecsSinceEpoch());
-    q.exec();
+    if (!execWrite(q, "addFavorite")) {
+        m_db.rollback();
+        return;
+    }
+    m_db.commit();
+    m_favoriteUids.insert(s.uid);
     emit changed();
 }
 
@@ -230,7 +351,9 @@ void Library::removeFavorite(const QString &uid)
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("DELETE FROM favorites WHERE song_uid=?"));
     q.addBindValue(uid);
-    q.exec();
+    if (!execWrite(q, "removeFavorite"))
+        return;
+    m_favoriteUids.remove(uid);
     emit changed();
 }
 
@@ -247,12 +370,15 @@ QVector<Song> Library::favorites()
 void Library::addHistory(const Song &s)
 {
     if (!m_ready) return;
+    m_db.transaction();
     insertSong(s);
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("INSERT INTO history (song_uid,played) VALUES (?,?)"));
+    // 每首歌只保留最近一次播放时间（idx_history_song 唯一索引），表不会随播放次数无限增长
+    q.prepare(QStringLiteral("INSERT OR REPLACE INTO history (song_uid,played) VALUES (?,?)"));
     q.addBindValue(s.uid);
     q.addBindValue(QDateTime::currentMSecsSinceEpoch());
-    q.exec();
+    execWrite(q, "addHistory");
+    m_db.commit();
     emit changed();
 }
 
@@ -278,7 +404,7 @@ void Library::addSearchHistory(const QString &keyword)
     q.prepare(QStringLiteral("INSERT OR REPLACE INTO search_history (keyword,ts) VALUES (?,?)"));
     q.addBindValue(keyword.trimmed());
     q.addBindValue(QDateTime::currentMSecsSinceEpoch());
-    q.exec();
+    execWrite(q, "addSearchHistory");
 }
 
 QStringList Library::searchHistory()

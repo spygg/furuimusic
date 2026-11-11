@@ -801,7 +801,8 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
 {
     if (!hasMusicUrl()) {
         Playable p;
-        p.message = QStringLiteral("没有启用的取链音源");
+        p.reason = QStringLiteral("no-source");
+        p.message = QStringLiteral("没有启用的在线取链音源（导入后请确认状态为「正常」；失效音源需更换）");
         if (cb) cb(p);
         return;
     }
@@ -809,35 +810,66 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
     struct Candidate {
         QString engineId;
         QString lxKey;
+        QString quality;
+        QString name;
     };
     QVector<Candidate> candidates;
+    const QString wanted = qualityToLx(quality);
+
+    // 脚本只声明自己支持的音质。宿主要 high/lossless 时若直接把 320k/flac
+    // 丢给只支持 128k 的音源，取链会被拒；这里收敛到声明范围内。
+    auto pickQuality = [&wanted](const QJsonObject &o) {
+        QStringList qs = jsonToStrings(o.value(QStringLiteral("qualities")));
+        if (qs.isEmpty()) qs = jsonToStrings(o.value(QStringLiteral("qualitys")));
+        if (qs.isEmpty() || qs.contains(wanted)) return wanted;
+        if (qs.contains(QStringLiteral("128k"))) return QStringLiteral("128k");
+        return qs.first();
+    };
+    auto addByKey = [this, &candidates, &pickQuality](const QString &key) {
+        if (key.isEmpty()) return;
+        for (auto it = m_items.constBegin(); it != m_items.constEnd(); ++it) {
+            if (!it->enabled) continue;
+            for (const QJsonValue &v : it->sources) {
+                const QJsonObject o = v.toObject();
+                if (o.value(QStringLiteral("key")).toString() != key) continue;
+                if (!jsonToStrings(o.value(QStringLiteral("actions"))).contains(QStringLiteral("musicUrl")))
+                    continue;
+                bool dup = false;
+                for (const Candidate &c : candidates)
+                    if (c.engineId == it.key() && c.lxKey == key) { dup = true; break; }
+                if (!dup) candidates << Candidate{it.key(), key, pickQuality(o), it->name};
+                break;
+            }
+        }
+    };
 
     const QString storedScript = song.extra.value(QStringLiteral("scriptId")).toString();
     const QString storedKey = song.extra.value(QStringLiteral("lxKey")).toString();
     if (!storedScript.isEmpty() && !storedKey.isEmpty()) {
-        candidates << Candidate{storedScript, storedKey};
-    } else {
-        const QString lx = platformToLx(song.source);
-        if (!lx.isEmpty()) {
-            for (auto it = m_items.constBegin(); it != m_items.constEnd(); ++it) {
-                if (!it->enabled) continue;
+        // 脚本搜索出来的歌优先用原脚本；失败后仍继续尝试其它同类音源
+        if (Item *it = find(storedScript)) {
+            if (it->enabled) {
+                QString q = wanted;
                 for (const QJsonValue &v : it->sources) {
                     const QJsonObject o = v.toObject();
-                    if (o.value(QStringLiteral("key")).toString() != lx) continue;
-                    if (!jsonToStrings(o.value(QStringLiteral("actions"))).contains(QStringLiteral("musicUrl")))
-                        continue;
-                    candidates << Candidate{it.key(), lx};
-                    break;
+                    if (o.value(QStringLiteral("key")).toString() == storedKey) {
+                        q = pickQuality(o);
+                        break;
+                    }
                 }
+                candidates << Candidate{storedScript, storedKey, q, it->name};
             }
         }
+        addByKey(storedKey);
     }
+    addByKey(platformToLx(song.source));
 
     if (candidates.isEmpty()) {
         Playable p;
+        p.reason = QStringLiteral("no-capability");
         p.message = song.source == QLatin1String("custom")
             ? QStringLiteral("该歌曲没有对应的在线音源")
-            : QStringLiteral("在线音源未声明该平台的取链能力");
+            : QStringLiteral("已导入的在线音源未声明该平台（%1）的取链能力").arg(song.source);
         if (cb) cb(p);
         return;
     }
@@ -845,14 +877,13 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
     struct ResolveState {
         PlayableCallback cb;
         Song song;
-        QString quality;
         QVector<Candidate> candidates;
+        QStringList failures;   // 逐个音源记录真实失败原因，别再只报「均未取到」
         int index = 0;
     };
     auto state = std::make_shared<ResolveState>();
     state->cb = cb;
     state->song = song;
-    state->quality = quality;
     state->candidates = candidates;
 
     // 用 weak_ptr 打断「shared_ptr -> function -> shared_ptr」的自捕获循环；
@@ -864,21 +895,31 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
         if (!step) return;
         if (state->index >= state->candidates.size()) {
             Playable p;
-            p.message = QStringLiteral("所有在线音源均未能取到音频地址");
+            p.reason = QStringLiteral("script-failed");
+            p.message = state->failures.isEmpty()
+                ? QStringLiteral("所有在线音源均未能取到音频地址")
+                : QStringLiteral("在线音源取链失败：%1").arg(state->failures.join(QStringLiteral("；")));
             if (state->cb) state->cb(p);
             return;
         }
         const Candidate cand = state->candidates.at(state->index++);
         ensureEngine(cand.engineId, [this, state, cand, step](bool ok) {
-            if (!ok) { (*step)(); return; }
+            if (!ok) {
+                state->failures << QStringLiteral("%1：初始化失败").arg(cand.name);
+                (*step)();
+                return;
+            }
             ScriptEngine *engine = m_engines.value(cand.engineId).data();
-            if (!engine || !engine->ready()) { (*step)(); return; }
+            if (!engine || !engine->ready()) {
+                state->failures << QStringLiteral("%1：脚本未就绪").arg(cand.name);
+                (*step)();
+                return;
+            }
             QVariantMap info;
-            info.insert(QStringLiteral("type"), qualityToLx(state->quality));
+            info.insert(QStringLiteral("type"), cand.quality);
             info.insert(QStringLiteral("musicInfo"), musicInfoFor(state->song, cand.lxKey));
-            const QString engineId = cand.engineId;
             engine->callAction(cand.lxKey, QStringLiteral("musicUrl"), info,
-                [this, state, engineId, step](const ScriptActionResult &r) {
+                [state, cand, step](const ScriptActionResult &r) {
                     QString url;
                     if (r.ok) {
                         if (r.data.canConvert<QVariantMap>()) {
@@ -893,12 +934,14 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
                         p.ok = true;
                         p.url = QUrl(url);
                         p.substituted = true;
-                        p.substituteSource = QStringLiteral("在线音源 · ") +
-                                             m_items.value(engineId).name;
-                        p.message = QStringLiteral("已由在线音源「%1」提供").arg(m_items.value(engineId).name);
+                        p.substituteSource = QStringLiteral("在线音源 · ") + cand.name;
+                        p.message = QStringLiteral("已由在线音源「%1」提供").arg(cand.name);
                         if (state->cb) state->cb(p);
                         return;
                     }
+                    QString reason = r.ok ? QStringLiteral("未返回音频地址") : r.error;
+                    if (reason.trimmed().isEmpty()) reason = QStringLiteral("取链失败");
+                    state->failures << QStringLiteral("%1：%2").arg(cand.name, reason.left(80));
                     (*step)();
                 }, 20000);
         });
@@ -908,28 +951,88 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
 
 void ScriptSourceManager::lyric(const Song &song, StringCallback cb)
 {
-    // 只使用明确声明了 lyric 能力的脚本；没有就如实返回空
+    // 内置平台歌曲的歌词接口常常返回空（VIP / 下架 / 无版权），此时也应该
+    // 让所有声明了 lyric 能力的脚本依次兜底，而不是只认脚本搜索出来的歌。
+    if (!hasEnabled()) { if (cb) cb(QString()); return; }
+
+    struct Candidate { QString engineId; QString key; };
+    QVector<Candidate> candidates;
+    auto add = [this, &candidates](const QString &key) {
+        if (key.isEmpty()) return;
+        for (auto it = m_items.constBegin(); it != m_items.constEnd(); ++it) {
+            if (!it->enabled) continue;
+            for (const QJsonValue &v : it->sources) {
+                const QJsonObject o = v.toObject();
+                if (o.value(QStringLiteral("key")).toString() != key) continue;
+                if (!jsonToStrings(o.value(QStringLiteral("actions"))).contains(QStringLiteral("lyric")))
+                    continue;
+                bool dup = false;
+                for (const Candidate &c : candidates)
+                    if (c.engineId == it.key() && c.key == key) { dup = true; break; }
+                if (!dup) candidates << Candidate{it.key(), key};
+                break;
+            }
+        }
+    };
     const QString storedScript = song.extra.value(QStringLiteral("scriptId")).toString();
     const QString storedKey = song.extra.value(QStringLiteral("lxKey")).toString();
-    if (storedScript.isEmpty() || storedKey.isEmpty() || !hasEnabled()) {
-        if (cb) cb(QString());
-        return;
+    if (!storedScript.isEmpty() && !storedKey.isEmpty()) {
+        if (Item *it = find(storedScript)) {
+            if (it->enabled) candidates << Candidate{storedScript, storedKey};
+        }
+        add(storedKey);
     }
-    ensureEngine(storedScript, [this, song, storedScript, storedKey, cb](bool ok) {
-        if (!ok) { if (cb) cb(QString()); return; }
-        ScriptEngine *engine = m_engines.value(storedScript).data();
-        if (!engine || !engine->supports(storedKey, QStringLiteral("lyric"))) {
-            if (cb) cb(QString());
+    add(platformToLx(song.source));
+
+    if (candidates.isEmpty()) { if (cb) cb(QString()); return; }
+
+    struct State {
+        StringCallback cb;
+        Song song;
+        QVector<Candidate> candidates;
+        int index = 0;
+    };
+    auto state = std::make_shared<State>();
+    state->cb = cb;
+    state->song = song;
+    state->candidates = candidates;
+    auto next = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> weakNext = next;
+    *next = [this, state, weakNext]() {
+        auto step = weakNext.lock();
+        if (!step) return;
+        if (state->index >= state->candidates.size()) {
+            if (state->cb) state->cb(QString());
             return;
         }
-        QVariantMap info;
-        info.insert(QStringLiteral("musicInfo"), musicInfoFor(song, storedKey));
-        QPointer<ScriptEngine> guard(engine);
-        engine->callAction(storedKey, QStringLiteral("lyric"), info,
-            [cb](const ScriptActionResult &r) {
-                if (cb) cb(r.ok ? r.data.toString() : QString());
-            }, 15000);
-    });
+        const Candidate cand = state->candidates.at(state->index++);
+        ensureEngine(cand.engineId, [this, state, cand, step](bool ok) {
+            if (!ok) { (*step)(); return; }
+            ScriptEngine *engine = m_engines.value(cand.engineId).data();
+            if (!engine || !engine->ready() || !engine->supports(cand.key, QStringLiteral("lyric"))) {
+                (*step)();
+                return;
+            }
+            QVariantMap info;
+            info.insert(QStringLiteral("musicInfo"), musicInfoFor(state->song, cand.key));
+            engine->callAction(cand.key, QStringLiteral("lyric"), info,
+                [state, step](const ScriptActionResult &r) {
+                    QString text;
+                    if (r.ok) {
+                        if (r.data.canConvert<QVariantMap>()) {
+                            const QVariantMap m = r.data.toMap();
+                            text = m.value(QStringLiteral("lyric")).toString();
+                            if (text.isEmpty()) text = m.value(QStringLiteral("lrc")).toString();
+                        } else {
+                            text = r.data.toString();
+                        }
+                    }
+                    if (!text.trimmed().isEmpty()) { if (state->cb) state->cb(text); return; }
+                    (*step)();
+                }, 15000);
+        });
+    };
+    (*next)();
 }
 
 } // namespace Furui

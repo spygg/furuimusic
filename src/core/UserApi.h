@@ -8,7 +8,7 @@
 //   direct  : 内置直连实现。用用户自己的 Cookie 按 sources.json 里的 userApi.endpoints
 //             直接请求该平台官方接口（QQ 音乐已实现），不经过任何第三方服务。
 //             平台私有的变量（如 g_tk / uin / musickey）由 vars() 从 Cookie 里解出。
-//   http    : 用户自建的合规账号 API 服务。统一契约见 tools/account_api_server.py，
+//   http    : 用户自建的合规账号 API 服务。统一契约见 src/tools/account_api_server.py，
 //             地址写进设置 accountApiBase（或 accountApiBase/<source>）。
 //
 // 未配置驱动时 explicit 报错，不会去请求一个不存在的 URL。
@@ -54,12 +54,12 @@ public:
     bool available(const QString &sourceId) const;
     // 给 UI 的如实状态描述
     QString statusOf(const QString &sourceId) const;
-    // 真实可用的登录方式；cookie 恒可用，二维码/手机号只在服务声明并实现端点后出现
+    // 真实可用的登录方式；二维码/手机号只在服务声明并实现端点后出现（Cookie 登录已移除）
     QStringList methods(const QString &sourceId) const;
     // 没有扫码方式时，给用户提供一句实话（为什么这个平台在应用内扫不了码）
     QString qrUnavailableReason(const QString &sourceId) const;
-    // Cookie 登录页的说明：该平台要粘哪些键，以及登录后能不能同步歌单
-    QString cookieLoginHint(const QString &sourceId) const;
+    // 该平台连密码/手机号都没有时，说清楚卡在哪（酷我 502、汽水原生签名等）
+    QString loginUnavailableReason(const QString &sourceId) const;
 
     void verify(const QString &sourceId, const QString &cookie,
                 const std::function<void(const UserProfile &)> &cb);

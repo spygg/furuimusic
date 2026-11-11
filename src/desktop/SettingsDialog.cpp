@@ -230,7 +230,7 @@ QWidget *SettingsDialog::createNetworkTab()
     form->addRow(QStringLiteral("账号 API 服务"), m_accountApiBase);
     QLabel *accountTip = new QLabel(QStringLiteral(
         "QQ 音乐 / 酷狗 / 酷我 / 咪咕 的用户歌单与收藏需要自建合规账号 API 服务；"
-        "填写地址后按统一契约调用（示例实现 tools/account_api_server.py）。"
+        "填写地址后按统一契约调用（示例实现 src/tools/account_api_server.py）。"
         "网易云为内置真实实现，无需此项。"), w);
     accountTip->setWordWrap(true);
     form->addRow(QString(), accountTip);

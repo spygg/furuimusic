@@ -1,6 +1,8 @@
 #include "SourceManager.h"
 
 #include <QSet>
+#include <QPair>
+#include <QTimer>
 #include <algorithm>
 
 #include "CustomSource.h"
@@ -58,13 +60,16 @@ void SourceManager::search(const QString &keyword, const QString &sourceId, int 
 
     auto remaining = std::make_shared<int>(pending);
     auto collected = std::make_shared<QVector<Song>>();
-    auto done = [remaining, collected, cb, keyword]() {
-        if (--(*remaining) > 0) return;
-        // 相关度排序：歌名完全一致 > 歌名以关键词开头 > 歌名包含关键词 > 其余；
-        // 用 stable_sort 保证同一档内仍按平台返回顺序排列。
-        // （原来按 normalizedKey() 长度升序，等于「标题越短越靠前」，和关键词无关）
-        const QString kw = keyword.trimmed();
-        auto score = [&kw](const Song &s) {
+    auto finished = std::make_shared<bool>(false);
+    auto lastCount = std::make_shared<int>(-1);
+    const QString kw = keyword.trimmed();
+
+    // 相关度排序：歌名完全一致 > 歌名以关键词开头 > 歌名包含关键词 > 其余；
+    // 用 stable_sort 保证同一档内仍按平台返回顺序排列。
+    auto sorted = [kw](const QVector<Song> &in) {
+        // 分数先算好再排序：以前比较器里现算，每次比较都要 trimmed() 复制一遍标题再做
+        // 三趟大小写无关匹配，n·log n 次比较全落在 GUI 线程上，几百条结果就能卡一下。
+        auto scoreOf = [&kw](const Song &s) {
             const QString title = s.title.trimmed();
             if (kw.isEmpty()) return 3;
             if (title.compare(kw, Qt::CaseInsensitive) == 0) return 0;
@@ -72,10 +77,39 @@ void SourceManager::search(const QString &keyword, const QString &sourceId, int 
             if (title.contains(kw, Qt::CaseInsensitive)) return 2;
             return 3;
         };
-        std::stable_sort(collected->begin(), collected->end(), [&score](const Song &a, const Song &b) {
-            return score(a) < score(b);
-        });
-        if (cb) cb(*collected);
+        QVector<QPair<int, int>> ranked;
+        ranked.reserve(in.size());
+        for (int i = 0; i < in.size(); ++i)
+            ranked.append(qMakePair(scoreOf(in.at(i)), i));
+        std::stable_sort(ranked.begin(), ranked.end(),
+                         [](const QPair<int, int> &a, const QPair<int, int> &b) {
+                             return a.first < b.first;
+                         });
+        QVector<Song> out;
+        out.reserve(ranked.size());
+        for (const QPair<int, int> &r : ranked) out.append(in.at(r.second));
+        return out;
+    };
+
+    auto deliver = [collected, cb, sorted, finished, lastCount](bool final) {
+        if (*finished) return;
+        // 软刷新和最终结果内容相同就不要重复推给界面（避免整表 reset 两次）
+        if (collected->size() != *lastCount) {
+            *lastCount = collected->size();
+            if (cb) cb(sorted(*collected));
+        }
+        if (final) *finished = true;
+    };
+
+    // 软超时：某个平台挂起时不能让整页空等到 12s 超时。700ms 先把已到的结果给界面，
+    // 全部返回后再补一次最终（完整排序）结果。
+    QTimer::singleShot(700, this, [collected, deliver]() {
+        if (!collected->isEmpty()) deliver(false);
+    });
+
+    auto done = [remaining, deliver]() {
+        if (--(*remaining) > 0) return;
+        deliver(true);
     };
 
     for (MusicSource *s : targets) {
@@ -118,12 +152,26 @@ void SourceManager::rank(const QString &sourceId, int limit, PlaylistsCallback c
     else if (MusicSource *s = source(sourceId)) targets << s;
     if (targets.isEmpty()) { if (cb) cb(QVector<Playlist>()); return; }
 
+    // 每个平台占一个槽位，全部回来后按「平台轮转」交错展开。
+    // 直接按完成顺序拼接会让榜单数量多的平台霸屏（实测酷狗 57 个、网易云 65 个，
+    // QQ 的 25 个和酷我的 6 个全被压到列表很后面，看起来像「只有酷狗有榜单」）。
+    // 注意：变量名不能叫 slots —— 那是 Qt 的关键字宏（qobjectdefs.h），会被展开成空
+    auto perSource = std::make_shared<QVector<QVector<Playlist>>>(targets.size());
     auto remaining = std::make_shared<int>(targets.size());
-    auto collected = std::make_shared<QVector<Playlist>>();
-    for (MusicSource *s : targets) {
-        s->rank(limit, 0, [collected, remaining, cb](const QVector<Playlist> &list) {
-            collected->append(list);
-            if (--(*remaining) == 0 && cb) cb(*collected);
+    for (int i = 0; i < targets.size(); ++i) {
+        MusicSource *s = targets.at(i);
+        s->rank(limit, 0, [perSource, remaining, cb, i](const QVector<Playlist> &list) {
+            (*perSource)[i] = list;
+            if (--(*remaining) == 0 && cb) {
+                int rows = 0;
+                for (const QVector<Playlist> &v : *perSource) rows = qMax(rows, int(v.size()));
+                QVector<Playlist> out;
+                out.reserve(rows * int(perSource->size()));
+                for (int row = 0; row < rows; ++row)
+                    for (const QVector<Playlist> &v : *perSource)
+                        if (row < v.size()) out << v.at(row);
+                cb(out);
+            }
         });
     }
 }
@@ -145,6 +193,8 @@ void SourceManager::playlistDetail(const Playlist &playlist, SongsCallback cb)
     if (!s || id.isEmpty()) { finish(QVector<Song>()); return; }
     if (playlist.type == QLatin1String("user"))
         s->userPlaylistDetail(id, finish);
+    else if (playlist.type == QLatin1String("rank"))
+        s->rankDetail(id, Settings::integer(QStringLiteral("pageSize"), 30) * 5, 0, finish);
     else
         s->playlistDetail(id, Settings::integer(QStringLiteral("pageSize"), 30) * 5, 0, finish);
 }
@@ -175,7 +225,10 @@ void SourceManager::resolve(const Song &song, const QString &quality, PlayableCa
                     return;
                 }
                 Playable r = original;
-                r.message = original.message + QStringLiteral("；") + sub.message;
+                // 把「原平台失败」与「替代音源为什么也没成」分开说清楚，
+                // 否则用户只会看到一句「需要会员」，误以为导入的音源没生效。
+                r.message = original.message + QStringLiteral("；") + sub.message
+                          + QStringLiteral("。可在「设置 → 在线音源」检查状态或换用其它音源");
                 if (Settings::boolean(QStringLiteral("autoToggleSource"), true)) {
                     tryCrossSource(song, quality, r, cb);
                 } else if (cb) {
@@ -236,9 +289,16 @@ void SourceManager::lyric(const Song &song, StringCallback cb)
     MusicSource *s = source(song.source);
     if (!s) { CustomSourceManager::instance()->lyric(song, cb); return; }
     s->lyric(song, [song, cb](const QString &text) {
-        if (!text.isEmpty()) { if (cb) cb(text); return; }
+        if (!text.trimmed().isEmpty()) { if (cb) cb(text); return; }
         CustomSourceManager::instance()->lyric(song, cb);
     });
+}
+
+void SourceManager::cover(const Song &song, StringCallback cb)
+{
+    MusicSource *s = source(song.source);
+    if (!s) { if (cb) cb(QString()); return; }
+    s->cover(song, cb);
 }
 
 } // namespace Furui

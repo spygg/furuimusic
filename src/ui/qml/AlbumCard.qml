@@ -89,6 +89,9 @@ Item {
                     id: coverImage
                     anchors.fill: parent
                     source: root.cover
+                    // 网格卡片最多几百像素宽：限制解码尺寸，避免每张封面都按原图解码
+                    sourceSize.width: 320
+                    sourceSize.height: 320
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true
                     cache: true
@@ -161,7 +164,7 @@ Item {
                 Layout.fillWidth: true
                 text: root.subtitle
                 color: root.subColor
-                font.pixelSize: 11
+                font.pixelSize: theme.fontSm
                 elide: Text.ElideRight
             }
 

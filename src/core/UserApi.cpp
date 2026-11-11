@@ -9,11 +9,13 @@
 
 #include "Aes128.h"
 #include "JsonMapper.h"
+#include "KugouLoginCrypto.h"
 #include "KugouProtocol.h"
 #include "Library.h"
 #include "MusicSource.h"
 #include "NeteaseCrypto.h"
 #include "QqProtocol.h"
+#include "RsaPkcs1.h"
 #include "Settings.h"
 #include "SourceConfig.h"
 #include "SourceManager.h"
@@ -29,7 +31,7 @@ QStringList listOf(const QVariant &v)
     return out;
 }
 
-// http 驱动的默认账号 API 契约（与 tools/account_api_server.py 一致）
+// http 驱动的默认账号 API 契约（与 src/tools/account_api_server.py 一致）
 Endpoint contract(const QString &name)
 {
     Endpoint e;
@@ -150,7 +152,9 @@ HttpClient::Reply failure(const QString &message)
 // 由 AuthManager 原生实现二维码登录的平台（新增时同步改 AuthManager::startQrLogin 的分支）
 bool hasNativeQrLogin(const QString &sourceId)
 {
-    return sourceId == QLatin1String("qq") || sourceId == QLatin1String("kugou");
+    // 咪咕 2026-11 起也走内置扫码（passport.migu.cn 的 qrcWeb 接口），酷我走微信开放平台，一并算原生
+    return sourceId == QLatin1String("qq") || sourceId == QLatin1String("kugou")
+           || sourceId == QLatin1String("migu") || sourceId == QLatin1String("kuwo");
 }
 
 } // namespace
@@ -170,6 +174,10 @@ UserApi::UserApi(QObject *parent) : QObject(parent)
         qWarning("[FuruiMusic] AES-128 self test failed: netease linuxapi will not work");
     if (!Netease::selfTest())
         qWarning("[FuruiMusic] weapi self test failed: netease QR/password login will not work");
+    if (!RsaPkcs1::selfTest())
+        qWarning("[FuruiMusic] RSA self test failed: migu password login will not work");
+    if (!KugouLoginCrypto::selfTest())
+        qWarning("[FuruiMusic] kugou login crypto self test failed: password login will not work");
 }
 
 UserApiConfig UserApi::config(const QString &sourceId) const
@@ -207,35 +215,59 @@ QString UserApi::statusOf(const QString &sourceId) const
 {
     const UserApiConfig c = config(sourceId);
     if (c.driver == QLatin1String("netease"))
-        return QStringLiteral("内置网易云账号接口（Cookie + linuxapi 签名）");
+        return QStringLiteral("内置网易云账号接口（登录态 + linuxapi 签名）");
     if (c.driver == QLatin1String("direct"))
-        return QStringLiteral("内置直连账号接口（用登录 Cookie 直接请求 %1 官方接口）")
+        return QStringLiteral("内置直连账号接口（用登录态直接请求 %1 官方接口）")
                    .arg(SourceConfig::instance()->nameOf(sourceId));
     if (c.driver == QLatin1String("http") && !c.base.trimmed().isEmpty())
         return QStringLiteral("账号 API 服务：") + c.base;
     // 有内置扫码的平台不该被说成「必须部署服务」，只是歌单同步还缺一套直连接口
     if (hasNativeQrLogin(sourceId))
-        return QStringLiteral("未配置账号 API 服务：该平台可直接用内置二维码登录，登录后的歌单同步尚未内置。");
-    // 酷我/咪咕/汽水这类只有 Cookie 的平台：让用户「改用网易云」没有意义。
+        return QStringLiteral("未配置账号 API 服务：该平台可直接用内置方式登录，登录后的歌单同步尚未内置。");
+    // 酷我/汽水这类既没有可用登录链路、也没有账号接口的平台：让用户「改用网易云」没有意义。
     // 这里只讲账号接口，登录方式的解释交给 qrUnavailableReason，两段话不要互相重复
     return QStringLiteral("该平台未内置账号接口：歌单与收藏同步需要在设置里配置账号 API 服务。");
 }
 
 QStringList UserApi::methods(const QString &sourceId) const
 {
+    // 登录方式以 sources.json 的 login.methods 为唯一事实来源：qrcode / password / phone。
+    // 原生二维码（网易云/QQ/酷狗）与账号 API 服务声明的额外方式由这里统一吐给 UI，
+    // 不再依赖已被清掉的 cookie 登录。
+    const SourceDesc desc = SourceConfig::instance()->source(sourceId);
     QStringList out;
-    out << QStringLiteral("cookie");
-    // 网易云内置 weapi 实现：扫码 + 密码（手机号/邮箱）登录均可用，无需外部服务
+    for (const QString &m : desc.login.methods) {
+        const QString mm = m.toLower();
+        if ((mm == QLatin1String("qrcode") || mm == QLatin1String("password")
+             || mm == QLatin1String("phone")) && !out.contains(mm))
+            out << mm;
+    }
+    // 配置了账号 API 服务（driver=http）且声明了 extraMethods 时，也把它当成可用方式
     const UserApiConfig c = config(sourceId);
-    if (c.driver == QLatin1String("netease"))
-        return out << QStringLiteral("qrcode") << QStringLiteral("password");
-    const LoginConfig legacy = SourceConfig::instance()->source(sourceId).login;
-    if (hasNativeQrLogin(sourceId) || c.driver == QLatin1String("direct")
-        || c.extraMethods.contains(QStringLiteral("qrcode")) || legacy.qrCreate.valid())
-        out << QStringLiteral("qrcode");
-    if (c.extraMethods.contains(QStringLiteral("phone")) || legacy.phoneLogin.valid())
-        out << QStringLiteral("phone");
+    for (const QString &m : c.extraMethods) {
+        const QString mm = m.toLower();
+        if ((mm == QLatin1String("qrcode") || mm == QLatin1String("phone")) && !out.contains(mm))
+            out << mm;
+    }
     return out;
+}
+
+QString UserApi::loginUnavailableReason(const QString &sourceId) const
+{
+    if (sourceId == QLatin1String("kuwo")) {
+        return QStringLiteral(
+            "酷我的登录服务器 passport.kuwo.cn 整站 502，但站点真正的登录网关是 "
+            "wapi.kuwo.cn（图形验证码 + 账号密码 / 手机短信 / 微信扫码）。"
+            "本应用已按该网关内置三种登录方式；搜索与播放不受影响。"
+            "要把「我的歌单/收藏」同步进来，仍需配置账号 API 服务。");
+    }
+    if (sourceId == QLatin1String("qishui")) {
+        return QStringLiteral(
+            "汽水音乐的登录接口由字节 secsdk 保护（x-helios / x-medusa 设备签名），"
+            "签名在客户端算不出来。扫码链路已内置，但需要在「设置 → 网络 → 账号 API 服务」"
+            "配置实现了 /auth 契约的服务（src/tools/account_api_server.py 或自建 qishui-api）。");
+    }
+    return QStringLiteral("该平台暂无可用的应用内登录方式。");
 }
 
 QString UserApi::qrUnavailableReason(const QString &sourceId) const
@@ -243,42 +275,17 @@ QString UserApi::qrUnavailableReason(const QString &sourceId) const
     if (methods(sourceId).contains(QStringLiteral("qrcode"))) return QString();
     // 2026-11-07 逐家实测线上接口后的结论：这三家当前拿不到「扫码后一定能登录」的证据，
     // 与其出一张扫了没反应的码，不如把卡在哪一步说清楚
+    const QString apiHint = QStringLiteral("请在「设置」里配置自建账号 API 服务"
+                                          "（src/tools/account_api_server.py）后同步歌单与收藏。");
     if (sourceId == QLatin1String("kuwo"))
-        return QStringLiteral("酷我没有可用的扫码接口：网页端扫码已下线，passport.kuwo.cn 的扫码端点返回 "
-                              "502，App 端扫码接口又要求先登录。请改用 Cookie 登录。");
-    if (sourceId == QLatin1String("migu"))
-        return QStringLiteral("咪咕的出码与轮询接口纯 HTTP 就能调通，但扫码成功后的令牌换取环节尚未实测通过，"
-                              "贸然出码会出现「手机已确认、应用却登不上」。请改用 Cookie 登录。");
+        return QStringLiteral("酷我的扫码只能走微信：网页端「微信」图标打开的是开放平台 "
+                              "snsapi_login（appid wx41c1275bb3e28427），回调落在 "
+                              "i.kuwo.cn/US/platform/WeixinCallback.jsp。应用已内置这条链路；"
+                              "QQ / 微博回调是 HTML 弹窗，需要内嵌浏览器，故未内置。") + apiHint;
     if (sourceId == QLatin1String("qishui"))
-        return QStringLiteral("汽水的出码接口可以调通（需带完整设备参数），但确认后的会话换取受设备风控约束"
-                              "（命中风险会强制二次验证），登录闭环尚未实测通过。请改用 Cookie 登录。");
-    return QStringLiteral("该平台未配置二维码登录接口，请改用 Cookie 登录，"
-                          "或在设置里配置实现了扫码端点的账号 API 服务。");
-}
-
-QString UserApi::cookieLoginHint(const QString &sourceId) const
-{
-    // 桌面端与移动端都取这一句，避免两端各写一份、写歪了没人发现
-    if (sourceId == QLatin1String("netease")) {
-        return QStringLiteral(
-            "获取 Cookie：① 浏览器打开 https://music.163.com 并登录；"
-            "② 按 F12 → Network → 刷新页面 → 点任一请求 → 复制 Request Headers 里的整行 Cookie；"
-            "③ 必须包含 MUSIC_U（网易云长期有效的登录凭据），__csrf 可选。"
-            "粘贴后点「验证并同步」，验证通过会立即落库并拉取歌单/收藏。");
-    }
-
-    QString neededKeys;
-    if (sourceId == QLatin1String("qq")) neededKeys = QStringLiteral("qqmusic_key 与 uin");
-    else if (sourceId == QLatin1String("kugou")) neededKeys = QStringLiteral("token 与 userid");
-    else if (sourceId == QLatin1String("kuwo")) neededKeys = QStringLiteral("kw_token 与 uid");
-
-    QString text = QStringLiteral("从浏览器开发者工具复制已登录账号的完整 Cookie");
-    if (!neededKeys.isEmpty())
-        text += QStringLiteral("（该平台需要 %1）").arg(neededKeys);
-    text += available(sourceId)
-            ? QStringLiteral("。验证通过后会自动同步该账号的歌单与收藏。")
-            : QStringLiteral("。该平台尚未内置歌单同步接口，登录后只用于播放鉴权。");
-    return text;
+        return QStringLiteral("汽水的出码与会话换取都在账号 API 服务侧完成（设备签名 + 风控），"
+                              "客户端按 /auth 契约轮询。") + apiHint;
+    return QStringLiteral("该平台未配置二维码登录接口，请在「设置」里配置实现了扫码端点的账号 API 服务。");
 }
 
 Endpoint UserApi::endpoint(const QString &sourceId, const QString &name) const
@@ -332,7 +339,7 @@ QVariantMap UserApi::vars(const QString &sourceId, const QString &cookie) const
         const QString kwToken = cookieValue(cookie, {QStringLiteral("kw_token")});
         if (!kwToken.isEmpty())
             v.insert(QStringLiteral("csrf"), kwToken.section(QLatin1Char('_'), -1));
-        const QString uid = cookieValue(cookie, {QStringLiteral("uid")});
+        const QString uid = cookieValue(cookie, {QStringLiteral("userid"), QStringLiteral("uid")});
         if (!uid.isEmpty()) v.insert(QStringLiteral("uid"), uid);
     }
     return v;
@@ -414,7 +421,7 @@ void UserApi::callHttp(const UserApiConfig &cfg, const Endpoint &ep,
                        const QVariantMap &v, const HttpClient::Callback &cb)
 {
     if (cfg.base.trimmed().isEmpty()) {
-        cb(failure(QStringLiteral("账号 API 服务地址为空")));
+        if (cb) cb(failure(QStringLiteral("账号 API 服务地址为空")));
         return;
     }
     const QString path = Json::render(ep.path, v);
@@ -519,7 +526,7 @@ UserProfile UserApi::parseProfile(const QString &sourceId, const QString &name,
     p.avatar = Json::firstString(obj, {ep.fields.value(QStringLiteral("avatar")).toString(),
                                        QStringLiteral("avatar"), QStringLiteral("avatarUrl")});
     p.ok = !p.uid.isEmpty() || !p.nickname.isEmpty();
-    if (!p.ok) p.message = QStringLiteral("登录态无效或 Cookie 已过期，请重新从浏览器复制完整 Cookie");
+    if (!p.ok) p.message = QStringLiteral("登录态已失效，请重新扫码或登录");
     return p;
 }
 
@@ -560,7 +567,7 @@ void UserApi::verify(const QString &sourceId, const QString &cookie,
 {
     if (cookie.trimmed().isEmpty()) {
         UserProfile p;
-        p.message = QStringLiteral("Cookie 不能为空");
+        p.message = QStringLiteral("登录态为空，请先登录该平台");
         if (cb) cb(p);
         return;
     }
@@ -570,8 +577,8 @@ void UserApi::verify(const QString &sourceId, const QString &cookie,
     if (!available(sourceId)) {
         UserProfile p;
         p.noAccountApi = true;
-        p.message = QStringLiteral("Cookie 已保存：该平台未内置账号接口，"
-                                   "登录态只用于播放鉴权，应用内未做在线验证");
+        p.message = QStringLiteral("登录态已保存：该平台未内置账号接口，"
+                                   "只用于播放鉴权，应用内未做在线验证");
         if (cb) cb(p);
         return;
     }
@@ -593,7 +600,7 @@ void UserApi::verify(const QString &sourceId, const QString &cookie,
                                                  : QStringLiteral("登录态有效：歌单 %1 个")
                                                        .arg(lists.size());
                 else
-                    p.message = error.isEmpty() ? QStringLiteral("登录态无效，请重新从浏览器复制完整 Cookie")
+                    p.message = error.isEmpty() ? QStringLiteral("登录态已失效，请重新扫码或登录")
                                                 : error;
                 if (cb) cb(p);
             });

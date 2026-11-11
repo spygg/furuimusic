@@ -13,7 +13,7 @@
 
 | 标记 | 含义 |
 |---|---|
-| `【仓】` | 本仓库代码或 `config/sources.json` 中已存在；仓库注释明确写过“实测”的，文中会单独注明 |
+| `【仓】` | 本仓库代码或 `src/config/sources.json` 中已存在；仓库注释明确写过“实测”的，文中会单独注明 |
 | `【洛】` | 洛雪音乐 `reference/lx-music-desktop-git` 源码中存在该实现，本次只做了代码核对，**未复测** |
 | `【未验证】` | 常见公开做法或社区资料，但本次既未在仓库、也未在洛雪代码中找到确证；不可直接当作稳定契约 |
 | `【实测·仓注】` | 仓库代码注释中记录了当时的线上实测结果，本次未复测 |
@@ -46,7 +46,7 @@
 | [AuthManager.cpp](file:///G:/free_music_hunyuan/src/core/AuthManager.cpp#L118-L230) | 登录编排 | 内置二维码登录覆盖网易云/QQ/酷狗；其它平台走账号 API；成功判据按平台区分 |
 | [UserApi.cpp](file:///G:/free_music_hunyuan/src/core/UserApi.cpp#L271-L343) | 登录后用户数据 | 三种驱动：`netease`（linuxapi 转发）、`direct`（复用 MusicSource）、`http`（自建账号 API） |
 | [CustomSource.cpp](file:///G:/free_music_hunyuan/src/core/CustomSource.cpp) | 自定义 HTTP 音源 | HTTP 契约 + 本地目录匹配 + 换源兜底；**没有 JS 脚本插件运行时** |
-| [sources.json](file:///G:/free_music_hunyuan/config/sources.json) | 六个源配置 | 网易云、QQ、酷狗、酷我、咪咕、汽水；部分端点是“示例模板”，酷狗歌单详情注释称“已实测通过” |
+| [sources.json](file:///G:/free_music_hunyuan/src/config/sources.json) | 六个源配置 | 网易云、QQ、酷狗、酷我、咪咕、汽水；部分端点是“示例模板”，酷狗歌单详情注释称“已实测通过” |
 
 ### 2.2 现有实现能回答“登录后能不能拿歌单”
 
@@ -549,7 +549,7 @@ QVector<SourceRef> variants; // {source, songId, qualityHint}
 - [Library.cpp](file:///G:/free_music_hunyuan/src/core/Library.cpp)
 - [CustomSource.cpp](file:///G:/free_music_hunyuan/src/core/CustomSource.cpp)
 - [NeteaseCrypto.h](file:///G:/free_music_hunyuan/src/core/NeteaseCrypto.h) / [QqProtocol.h](file:///G:/free_music_hunyuan/src/core/QqProtocol.h) / [KugouProtocol.h](file:///G:/free_music_hunyuan/src/core/KugouProtocol.h)
-- [config/sources.json](file:///G:/free_music_hunyuan/config/sources.json)
+- [src/config/sources.json](file:///G:/free_music_hunyuan/src/config/sources.json)
 
 **洛雪音乐（参考实现）**
 

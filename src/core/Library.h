@@ -1,6 +1,7 @@
 #pragma once
 // 福瑞音乐 - 本地资料库（SQLite）：歌单、收藏、历史、账号、自定义音源
 #include <QObject>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QVariantList>
@@ -64,8 +65,12 @@ private:
     explicit Library(QObject *parent = nullptr);
     void exec(const QString &sql);
     void insertSong(const Song &s);
+    void reloadFavoriteCache();
     static Song songFromQuery(const QSqlQuery &q);
     QSqlDatabase m_db;
+    // 收藏 uid 常驻内存：SongListModel 每行渲染都会问一次 isFavorite，
+    // 原来每次都是一条 SQLite 查询，列表滚动时是明显的性能热点。
+    QSet<QString> m_favoriteUids;
     bool m_ready = false;
 };
 

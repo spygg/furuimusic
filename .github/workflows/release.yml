@@ -1,5 +1,8 @@
 name: Build & Release
 
+# 推 v* 标签即构建三个桌面产物 + Android APK，并由独立的 release job 汇总发布
+# GitHub Release。workflow_dispatch（手动）只产出 workflow artifacts，方便先验证
+# 流水线再打 tag；各构建 job 不再各自上传 Release，避免并发写同一个 release。
 on:
   push:
     tags:
@@ -46,7 +49,7 @@ jobs:
             modules: ''
             artifact: FuruiMusic-linux-x86_64.AppImage
           # Qt 5.15.2 的旧 macdeployqt 在新 Xcode 下解析 otool 失败，故 macOS 用 Qt 6.8.3；
-          # CMake 在 Qt 6 下自动切到 C++17（见 CMakeLists.txt）
+          # CMake 在 Qt 6 下自动切到 C++17（见 src/CMakeLists.txt）
           - name: macOS (x86_64)
             key: macos-x86_64
             os: macos-15-intel
@@ -92,7 +95,7 @@ jobs:
             # runner 默认是 MSVC 生成器，这里必须显式指定 MinGW 的 gcc/g++
             EXTRA="-G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++"
           fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+          cmake -S src -B build -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
             $EXTRA 2>&1 | tee configure.log
 
@@ -115,9 +118,9 @@ jobs:
           windeployqt --no-translations --qmldir src\ui\qml dist\FuruiMusic.exe
           # Qt 5.15.2 不自带 OpenSSL 1.1，缺了它所有 HTTPS 请求都会报
           # "TLS initialization failed"；仓库内置的 1.1.1k 运行库直接放到 exe 旁
-          Copy-Item packaging\windows\openssl\libssl-1_1-x64.dll dist\
-          Copy-Item packaging\windows\openssl\libcrypto-1_1-x64.dll dist\
-          Copy-Item packaging\windows\openssl\LICENSE-OpenSSL-1.1.txt dist\OPENSSL-LICENSE.txt
+          Copy-Item src\packaging\windows\openssl\libssl-1_1-x64.dll dist\
+          Copy-Item src\packaging\windows\openssl\libcrypto-1_1-x64.dll dist\
+          Copy-Item src\packaging\windows\openssl\LICENSE-OpenSSL-1.1.txt dist\OPENSSL-LICENSE.txt
           Compress-Archive -Path dist\* -DestinationPath ${{ matrix.config.artifact }} -Force
           Get-Item ${{ matrix.config.artifact }} | Select-Object Name,Length
 
@@ -145,8 +148,8 @@ jobs:
           done
           # linuxdeploy 会在当前目录优先找 *-plugin-*.AppImage 并直接执行它；
           # runner 无 FUSE 会失败，所以把 AppImage 文件移走，只用解包后的 AppRun
-          mkdir -p tools
-          mv *.AppImage tools/
+          mkdir -p .deploy_tools
+          mv *.AppImage .deploy_tools/
           # linuxdeploy 通过 PATH 查找插件与 appimagetool；AppRun 依赖自身目录，
           # 所以复制成同名可执行文件并把这些目录加进 PATH
           cp linuxdeploy-plugin-qt-x86_64.dir/AppRun linuxdeploy-plugin-qt-x86_64.dir/linuxdeploy-plugin-qt
@@ -199,13 +202,144 @@ jobs:
           path: ${{ matrix.config.artifact }}
           if-no-files-found: error
 
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+  # ==========================================================================
+  # Android（arm64-v8a，Qt 6 + CMake/NDK）
+  # 桌面三条腿建立在 Qt 5.15 上，Android 端要求 Qt 6（qt_add_executable +
+  # qt_finalize_executable + androiddeployqt 的 Gradle 模板），所以不并进 build 矩阵。
+  # 结构参考 .github参考/workflows/release.yml 的多平台发布；本工程没有 FFmpeg，
+  # 直接用仓库内的 src/scripts/build_android.sh 完成 CMake 配置与 make_apk。
+  # Qt 6 的 CMake 流程不签名（只交 android-build-release-unsigned.apk），
+  # 这里用 CI 现场生成的 debug keystore 做 zipalign + apksigner，并 verify 复检。
+  # 注意：Android job 尚未实机跑通，请先手动 workflow_dispatch 验证再打 tag。
+  # ==========================================================================
+  build-android:
+    name: Android arm64-v8a
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      # Qt 6.8.3 与 macOS job 同版，install-qt-action 可直接安装；本机脚本默认
+      # 6.11.1 + NDK 27，CI 通过环境变量覆盖成这一套已发布的兼容组合。
+      QT_VERSION: '6.8.3'
+      ANDROID_BUILD_TOOLS: '35.0.0'
+      ANDROID_PLATFORM: 'android-35'
+      ANDROID_NDK_VER: '26.1.10909125'
+      ARTIFACT_NAME: FuruiMusic-android-arm64-v8a.apk
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: JDK 17 (Gradle)
+        uses: actions/setup-java@v4
         with:
-          # 三个矩阵 job 并发触发时，若都自动生成说明，Release 正文会出现重复段落；
-          # 只让 Windows job 生成一次，其余 job 只上传资产、保留已有正文
-          generate_release_notes: ${{ matrix.config.key == 'windows-x64' }}
-          files: ${{ matrix.config.artifact }}
+          distribution: temurin
+          java-version: '17'
+
+      # 两个 kit 缺一不可：android_arm64_v8a 是被编译的目标 kit，gcc_64 是
+      # QT_HOST_PATH（moc/rcc/androiddeployqt 都是主机可执行文件）。
+      - name: Install Qt 6 Android kit
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: linux
+          target: android
+          arch: android_arm64_v8a
+          modules: 'qtmultimedia'
+          dir: ${{ runner.temp }}/Qt
+          cache: false
+      - name: Install Qt 6 host kit (QT_HOST_PATH)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: linux
+          target: desktop
+          arch: gcc_64
+          dir: ${{ runner.temp }}/Qt
+          cache: false
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install SDK / NDK / build-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install "platform-tools" "platforms;android-35" \
+            "build-tools;35.0.0" "ndk;26.1.10909125"
+          test -f "$ANDROID_HOME/ndk/26.1.10909125/build/cmake/android.toolchain.cmake"
+          test -f "$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          export QT_ANDROID="${{ runner.temp }}/Qt/$QT_VERSION/android_arm64_v8a"
+          export QT_HOST="${{ runner.temp }}/Qt/$QT_VERSION/gcc_64"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/$ANDROID_NDK_VER"
+          test -f "$QT_ANDROID/bin/qt-cmake" || { echo "::error::Qt Android kit 未就位"; exit 1; }
+          bash src/scripts/build_android.sh
+
+      - name: Sign APK (zipalign + apksigner)
+        shell: bash
+        run: |
+          set -euo pipefail
+          unsigned="$(find build/android_qt6/android-build -name '*release*unsigned*.apk' -print -quit)"
+          if [ -z "$unsigned" ]; then
+            echo "::error::没找到 Qt 产出的未签名 release APK"
+            find build/android_qt6 -name '*.apk' -print
+            exit 1
+          fi
+          echo "未签名 APK: $unsigned"
+          BT="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
+          KS="$RUNNER_TEMP/furui-debug.keystore"
+          # 公开 debug 身份，只用于让 APK 可安装，不是商店签名；不往仓库放二进制 keystore
+          keytool -genkeypair -v -keystore "$KS" -alias furui -keyalg RSA \
+            -keysize 2048 -validity 10000 -storepass android -keypass android \
+            -dname "CN=FuruiMusic Debug, OU=CI, O=Furui, C=CN" >/dev/null
+          "$BT/zipalign" -f -p 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --key-pass pass:android \
+            --out "$ARTIFACT_NAME" "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" verify --print-certs "$ARTIFACT_NAME"
+          test -s "$ARTIFACT_NAME"
+          ls -la "$ARTIFACT_NAME"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-v8a
+          path: ${{ env.ARTIFACT_NAME }}
+          if-no-files-found: error
+
+  # 汇总发布：各 job 并发往同一个 release 传文件会互相覆盖，所以只交 artifacts，
+  # 由这一个 job 一次性上传（参考 .github参考/workflows/release.yml 的 release 结构）。
+  release:
+    name: Publish release
+    needs: [build, build-android]
+    # always() + !cancelled() 让矩阵跑完再判定；Android 是发布门槛——
+    # 否则 release 页面会出现「有桌面包却没有安装包」的半成品。
+    if: >-
+      always() && !cancelled() &&
+      startsWith(github.ref, 'refs/tags/') &&
+      needs.build.result == 'success' &&
+      needs['build-android'].result == 'success'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: List
+        run: find release-assets -type f -printf '%p %s bytes\n'
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/*/*.zip
+            release-assets/*/*.AppImage
+            release-assets/*/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

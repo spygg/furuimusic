@@ -1,8 +1,10 @@
 #include "NeteaseCrypto.h"
+#include "Aes128.h"
 
 #include <cstdio>
 #include <QJsonDocument>
 #include <QRandomGenerator>
+#include <QCryptographicHash>
 
 #include <algorithm>
 #include <cstdint>
@@ -425,6 +427,23 @@ QByteArray weapiForm(const QJsonObject &payload)
     for (int i = 0;i < 16;++i)
         secretKey.append(char(charset.at(QRandomGenerator::global()->bounded(charset.size())).toLatin1()));
     return weapiBuild(payload, secretKey);
+}
+
+QByteArray eapiForm(const QString &apiPath, const QJsonObject &payload)
+{
+    // 与 NeteaseCloudMusicApi util/crypto.js 的 eapi 分支逐字节一致：
+    //   message = nobody + apiPath + use + json + md5forencrypt
+    //   params  = AES-128-ECB(apiPath + "-36cd479b6b5-" + json + "-36cd479b6b5-" + md5(message), "e82ckenh8dichen8")
+    const QByteArray json = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+    const QString message = QStringLiteral("nobody") + apiPath + QStringLiteral("use")
+                            + QString::fromUtf8(json) + QStringLiteral("md5forencrypt");
+    const QByteArray digest = QCryptographicHash::hash(message.toUtf8(), QCryptographicHash::Md5)
+                                  .toHex();
+    const QByteArray data = apiPath.toUtf8() + QByteArrayLiteral("-36cd479b6b5-") + json
+                            + QByteArrayLiteral("-36cd479b6b5-") + digest;
+    static const QByteArray eapiKey = QByteArrayLiteral("e82ckenh8dichen8");
+    // 必须是真正的 ECB（多块之间不链），不能用零 IV 的 CBC 冒充
+    return QByteArrayLiteral("params=") + Aes128::encryptEcbHexUpper(data, eapiKey);
 }
 
 bool selfTest()

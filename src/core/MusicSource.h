@@ -36,8 +36,14 @@ public:
     void searchPlaylist(const QString &keyword, int limit, int offset, PlaylistsCallback cb);
     void rank(int limit, int offset, PlaylistsCallback cb);
     void playlistDetail(const QString &id, int limit, int offset, SongsCallback cb);
+    // 榜单详情：配置了 rankDetail 端点的平台走专属接口（如 QQ musicu GetDetail、
+    // 酷狗 v3/rank/song），未配置的平台回退 playlistDetail（榜单 id 兼容歌单 id）。
+    void rankDetail(const QString &id, int limit, int offset, SongsCallback cb);
     void resolveUrl(const Song &song, const QString &quality, PlayableCallback cb);
     void lyric(const Song &song, StringCallback cb);
+    // 搜索接口不返回封面时（网易云新版只给 album.picId），用配置里的
+    // cover 端点按歌曲 id 单独补一张，避免播放页/播放栏一直是占位图。
+    void cover(const Song &song, StringCallback cb);
 
     void userPlaylists(PlaylistsCallback cb);
     void userFavorites(SongsCallback cb);

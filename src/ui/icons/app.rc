@@ -1,0 +1,3 @@
+// Windows 可执行文件图标资源（qmake/MinGW 用，windres 解析相对本文件的 app.ico）
+// CMake 走 app.rc.in -> configure_file 注入绝对路径，不走这一份
+IDI_ICON1 ICON "app.ico"

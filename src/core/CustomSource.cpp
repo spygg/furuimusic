@@ -10,6 +10,7 @@
 #include "HttpClient.h"
 #include "JsonMapper.h"
 #include "Library.h"
+#include "GdMusicSource.h"
 #include "ScriptSource.h"
 #include "Settings.h"
 
@@ -18,14 +19,26 @@ namespace Furui {
 static void tryScriptSources(const Song &song, const QString &quality,
                              CustomSourceManager::PlayableCallback cb)
 {
-    ScriptSourceManager::instance()->resolve(song, quality, [cb](const Playable &p) {
-        if (p.ok) {
-            if (cb) cb(p);
+    // 默认音源：GD音乐台（内置）先行；关闭或没解析到再交给用户导入的 LX 在线脚本音源
+    GdMusicSource::resolve(song, quality, [song, quality, cb](const Playable &gd) {
+        if (gd.ok) {
+            if (cb) cb(gd);
             return;
         }
-        Playable fail;
-        fail.message = QStringLiteral("自定义音源未找到可用的替代音频");
-        if (cb) cb(fail);
+        ScriptSourceManager::instance()->resolve(song, quality, [cb](const Playable &p) {
+            if (p.ok) {
+                if (cb) cb(p);
+                return;
+            }
+            Playable fail;
+            // 之前把脚本侧的具体原因吞掉了，界面只会显示「未找到替代音频」，
+            // 用户分不清是没导入音源、音源初始化失败还是服务端 404。这里原样透传。
+            fail.reason = p.reason;
+            fail.message = p.message.isEmpty()
+                ? QStringLiteral("自定义音源未找到可用的替代音频")
+                : QStringLiteral("自定义音源未找到可用的替代音频（%1）").arg(p.message);
+            if (cb) cb(fail);
+        });
     });
 }
 
@@ -195,8 +208,8 @@ void CustomSourceManager::scanLocal()
     int count = 0;
     while (it.hasNext() && count < 8000) {
         const QString path = it.next();
-        const QFileInfo fi(path);
-        m_localFiles.append({path, fi.completeBaseName()});
+        const QString base = QFileInfo(path).completeBaseName();
+        m_localFiles.append({path, base, normalize(base)});
         ++count;
     }
 }
@@ -205,12 +218,14 @@ Playable CustomSourceManager::matchLocal(const Song &song) const
 {
     Playable p;
     if (m_localFiles.isEmpty()) return p;
+    const QString ntTitle = normalize(song.title);
+    const QString ntTarget = normalize(song.title + QLatin1Char(' ') + song.artist);
     qreal best = 0.0;
     QString bestPath;
-    const QString target = song.title + QLatin1Char(' ') + song.artist;
     for (const LocalFile &f : m_localFiles) {
-        const qreal s1 = similarity(f.name, song.title);
-        const qreal s2 = similarity(f.name, target);
+        // 归一化结果已缓存，只对长度接近的候选做编辑距离；长度差过大的必然低于 0.55
+        const qreal s1 = similarityNormalized(f.norm, ntTitle);
+        const qreal s2 = similarityNormalized(f.norm, ntTarget);
         const qreal s = qMax(s1, s2);
         if (s > best) { best = s; bestPath = f.path; }
     }
@@ -286,12 +301,20 @@ void CustomSourceManager::search(const QString &keyword, int limit, SongsCallbac
 
 void CustomSourceManager::lyric(const Song &song, StringCallback cb)
 {
-    // 来自在线脚本的歌曲：直接交给脚本的 lyric 能力（没有就返回空）
+    // 来自在线脚本的歌曲：直接交给脚本的 lyric 能力
     if (song.extra.contains(QStringLiteral("scriptId"))) {
         ScriptSourceManager::instance()->lyric(song, cb);
         return;
     }
-    for (const Item &item : m_items) {
+    lyricAt(0, song, cb);
+}
+
+void CustomSourceManager::lyricAt(int index, const Song &song, StringCallback cb)
+{
+    // 逐个尝试 HTTP 自定义源；某个源返回空歌词时不能就此收工，
+    // 后面还有其它 HTTP 源与所有声明了 lyric 能力的在线脚本。
+    while (index < m_items.size()) {
+        const Item item = m_items.at(index++);
         if (!item.enabled || item.type != QLatin1String("http")) continue;
         QUrl url(item.value + QStringLiteral("/lyric"));
         QUrlQuery q;
@@ -300,12 +323,12 @@ void CustomSourceManager::lyric(const Song &song, StringCallback cb)
             q.addQueryItem(it.key(), it.value().toString());
         url.setQuery(q);
         HttpClient::instance()->request(QStringLiteral("GET"), url, QVariantMap(), QByteArray(),
-            [cb](const HttpClient::Reply &r) {
+            [this, index, song, cb](const HttpClient::Reply &r) {
                 QString text;
                 if (r.ok) text = Json::firstString(Json::rootOf(r.json),
                     {QStringLiteral("lyric"), QStringLiteral("data.lyric"), QStringLiteral("lrc")});
-                // 拿不到歌词也必须回调，否则界面永远停在「加载中」
-                if (cb) cb(text);
+                if (!text.trimmed().isEmpty()) { if (cb) cb(text); return; }
+                lyricAt(index, song, cb);
             });
         return;
     }

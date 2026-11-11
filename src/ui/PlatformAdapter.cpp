@@ -3,6 +3,7 @@
 #include "../core/Settings.h"
 
 #include <QQuickWindow>
+#include <QScreen>
 
 namespace Furui {
 
@@ -112,6 +113,58 @@ void PlatformAdapter::closeWindow(QQuickWindow *window)
     if (!window)
         return;
     window->close();
+}
+
+void PlatformAdapter::refreshInsets(QQuickWindow *window)
+{
+    qreal l = 0, t = 0, r = 0, b = 0;
+    // QWindow::geometry() 和 QScreen 的几何都是设备无关像素，直接同单位相减。
+    // 早先在这里把窗口乘了 dpr（以为 QScreen 是物理像素），dpr=2 的手机上右/下安全区
+    // 被算成屏幕的一半，Loader 内缩后整个界面只剩左上 1/4。
+    if (window && window->screen()) {
+        // 只在「窗口铺屏」时计算：桌面浮窗被拖到任务栏上时也确实压到了可用区外，
+        // 但那种情况该让用户移动窗口，而不是界面凭空缩进去一条
+        const bool fillsScreen = isMobile() || window->visibility() == QWindow::Maximized
+                                 || window->visibility() == QWindow::FullScreen;
+        if (fillsScreen) {
+            const QRect avail = window->screen()->availableGeometry();
+            const QRect win(window->x(), window->y(), window->width(), window->height());
+            // 只补「窗口确实压到系统栏上」的那部分：Qt 在多数平台上已经把窗口放在可用区内，
+            // 此时四项都是 0，不会二次留白；车机/手机全屏时才会真的算出边距
+            l = qMax(0.0, static_cast<qreal>(avail.left() - win.left()));
+            t = qMax(0.0, static_cast<qreal>(avail.top() - win.top()));
+            r = qMax(0.0, static_cast<qreal>(win.right() - avail.right()));
+            b = qMax(0.0, static_cast<qreal>(win.bottom() - avail.bottom()));
+        }
+    }
+
+    if (qFuzzyCompare(l, m_insetLeft) && qFuzzyCompare(t, m_insetTop)
+        && qFuzzyCompare(r, m_insetRight) && qFuzzyCompare(b, m_insetBottom))
+        return;
+    m_insetLeft = l;
+    m_insetTop = t;
+    m_insetRight = r;
+    m_insetBottom = b;
+    emit insetsChanged();
+}
+
+bool PlatformAdapter::touchPrimary() const
+{
+    if (isMobile())
+        return true;
+    // 桌面无法可靠探测「这台机器其实是触摸屏」，交给设置项：车机 Windows 主机打开后
+    //  hover-only 的入口会常驻显示，触控目标也按 theme.touchMin 放大
+    return Settings::boolean(QStringLiteral("touchMode"), false);
+}
+
+void PlatformAdapter::setTouchPrimary(bool on)
+{
+    if (isMobile())
+        return;
+    if (Settings::boolean(QStringLiteral("touchMode"), false) == on)
+        return;
+    Settings::set(QStringLiteral("touchMode"), on);
+    emit touchPrimaryChanged();
 }
 
 } // namespace Furui

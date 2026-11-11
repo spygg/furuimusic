@@ -30,6 +30,7 @@ public:
     void playlistDetail(const Playlist &playlist, SongsCallback cb);
     void resolve(const Song &song, const QString &quality, PlayableCallback cb);
     void lyric(const Song &song, StringCallback cb);
+    void cover(const Song &song, StringCallback cb);
 
 private:
     explicit SourceManager(QObject *parent = nullptr);

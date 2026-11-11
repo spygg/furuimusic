@@ -121,14 +121,36 @@ inline QString render(const QString &tpl, const QVariantMap &vars)
     return out;
 }
 
+// 整串形如 {var:int} 的模板渲染成真正的 JSON 数字：
+// QQ 的 musicu 接口对 topid/num 类型敏感，收到字符串会返回 toplist.code=10006（0 首）。
+inline QVariant renderNumeric(const QString &tpl, const QVariantMap &vars, bool *matched)
+{
+    static const QRegularExpression numTpl(
+        QStringLiteral("^\\{([A-Za-z_][A-Za-z0-9_]*):int\\}$"));
+    const QRegularExpressionMatch m = numTpl.match(tpl);
+    if (!m.hasMatch()) { if (matched) *matched = false; return QVariant(); }
+    if (matched) *matched = true;
+    bool ok = false;
+    const int n = vars.value(m.captured(1)).toString().toInt(&ok);
+    return ok ? QVariant(n) : QVariant(0);
+}
+
 inline QVariant renderVariant(const QVariant &in, const QVariantMap &vars)
 {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     const int typeId = in.typeId();
-    if (typeId == QMetaType::QString) return render(in.toString(), vars);
+    if (typeId == QMetaType::QString) {
+        bool numeric = false;
+        const QVariant n = renderNumeric(in.toString(), vars, &numeric);
+        return numeric ? n : QVariant(render(in.toString(), vars));
+    }
     if (typeId == QMetaType::QVariantMap) {
 #else
-    if (in.type() == QVariant::String) return render(in.toString(), vars);
+    if (in.type() == QVariant::String) {
+        bool numeric = false;
+        const QVariant n = renderNumeric(in.toString(), vars, &numeric);
+        return numeric ? n : QVariant(render(in.toString(), vars));
+    }
     if (in.type() == QVariant::Map) {
 #endif
         QVariantMap out;
@@ -199,6 +221,15 @@ inline Song mapSong(const QJsonValue &v, const QVariantMap &fields, const QStrin
     s.album    = stringAt(v, fields.value(QStringLiteral("album")).toString());
     s.cover    = fillImageSize(stringAt(v, fields.value(QStringLiteral("cover")).toString()));
     s.albumId  = stringAt(v, fields.value(QStringLiteral("albumId")).toString());
+    // 有些平台（QQ 搜索/榜单）响应里根本不给封面字段，只给专辑 mid，
+    // 不给 coverTemplate 时网格里全是占位图。模板里的 {albumId} 用官方 CDN 实测可取到图。
+    const QString coverTpl = fields.value(QStringLiteral("coverTemplate")).toString();
+    if (s.cover.isEmpty() && !coverTpl.isEmpty() && !s.albumId.isEmpty()) {
+        QString url = coverTpl;
+        url.replace(QLatin1String("{albumId}"), s.albumId);
+        url.replace(QLatin1String("{songId}"), s.sourceId);
+        s.cover = fillImageSize(url);
+    }
     const QString durPath = fields.value(QStringLiteral("duration")).toString();
     const double scale = fields.value(QStringLiteral("durationScale"), 1).toDouble();
     const double dur = stringAt(v, durPath).toDouble();

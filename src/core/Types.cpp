@@ -38,9 +38,13 @@ Quality qualityFromKey(const QString &key)
 
 QString normalize(const QString &s)
 {
+    // 正则只在首次调用时编译：本地匹配会拿几千个文件名反复调 normalize，
+    // 每次现构造 QRegularExpression 会编译一遍模式，是明显的热点。
+    static const QRegularExpression brackets(
+        QStringLiteral("\\([^)]*\\)|［[^］]*］|\\[[^\\]]*\\]|（[^）]*）"));
     QString t = s.toLower();
     // 去掉常见括号补充信息（feat. / live / remix / 伴奏 等）与所有非字母数字/CJK
-    t.remove(QRegularExpression(QStringLiteral("\\([^)]*\\)|［[^］]*］|\\[[^\\]]*\\]|（[^）]*）")));
+    t.remove(brackets);
     QString out;
     out.reserve(t.size());
     for (const QChar &c : t) {
@@ -51,12 +55,17 @@ QString normalize(const QString &s)
 
 qreal similarity(const QString &a, const QString &b)
 {
-    const QString x = normalize(a);
-    const QString y = normalize(b);
+    return similarityNormalized(normalize(a), normalize(b));
+}
+
+qreal similarityNormalized(const QString &x, const QString &y)
+{
     if (x.isEmpty() && y.isEmpty()) return 1.0;
     if (x.isEmpty() || y.isEmpty()) return 0.0;
     if (x == y) return 1.0;
     const int n = x.size(), m = y.size();
+    // 编辑距离下界剪枝：长度差已经超过可接受阈值时，怎么算都到不了 0.55
+    if (qAbs(n - m) * 100 > qMax(n, m) * 45) return 0.0;
     QVector<int> prev(m + 1), cur(m + 1);
     for (int j = 0; j <= m; ++j) prev[j] = j;
     for (int i = 1; i <= n; ++i) {

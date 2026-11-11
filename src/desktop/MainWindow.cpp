@@ -1288,8 +1288,9 @@ void MainWindow::connectSignals()
     connect(app, &Furui::AppController::searchStarted, this, [this]() {
         showMessage(QStringLiteral("搜索中…"));
     });
-    connect(app, &Furui::AppController::searchFinished, this, [this](int count) {
-        if (app->searchType() == QLatin1String("songlist")) {
+    connect(app, &Furui::AppController::searchFinished, this, [this](int count, const QString &kind) {
+        if (count < 0) return;   // 搜索被新操作作废：只收起提示，不刷新列表
+        if (kind == QLatin1String("playlist")) {
             refreshPlaylistTables();
             m_nav->setCurrentRow(2);
             showMessage(QStringLiteral("歌单搜索完成，共 %1 个歌单").arg(count));

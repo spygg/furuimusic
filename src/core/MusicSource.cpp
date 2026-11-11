@@ -236,6 +236,19 @@ void MusicSource::playlistDetail(const QString &id, int limit, int offset, Songs
     requestSongs(ep, v, cb);
 }
 
+void MusicSource::rankDetail(const QString &id, int limit, int offset, SongsCallback cb)
+{
+    const Endpoint ep = m_desc.endpoints.value(QStringLiteral("rankDetail"));
+    if (ep.path.isEmpty())
+        return playlistDetail(id, limit, offset, cb);
+    QVariantMap v = baseVars();
+    v.insert(QStringLiteral("id"), id);
+    v.insert(QStringLiteral("limit"), QString::number(limit));
+    v.insert(QStringLiteral("offset"), QString::number(offset));
+    v.insert(QStringLiteral("page"), QString::number(offset / qMax(1, limit) + 1));
+    requestSongs(ep, v, cb);
+}
+
 bool MusicSource::isVipResponse(const QVariantMap &rule, const QJsonValue &root,
                                 const QByteArray &body, const QString &resolvedUrl)
 {
@@ -315,6 +328,22 @@ void MusicSource::lyric(const Song &song, StringCallback cb)
         if (r.ok) out = Json::firstString(Json::rootOf(r.json), ep.resultPaths);
         if (out.isEmpty() && !r.body.isEmpty() && r.json.isEmpty())
             out = QString::fromUtf8(r.body);
+        if (cb) cb(out);
+    });
+}
+
+void MusicSource::cover(const Song &song, StringCallback cb)
+{
+    const Endpoint ep = m_desc.endpoints.value(QStringLiteral("cover"));
+    if (!ep.valid() || song.sourceId.isEmpty()) {
+        if (cb) cb(QString());
+        return;
+    }
+    call(ep, songVars(song, QStringLiteral("standard")), [ep, cb](const HttpClient::Reply &r) {
+        QString out;
+        if (r.ok) out = Json::firstString(Json::rootOf(r.json), ep.resultPaths).trimmed();
+        // 接口偶尔会返回空串或错误页文本，别把它当图片地址塞给 QML Image
+        if (!out.startsWith(QLatin1String("http"), Qt::CaseInsensitive)) out.clear();
         if (cb) cb(out);
     });
 }

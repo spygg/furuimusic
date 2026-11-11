@@ -138,31 +138,6 @@ QWidget *LoginDialog::createTab(const QString &sourceId, const QStringList &meth
         });
     }
 
-    if (methods.contains(QStringLiteral("cookie"))) {
-        QGroupBox *box = new QGroupBox(w);
-        box->setTitle(QString());
-        box->setObjectName(QStringLiteral("card"));
-        QVBoxLayout *bl = new QVBoxLayout(box);
-        const bool canSync = app && app->userApiAvailable(sourceId);
-        QLabel *tip = new QLabel(app ? app->cookieLoginHint(sourceId) : QString(), box);
-        tip->setWordWrap(true);
-        bl->addWidget(tip);
-        QPlainTextEdit *edit = new QPlainTextEdit(box);
-        edit->setPlaceholderText(QStringLiteral("粘贴该平台的 Cookie"));
-        edit->setFixedHeight(70);
-        bl->addWidget(edit);
-        // 按钮不能承诺它做不到的事：没有账号接口的平台只验证 Cookie
-        QPushButton *login = new QPushButton(canSync ? QStringLiteral("验证 Cookie 并同步歌单")
-                                                    : QStringLiteral("验证 Cookie 并保存登录态"), box);
-        bl->addWidget(login);
-        pages.append(qMakePair(QStringLiteral("Cookie 登录"), static_cast<QWidget *>(box)));
-
-        connect(login, &QPushButton::clicked, this, [this, sourceId, edit]() {
-            if (!app || !edit) return;
-            app->loginByCookie(sourceId, edit->toPlainText().trimmed());
-        });
-    }
-
     if (methods.contains(QStringLiteral("password"))) {
         QGroupBox *box = new QGroupBox(w);
         box->setTitle(QString());
