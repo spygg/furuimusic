@@ -13,6 +13,9 @@ class PlatformAdapter : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool isMobile READ isMobile CONSTANT)
     Q_PROPERTY(bool isDesktop READ isDesktop CONSTANT)
+    // 平板/手机区分：仅移动平台有意义，桌面恒为 false。用来决定手机横屏是否允许
+    // 切到桌面壳——手机（非平板）一律强制移动壳，平板按窗口宽度判定。
+    Q_PROPERTY(bool isTablet READ isTablet)
     Q_PROPERTY(QString platformName READ platformName CONSTANT)
     Q_PROPERTY(QString dataDir READ dataDir CONSTANT)
     Q_PROPERTY(QString downloadsDir READ downloadsDir CONSTANT)
@@ -50,6 +53,8 @@ public:
 
     bool isMobile() const;
     bool isDesktop() const { return !isMobile(); }
+    // 物理对角线 >= 7 英寸判为平板；无法探测尺寸时按手机处理（强制移动壳）
+    bool isTablet() const;
     QString platformName() const;
     QString dataDir() const;
     QString downloadsDir() const;

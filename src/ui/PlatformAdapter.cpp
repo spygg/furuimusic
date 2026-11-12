@@ -3,6 +3,7 @@
 #include "../core/Settings.h"
 #include "core/QtCompat.h"
 
+#include <QGuiApplication>
 #include <QQuickWindow>
 #include <QScreen>
 
@@ -17,6 +18,24 @@ bool PlatformAdapter::isMobile() const
 #else
     return false;
 #endif
+}
+
+bool PlatformAdapter::isTablet() const
+{
+    // 仅移动平台区分平板/手机；桌面一律视为非平板（走窗口宽度判定）。
+    if (!isMobile())
+        return false;
+    // 外接屏/部分机型可能拿不到有效物理尺寸，此时按手机处理——强制移动壳，
+    // 避免手机横屏宽度越过 760 阈值窜到桌面壳，在窄高屏上布局极不合理。
+    QScreen *screen = QGuiApplication::primaryScreen();
+    if (!screen)
+        return false;
+    const QSizeF phys = screen->physicalSize(); // 单位毫米
+    if (phys.width() <= 0 || phys.height() <= 0)
+        return false;
+    // 手机普遍 < 7 英寸，平板 >= 7 英寸（含车机矮宽屏 1920x720 这类 > 7 英寸的仍走桌面壳）。
+    const qreal diagIn = qHypot(phys.width(), phys.height()) / 25.4;
+    return diagIn >= 7.0;
 }
 
 QString PlatformAdapter::platformName() const

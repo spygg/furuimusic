@@ -69,11 +69,14 @@ ApplicationWindow {
 
     function evaluateFormFactor()
     {
-        // 只量窗口，不看平台：车机横屏 1920x720 这类「矮宽屏」应当用桌面壳
-        // 滞后带：已处于移动壳时，只有宽过「离开阈值」才换回桌面壳，避免临界宽度抖动
-        var nextCompact = win.compact
-                ? win.width <= win.compactLeaveWidth
-                : win.width < win.compactEnterWidth
+        // 手机（非平板）横竖屏一律用移动壳：手机横屏宽度常越过 760 阈值，若按宽度
+        // 判定会窜到桌面壳，在窄高屏上布局极不合理。平板（含车机矮宽屏）仍按窗口宽度
+        // 判定（横屏用桌面壳，用户已确认平板横屏体验正常）。
+        var forceMobile = platform.isMobile && !platform.isTablet
+        var nextCompact = forceMobile ? true
+                : (win.compact
+                   ? win.width <= win.compactLeaveWidth
+                   : win.width < win.compactEnterWidth)
         if (nextCompact !== win.compact)
             win.compact = nextCompact
         else
