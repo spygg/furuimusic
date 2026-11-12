@@ -90,10 +90,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgl1-mesa-dev libxkbcommon-x11-0 libxcb-xinerama0 libxcb-cursor0 \
             desktop-file-utils patchelf file
-          # Qt 6.8 新增的 Mimer SQL 驱动（libqsqlmimer.so）依赖 Qt 包里没有的
-          # libmimerapi.so，linuxdeploy-plugin-qt 部署 sqldrivers 时会整包失败；
-          # 本应用不用 SQL，直接删掉该插件
-          rm -f "$QT_ROOT_DIR/plugins/sqldrivers/libqsqlmimer.so"
 
       - name: Configure (CMake)
         shell: bash
@@ -145,6 +141,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Qt 6.8 新增的 Mimer SQL 驱动（libqsqlmimer.so）依赖 Qt 包里没有的
+          # libmimerapi.so，linuxdeploy-plugin-qt 部署 sqldrivers 时会整包失败。
+          # 必须在 configure 之后、linuxdeploy 之前删（configure 需要 CMake 目标文件存在）
+          rm -f "$QT_ROOT_DIR/plugins/sqldrivers/libqsqlmimer.so"
           # probonopd/linuxdeployqt 的 continuous 资产当前从 GitHub CDN 返回 504，
           # 改用 linuxdeploy + linuxdeploy-plugin-qt（versioned 资产可正常下载）
           wget --tries=5 --retry-connrefused --waitretry=5 --timeout=30 \
