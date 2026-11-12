@@ -6,7 +6,7 @@ rem 插件（ffmpegmediaplugin.dll + avcodec-61.dll 等），MV 在应用内解�
 rem Qt 5.15 桌面只有 DirectShow，放不了 MP4：兼容构建会先跑
 rem build_ffmpeg_desktop.bat 自编译 FFmpeg 静态库，链接 C++ 自解码后端
 rem（FfmpegVideoPlayer），这样 Qt5 也能在应用内播 MV，且跨平台。
-rem Qt 5 qmake 输出到独立目录，不覆盖 bin 里的 Qt 6 主产物。
+rem Qt 5 qmake 输出到独立目录，最终分发产物按版本落到 bin_qt6 / bin_qt5，互不覆盖。
 setlocal
 set "ROOT=%~dp0..\.."
 set "SRC=%ROOT%\src"
@@ -18,7 +18,7 @@ set "CMAKE_DIR=E:\programes\Qt\Qt\Tools\CMake_64\bin"
 set "NINJA_DIR=E:\programes\Qt\Qt\Tools\Ninja"
 set "PATH=%QT6_DIR%\bin;%MINGW6_DIR%\bin;%CMAKE_DIR%;%NINJA_DIR%;%PATH%"
 
-if not exist "%ROOT%\bin" mkdir "%ROOT%\bin"
+if not exist "%ROOT%\bin_qt6" mkdir "%ROOT%\bin_qt6"
 
 rem ---------- 主构建：Qt 6 + CMake/Ninja ----------
 echo [cmake] configuring FuruiMusic (Qt 6 / FFmpeg multimedia backend)
@@ -28,14 +28,14 @@ cmake -S "%SRC%" -B "%ROOT%\build\desktop-qt6" -G Ninja ^
     -DCMAKE_C_COMPILER="%MINGW6_DIR%\bin\gcc.exe" ^
     -DCMAKE_CXX_COMPILER="%MINGW6_DIR%\bin\g++.exe" || goto :fail
 cmake --build "%ROOT%\build\desktop-qt6" --target FuruiMusic -j %NUMBER_OF_PROCESSORS% || goto :fail
-copy /y "%ROOT%\build\desktop-qt6\FuruiMusic.exe" "%ROOT%\bin\" >nul || goto :fail
+copy /y "%ROOT%\build\desktop-qt6\FuruiMusic.exe" "%ROOT%\bin_qt6\" >nul || goto :fail
 
 rem windeployqt: --qmldir is REQUIRED. Without it QtQuick/Controls/Layouts/Window QML
 rem plugins are NOT deployed and the app fails to load qrc:/qml/Main.qml.
 rem Qt 6 版本会一并部署 plugins/multimedia/ffmpegmediaplugin.dll 与 avcodec-61.dll
 rem 等 FFmpeg 运行库（MV 解码就靠它们），不再需要手工拷 OpenSSL 1.1。
-windeployqt --no-translations --qmldir "%SRC%\ui\qml" "%ROOT%\bin\FuruiMusic.exe" || goto :fail
-echo [deploy] Qt 6 QML + multimedia (FFmpeg) plugins deployed next to the exe
+windeployqt --no-translations --qmldir "%SRC%\ui\qml" "%ROOT%\bin_qt6\FuruiMusic.exe" || goto :fail
+echo [deploy] Qt 6 QML + multimedia (FFmpeg) plugins deployed into bin_qt6
 
 rem ---------- 可选：Qt 5.15 兼容构建（自编译 FFmpeg 播放后端）----------
 if not "%FURUI_BUILD_QT5%"=="1" goto :skip_qt5
@@ -49,12 +49,17 @@ echo [qmake] generating Qt 5 compatibility Makefile (FURUI_HAVE_FFMPEG)
 qmake "%SRC%\FuruiMusic.pro" -o Makefile "FURUI_QT5_OUTDIR=%ROOT%\build\desktop-qt5" || goto :fail
 echo [make] building Qt 5 compatibility binary
 mingw32-make -f Makefile release -j%NUMBER_OF_PROCESSORS% || goto :fail
-echo [qt5] binary in build\desktop-qt5 (self-built FFmpeg backend: in-app MV enabled)
+if not exist "%ROOT%\bin_qt5" mkdir "%ROOT%\bin_qt5"
+copy /y "%ROOT%\build\desktop-qt5\FuruiMusic.exe" "%ROOT%\bin_qt5\" >nul || goto :fail
+rem Qt 5 的 windeployqt 会带 Qt5Core/Qt5Quick/Qt5QuickControls2 等 DLL、qwindows
+rem 与 QML 模块；FFmpeg 是静态链接进 exe 的，运行时不需要额外带 FFmpeg DLL。
+windeployqt --no-translations --qmldir "%SRC%\ui\qml" "%ROOT%\bin_qt5\FuruiMusic.exe" || goto :fail
+echo [qt5] binary + Qt 5 runtime in bin_qt5 (self-built FFmpeg backend: in-app MV enabled)
 :skip_qt5
 
 echo.
-echo Build finished. Qt 6 binary in bin (MV enabled via FFmpeg).
-echo For a redistributable folder run: windeployqt --no-translations --qmldir "%SRC%\ui\qml" "%ROOT%\bin\FuruiMusic.exe"
+echo Build finished. Qt 6 binary in bin_qt6, Qt 5 binary in bin_qt5 (MV enabled).
+echo For a redistributable folder run: windeployqt --no-translations --qmldir "%SRC%\ui\qml" "%ROOT%\bin_qt6\FuruiMusic.exe"
 goto :eof
 :fail
 echo Build FAILED.

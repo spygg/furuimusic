@@ -1,5 +1,6 @@
 @echo off
 rem FuruiMusic Android APK - Qt 6.11.1 + CMake (arm64-v8a, NDK 27, JDK 17)
+rem 最终签名 APK 落在仓库根的 bin_android/，与桌面版 bin_qt6 / bin_qt5 分开。
 setlocal
 set "ROOT=%~dp0..\.."
 set "SRC=%ROOT%\src"
@@ -47,12 +48,12 @@ set "KSALIAS=androiddebugkey"
 :signAPK
 set "UNSIGNED=%ROOT%\build\android_qt6\android-build\build\outputs\apk\release\android-build-release-unsigned.apk"
 set "ALIGNED=%ROOT%\build\android_qt6\android-build\FuruiMusic-aligned.apk"
-set "OUT=%ROOT%\bin\FuruiMusic-android-arm64-v8a.apk"
+set "OUT=%ROOT%\bin_android\FuruiMusic-android-arm64-v8a.apk"
 if not exist "%UNSIGNED%" (
     echo [error] 未找到 Qt 产出的未签名 release APK: %UNSIGNED%
     goto :fail
 )
-if not exist "%ROOT%\bin" mkdir "%ROOT%\bin"
+if not exist "%ROOT%\bin_android" mkdir "%ROOT%\bin_android"
 "%BT%\zipalign.exe" -f -p 4 "%UNSIGNED%" "%ALIGNED%" || goto :fail
 call "%BT%\apksigner.bat" sign --ks "%KS%" --ks-key-alias "%KSALIAS%" --ks-pass pass:android --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --out "%OUT%" "%ALIGNED%" || goto :fail
 call "%BT%\apksigner.bat" verify "%OUT%" || goto :fail
