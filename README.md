@@ -311,6 +311,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
   `cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++`，
   再 `cmake --build build --parallel`；Linux、macOS 只是把 `-G Ninja` 与编译器指定去掉（runner 默认生成器即可）。
 - Android 侧复用 `src/scripts/build_android.sh`（CMake + `FuruiMusic_make_apk`），CI 用 Qt 6.8.3 + NDK 26.1 覆盖脚本默认的 6.11.1 + NDK 27。Qt 6 的 CMake 流程只产出未签名 APK，签名身份由 CI 现场用 `keytool` 生成的公开 debug keystore 提供，不往仓库放二进制；`src/android_qt6/libs/arm64-v8a/` 的两个 OpenSSL 3 `.so` 已在 `.gitignore` 中加例外，保证 APK 里 HTTPS 可用。
+- **Qt 在线仓库元数据适配（2026-11-12）**：Qt 6.8+ 的 Android kit 移到了 `all_os/android/` 且旧树清空、linux x86_64 架构 id 由 `gcc_64` 改名 `linux_gcc_64`、MinGW 13.1 工具拆到独立名 `tools_mingw1310`——aqtinstall 3.3.0（install-qt-action 默认）尚不支持，CI 三条腿首跑全挂在 Install Qt。修法：Android kit 改用 `src/scripts/install_qt_mirror.sh` 直读 `all_os/android` 的 Updates.xml 逐包下载（sha1 校验 + 7z 解包，bash 版参照 QtRemoteDesktop 的 install_qt_mirror.ps1），另两处改用新 id。
 - **Android job 尚未实机跑通**（本机无 Android CI 环境），建议先手动 `workflow_dispatch` 验证流水线再打 tag；`release` job 把 `build-android` 列为发布门槛，避免发布「只有桌面包、没有安装包」的半成品。
 - 未纳入 Release：Windows XP（Qt 5.7 加载不了 QML 2.15）、MSVC 组合（本工程未验证）、Inno Setup 安装包（仓库没有 `installer/` 脚本）。
 - 验证状态：Windows 的构建/部署命令、Android 的 CMake → APK → 签名链路均已在本机跑通；Linux、macOS、Android 三个 CI job 仍属按配置推断，需要实际推一次 tag 才能确认。

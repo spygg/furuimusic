@@ -34,19 +34,22 @@ jobs:
             host: windows
             target: desktop
             arch: win64_mingw
-            # Qt 包本身不含编译器；按 install-qt-action 语法装 MinGW 13.1 工具链
-            # （tools_mingw + 变体 qt.tools.win64_mingw1310，落到 Tools/mingw1310_64）
-            tools: 'tools_mingw,qt.tools.win64_mingw1310'
+            # Qt 包本身不含编译器；按 install-qt-action 语法装 MinGW 13.1 工具链。
+            # 注意 MinGW 工具已从 tools_mingw（只到 810）拆到独立工具名 tools_mingw1310，
+            # 旧写法会报 "package 'qt.tools.win64_mingw1310' was not found"
+            tools: 'tools_mingw1310,qt.tools.win64_mingw1310'
             modules: 'qtmultimedia'
             artifact: FuruiMusic-windows-x64.zip
-          # Linux 同样切 Qt 6，避免 Qt5/GStreamer 依赖 runner 上不确定的解码插件
+          # Linux (x86_64)
           - name: Linux (x86_64)
             key: linux-x86_64
             os: ubuntu-22.04
             qt: '6.8.3'
             host: linux
             target: desktop
-            arch: gcc_64
+            # Qt 元数据里 linux x86_64 的架构 id 已由 gcc_64 改名为 linux_gcc_64，
+            # 旧 id 会报 "packages ['qt_base', 'qtmultimedia'] were not found"
+            arch: linux_gcc_64
             tools: ''
             modules: 'qtmultimedia'
             artifact: FuruiMusic-linux-x86_64.AppImage
@@ -242,25 +245,29 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # 两个 kit 缺一不可：android_arm64_v8a 是被编译的目标 kit，gcc_64 是
-      # QT_HOST_PATH（moc/rcc/androiddeployqt 都是主机可执行文件）。
-      - name: Install Qt 6 Android kit
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          host: linux
-          target: android
-          arch: android_arm64_v8a
-          modules: 'qtmultimedia'
-          dir: ${{ runner.temp }}/Qt
-          cache: false
+      # Qt 6.8+ 的 Android kit 已从 <host>_x86/android 移到 all_os/android/，旧树内容
+      # 已清空，aqtinstall 3.3.0（install-qt-action 默认）不支持新布局——CI 首跑就是
+      # "No latest version available for this request"。改用仓库内镜像直装脚本：
+      # 读 Updates.xml 逐包下载、sha1 校验、7z 解包到 install-qt-action 同款目录布局
+      # （详见脚本头注释；产物 <outdir>/6.8.3/android_arm64_v8a 含 qtmultimedia）。
+      - name: Install Qt 6 Android kit (mirror)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends p7zip-full
+          bash src/scripts/install_qt_mirror.sh \
+            --version "$QT_VERSION" \
+            --outdir "${{ runner.temp }}/Qt"
+
       - name: Install Qt 6 host kit (QT_HOST_PATH)
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
           host: linux
           target: desktop
-          arch: gcc_64
+          # 同上：linux x86_64 的架构 id 已由 gcc_64 改名为 linux_gcc_64
+          arch: linux_gcc_64
           dir: ${{ runner.temp }}/Qt
           cache: false
 
@@ -282,7 +289,7 @@ jobs:
         run: |
           set -euo pipefail
           export QT_ANDROID="${{ runner.temp }}/Qt/$QT_VERSION/android_arm64_v8a"
-          export QT_HOST="${{ runner.temp }}/Qt/$QT_VERSION/gcc_64"
+          export QT_HOST="${{ runner.temp }}/Qt/$QT_VERSION/linux_gcc_64"
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/$ANDROID_NDK_VER"
           test -f "$QT_ANDROID/bin/qt-cmake" || { echo "::error::Qt Android kit 未就位"; exit 1; }
