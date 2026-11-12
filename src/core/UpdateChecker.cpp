@@ -18,7 +18,9 @@
 
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QJniObject>
-#include <QNativeInterface/QAndroidApplication>
+// QNativeInterface::QAndroidApplication 的真实头文件；QNativeInterface/QAndroidApplication
+// 这个前向路径 Qt 6.9+ 才有，6.8.3 的 android kit 里没有（CI 实测 fatal error）
+#include <QtCore/qcoreapplication_platform.h>
 #endif
 
 namespace Furui {
