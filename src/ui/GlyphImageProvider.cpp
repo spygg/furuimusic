@@ -372,6 +372,13 @@ QImage GlyphImageProvider::render(const QString &name, const QColor &color, int 
         line(0.16, 0.28, 0.84, 0.28);
         line(0.27, 0.50, 0.73, 0.50);
         line(0.38, 0.72, 0.62, 0.72);
+    } else if (name == QLatin1String("video")) {
+        // 摄像机造型：机身 + 内嵌播放三角 + 右侧两格胶片条
+        rect(0.06, 0.30, 0.62, 0.40, false);
+        triangle(0.26, 0.40, 0.26, 0.60, 0.46, 0.50);
+        rect(0.72, 0.24, 0.20, 0.16, true);
+        rect(0.72, 0.60, 0.20, 0.16, true);
+        line(0.82, 0.40, 0.82, 0.60);
     } else {
         // 未知图标：画一个音符，界面不会出现空白
         circle(0.36, 0.72, 0.12, true);

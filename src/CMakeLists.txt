@@ -13,6 +13,16 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(WIN32)
     # 用 windres 把 app.ico 嵌进 exe，任务栏/Alt+Tab/资源管理器都能拿到 FuruiMusic 图标
+    # 只给 CMAKE_C_COMPILER 绝对路径、工具链 bin 又不在 PATH 时，CMake 会把
+    # windres 记成裸命令名，构建期报「不是内部或外部命令」。从编译器目录推导绝对路径。
+    if(CMAKE_RC_COMPILER AND NOT IS_ABSOLUTE("${CMAKE_RC_COMPILER}"))
+        get_filename_component(_furui_cc_dir "${CMAKE_C_COMPILER}" DIRECTORY)
+        if(EXISTS "${_furui_cc_dir}/windres.exe")
+            set(CMAKE_RC_COMPILER "${_furui_cc_dir}/windres.exe"
+                CACHE FILEPATH "Windows 资源编译器 (windres)" FORCE)
+            unset(CMAKE_RC_COMPILER_WORKS CACHE)
+        endif()
+    endif()
     enable_language(RC)
 endif()
 set(CMAKE_AUTOMOC ON)
@@ -36,12 +46,20 @@ if(QT_VERSION_MAJOR GREATER_EQUAL 6)
     set(CMAKE_CXX_STANDARD 17)
 endif()
 
+# ---- Qt5 自编译 FFmpeg 播放后端 -----------------------------------------
+# 具体逻辑见 cmake/FuruiFfmpeg.cmake：Qt 5 桌面在 configure 阶段自动调用
+# build_ffmpeg_desktop.sh，从 src/thirdparty/ffmpeg 编出静态库（按编译器 ABI
+# 分目录），检测通过则定义 FURUI_HAVE_FFMPEG 并链接 FfmpegVideoPlayer。
+# Qt 6 用 QtMultimedia 官方 FFmpeg 插件，完全不走这里；没编出产物也不算
+# 错误，Qt 5 仍可构建，只是 MV 退回 DirectShow 降级说明。
+include(cmake/FuruiFfmpeg.cmake)
+
 # sources.json 内容变化时让 AUTORCC 重新生成 qrc_config.cpp
 set_source_files_properties(core/config.qrc PROPERTIES
     AUTORCC_DEPENDENCIES "${CMAKE_CURRENT_SOURCE_DIR}/config/sources.json")
 
 set(CORE_FILES
-
+    core/QtCompat.h
     core/Types.h core/Types.cpp
     core/Settings.h core/JsonMapper.h
     core/HttpClient.h core/HttpClient.cpp
@@ -88,15 +106,22 @@ set(UI_FILES
     ui/qml/MainMobile.qml
     ui/qml/LibraryPage.qml
     ui/qml/LoginPage.qml
+    ui/qml/CaptchaField.qml
+    ui/qml/MvPage.qml
+    ui/qml/MvMedia5.qml
+    ui/qml/MvMedia5Ffmpeg.qml
+    ui/qml/MvMedia6.qml
+    ui/qml/SoftShadow.qml
+    ui/qml/Toast.qml
     ui/qml/PlayerPage.qml
     ui/qml/SettingsPage.qml
     ui/qml/PlayBar.qml
     ui/qml/QueueDrawer.qml
-    ui/qml/ControlButton.qml
     ui/qml/NavButton.qml
     ui/qml/SongRow.qml
     ui/qml/AlbumCard.qml
     ui/qml/EmptyState.qml
+    ${FURUI_FFMPEG_SOURCES}
 )
 
 set(LEGACY_WIDGETS_FILES
@@ -173,6 +198,16 @@ else()
         add_executable(FuruiMusicWidgets WIN32 MACOSX_BUNDLE ${LEGACY_WIDGETS_FILES})
         target_link_libraries(FuruiMusicWidgets PRIVATE FuruiCore ${QT}::Widgets)
         set_target_properties(FuruiMusicWidgets PROPERTIES OUTPUT_NAME "FuruiMusicWidgets")
+    endif()
+endif()
+
+if(FURUI_HAVE_FFMPEG)
+    target_compile_definitions(FuruiMusic PRIVATE FURUI_HAVE_FFMPEG=1)
+    target_include_directories(FuruiMusic PRIVATE "${FURUI_FFMPEG_INCLUDE_DIR}")
+    target_link_libraries(FuruiMusic PRIVATE ${FURUI_FFMPEG_LINK_LIBS})
+    find_package(Threads QUIET)
+    if(Threads_FOUND)
+        target_link_libraries(FuruiMusic PRIVATE Threads::Threads)
     endif()
 endif()
 

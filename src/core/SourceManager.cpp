@@ -1,3 +1,4 @@
+#include "core/QtCompat.h"
 #include "SourceManager.h"
 
 #include <QSet>
@@ -299,6 +300,27 @@ void SourceManager::cover(const Song &song, StringCallback cb)
     MusicSource *s = source(song.source);
     if (!s) { if (cb) cb(QString()); return; }
     s->cover(song, cb);
+}
+
+void SourceManager::mv(const Song &song, MvCallback cb)
+{
+    MusicSource *s = source(song.source);
+    if (!s) {
+        if (cb) cb(false, QUrl(), QStringLiteral("未知音源，无法播放 MV"));
+        return;
+    }
+    s->mv(song, std::move(cb));
+}
+
+void SourceManager::mvList(const QString &sourceId, const QString &area, int limit,
+                           int offset, MvListCallback cb)
+{
+    MusicSource *s = source(sourceId);
+    if (!s) {
+        if (cb) cb(QVector<QVariantMap>(), false);
+        return;
+    }
+    s->mvList(area, limit, offset, std::move(cb));
 }
 
 } // namespace Furui

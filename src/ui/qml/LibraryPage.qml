@@ -81,7 +81,18 @@ Item {
     // 响应式左右留白
     readonly property real sideMargin: Math.max(16, Math.min(36, Math.round(root.width * 0.035)))
 
-    readonly property var tabTitles: ["我的歌单", "收藏", "播放历史", "播放队列", "发现榜单"]
+    // MV 做成曲库的第 6 个 Tab：外壳导航仍保持「曲库/播放/账号/设置」4 项不变
+    readonly property var tabTitles: ["我的歌单", "收藏", "播放历史", "播放队列", "发现榜单", "MV"]
+    readonly property var mvAreas: ["全部", "内地", "港台", "欧美", "日本", "韩国"]
+    property string mvArea: "全部"
+
+    // 播放量压缩成「万 / 亿」，避免六位数把封面角标撑破
+    function formatCount(n) {
+        if (!n || n < 0) return "0"
+        if (n >= 100000000) return (n / 100000000).toFixed(1) + "亿"
+        if (n >= 10000) return (n / 10000).toFixed(1) + "万"
+        return String(Math.floor(n))
+    }
 
     function selectedSourceId() {
         if (selectedPlatform <= 0)
@@ -101,6 +112,8 @@ Item {
             app.loadHistoryBySource(sid)
         else if (root.tabIndex === 4)
             app.loadDiscovery()
+        else if (root.tabIndex === 5)
+            app.loadMvList(root.mvArea, false)
     }
 
     function openPlaylist(title, uid) {
@@ -166,7 +179,8 @@ Item {
                 Text {
                     id: refreshText
                     anchors.centerIn: parent
-                    text: root.tabIndex === 4 ? "刷新榜单" : "刷新歌单"
+                    text: root.tabIndex === 4 ? "刷新榜单"
+                          : (root.tabIndex === 5 ? "刷新 MV" : "刷新歌单")
                     color: "#FFFFFF"
                     font.pixelSize: 13
                     font.bold: true
@@ -180,6 +194,9 @@ Item {
                         if (root.tabIndex === 4) {
                             app.loadDiscovery()
                             root.hint = "正在刷新各平台公开榜单"
+                        } else if (root.tabIndex === 5) {
+                            app.loadMvList(root.mvArea, false)
+                            root.hint = "正在刷新 MV 榜单"
                         } else {
                             app.refreshPlaylists()
                             root.hint = "正在刷新歌单"
@@ -210,6 +227,9 @@ Item {
                         if (root.tabIndex === 4) {
                             app.loadDiscovery()
                             root.hint = "正在刷新各平台公开榜单"
+                        } else if (root.tabIndex === 5) {
+                            app.loadMvList(root.mvArea, false)
+                            root.hint = "正在刷新 MV 榜单"
                         } else {
                             app.refreshPlaylists()
                             root.hint = "正在刷新歌单"
@@ -269,8 +289,9 @@ Item {
                 ToolTip.delay: 400
             }
 
-            // 网格/列表切换：圆形图标按钮
+            // 网格/列表切换：圆形图标按钮（MV 页固定网格，不展示这个开关）
             Rectangle {
+                visible: root.tabIndex !== 5
                 implicitWidth: theme.touchMin
                 implicitHeight: theme.touchMin
                 radius: height / 2
@@ -785,9 +806,11 @@ Item {
                                 duration: model.duration
                                 vip: model.vip
                                 favorite: model.favorite
+                                showMv: model.source === "netease"
                                 onPlayRequested: app.playResult(index)
                                 onFavoriteRequested: app.toggleFavoriteResult(index)
                                 onAddRequested: app.addResultToQueue(index)
+                                onMvRequested: app.playMv(index)
                                 onDownloadRequested: app.downloadResult(index)
                                 showDownload: true
                             }
@@ -827,9 +850,11 @@ Item {
                             duration: model.duration
                             vip: model.vip
                             favorite: model.favorite
+                            showMv: model.source === "netease"
                             onPlayRequested: app.playResult(index)
                             onFavoriteRequested: app.toggleFavoriteResult(index)
                             onAddRequested: app.addResultToQueue(index)
+                            onMvRequested: app.playMv(index)
                         }
                     }
                     EmptyState {
@@ -864,9 +889,11 @@ Item {
                             duration: model.duration
                             vip: model.vip
                             favorite: model.favorite
+                            showMv: model.source === "netease"
                             onPlayRequested: app.playResult(index)
                             onFavoriteRequested: app.toggleFavoriteResult(index)
                             onAddRequested: app.addResultToQueue(index)
+                            onMvRequested: app.playMv(index)
                         }
                     }
                     EmptyState {
@@ -1060,9 +1087,11 @@ Item {
                                 duration: model.duration
                                 vip: model.vip
                                 favorite: model.favorite
+                                showMv: model.source === "netease"
                                 onPlayRequested: app.playResult(index)
                                 onFavoriteRequested: app.toggleFavoriteResult(index)
                                 onAddRequested: app.addResultToQueue(index)
+                                onMvRequested: app.playMv(index)
                                 onDownloadRequested: app.downloadResult(index)
                                 showDownload: true
                             }
@@ -1076,6 +1105,222 @@ Item {
                             title: "这个榜单暂时没有歌曲"
                             hint: "该平台的公共歌单接口可能不可用，试试其他平台榜单"
                         }
+                    }
+                }
+
+                // MV 榜单（对齐 AlgerMusicPlayer 的 MV 页）：地区筛选 + 16:9 封面网格 +
+                // 播放量角标 + 滚到底自动续页；点封面进沉浸式播放器。
+                Item {
+                    id: mvView
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: root.pageGap
+
+                        Flickable {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: theme.touchMin
+                            contentWidth: mvAreaRow.implicitWidth
+                            contentHeight: height
+                            clip: true
+                            flickableDirection: Flickable.HorizontalFlick
+
+                            Row {
+                                id: mvAreaRow
+                                height: parent.height
+                                spacing: 8
+                                Repeater {
+                                    model: root.mvAreas
+                                    delegate: Rectangle {
+                                        readonly property bool active: root.mvArea === modelData
+                                        width: mvAreaText.implicitWidth + 24
+                                        height: theme.touchMin
+                                        radius: height / 2
+                                        color: active ? cPrimary
+                                              : (mvAreaMa.containsMouse ? root.cChipHover : root.cChip)
+                                        Behavior on color { ColorAnimation { duration: 140 } }
+                                        Text {
+                                            id: mvAreaText
+                                            anchors.centerIn: parent
+                                            text: modelData
+                                            color: parent.active ? "#FFFFFF" : cSub
+                                            font.pixelSize: 13
+                                            font.bold: parent.active
+                                        }
+                                        MouseArea {
+                                            id: mvAreaMa
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                if (root.mvArea === modelData) return
+                                                root.mvArea = modelData
+                                                app.loadMvList(modelData, false)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        GridView {
+                            id: mvGrid
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            model: app.mvList
+                            readonly property int cols: Math.max(2, Math.min(5,
+                                Math.floor(Math.max(320, width) / 220)))
+                            cellWidth: width / cols
+                            cellHeight: cellWidth * 9 / 16 + 62
+                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                            onMovementEnded: {
+                                if (atYEnd && app.mvHasMore && !app.mvLoading)
+                                    app.loadMvList(root.mvArea, true)
+                            }
+
+                            delegate: Item {
+                                width: mvGrid.cellWidth
+                                height: mvGrid.cellHeight
+
+                                Column {
+                                    anchors.fill: parent
+                                    anchors.margins: 6
+                                    spacing: 6
+
+                                    Rectangle {
+                                        width: parent.width
+                                        height: width * 9 / 16
+                                        radius: theme.radiusMd
+                                        color: root.cChip
+                                        clip: true
+
+                                        Image {
+                                            id: mvCoverImage
+                                            anchors.fill: parent
+                                            // StackLayout 隐藏页里的远程 Image 不会真正完成加载：
+                                            // 把 source 挂到 mvView.visible，进 MV Tab 时才开始取图，
+                                            // 既保证切进来就有封面，也避免后台白拉 24 张图浪费流量。
+                                            source: mvView.visible ? modelData.cover : ""
+                                            // 网格单元只有 16:9 小卡，限制解码尺寸，别按 CDN 原图开显存
+                                            sourceSize.width: 400
+                                            sourceSize.height: 225
+                                            fillMode: Image.PreserveAspectCrop
+                                            asynchronous: true
+                                            cache: true
+                                            opacity: status === Image.Ready ? 1 : 0
+                                            Behavior on opacity {
+                                                NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+                                            }
+                                        }
+
+                                        // 悬停/触屏常驻的播放圆钮
+                                        Rectangle {
+                                            anchors.centerIn: parent
+                                            width: 46
+                                            height: 46
+                                            radius: 23
+                                            visible: mvMa.containsMouse || platform.isMobile
+                                            color: Qt.rgba(0, 0, 0, 0.45)
+                                            border.color: Qt.rgba(1, 1, 1, 0.35)
+                                            border.width: 1
+                                            GlyphIcon {
+                                                anchors.centerIn: parent
+                                                name: "play"
+                                                size: 20
+                                                color: "#FFFFFF"
+                                            }
+                                        }
+
+                                        // 播放量角标
+                                        Rectangle {
+                                            anchors.top: parent.top
+                                            anchors.right: parent.right
+                                            anchors.margins: 8
+                                            width: mvCountText.implicitWidth + 16
+                                            height: 22
+                                            radius: 11
+                                            color: Qt.rgba(0, 0, 0, 0.58)
+                                            Row {
+                                                anchors.centerIn: parent
+                                                spacing: 4
+                                                GlyphIcon {
+                                                    name: "play"
+                                                    size: 10
+                                                    color: "#FFFFFF"
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                }
+                                                Text {
+                                                    id: mvCountText
+                                                    text: root.formatCount(modelData.playCount)
+                                                    color: "#FFFFFF"
+                                                    font.pixelSize: 10
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        width: parent.width
+                                        text: modelData.title
+                                        color: cText
+                                        font.pixelSize: 13
+                                        font.bold: true
+                                        elide: Text.ElideRight
+                                    }
+                                    Text {
+                                        width: parent.width
+                                        text: modelData.artist
+                                        color: cSub
+                                        font.pixelSize: 11
+                                        elide: Text.ElideRight
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: mvMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: app.playMvItem(index)
+                                }
+                            }
+
+                            footer: Item {
+                                width: mvGrid.width
+                                height: 46
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: app.mvLoading ? "正在加载更多 MV…"
+                                          : (app.mvHasMore ? "下滑加载更多" : "没有更多了")
+                                    color: cSub
+                                    font.pixelSize: 12
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    enabled: app.mvHasMore && !app.mvLoading
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: app.loadMvList(root.mvArea, true)
+                                }
+                            }
+                        }
+                    }
+
+                    BusyIndicator {
+                        anchors.centerIn: parent
+                        running: app.mvLoading && app.mvList.length === 0
+                        visible: running
+                    }
+
+                    EmptyState {
+                        anchors.centerIn: parent
+                        visible: app.mvList.length === 0 && !app.mvLoading
+                        compact: root.shortViewport
+                        iconName: "video"
+                        title: "暂时没有 MV"
+                        hint: "检查网络后点刷新，或切换地区试试"
                     }
                 }
 
@@ -1205,10 +1450,12 @@ Item {
                                     duration: model.duration
                                     vip: model.vip
                                     favorite: model.favorite
+                                    showMv: model.source === "netease"
                                     showDownload: true
                                     onPlayRequested: app.playResult(index)
                                     onFavoriteRequested: app.toggleFavoriteResult(index)
                                     onAddRequested: app.addResultToQueue(index)
+                                    onMvRequested: app.playMv(index)
                                     onDownloadRequested: app.downloadResult(index)
                                 }
                             }

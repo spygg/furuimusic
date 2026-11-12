@@ -9,7 +9,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QPointer>
-#include <QRandomGenerator>
+#include "core/QtCompat.h"
 #include <QSet>
 #include <QUrl>
 #include <QtMath>

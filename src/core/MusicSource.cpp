@@ -4,7 +4,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QRandomGenerator>
+#include "core/QtCompat.h"
 #include <QUrlQuery>
 
 #include "JsonMapper.h"
@@ -18,6 +18,21 @@ static QString shortError(const QString &error)
 {
     const int sep = error.lastIndexOf(QStringLiteral(" - "));
     return sep > 0 ? error.mid(sep + 3) : error;
+}
+
+// 网易云 MV 榜单返回的是原图地址（http + 无尺寸参数），实测单张 1~7 秒、
+// 140KB+，整屏 24 张会长时间留白。加 ?param=400y225 后约 30KB / 80ms，
+// 与 AlgerMusicPlayer 的 getImgUrl(cover, '400y225') 同一处理；顺手升 HTTPS，
+// 避免 Android 明文流量限制把封面全部吞掉。
+static QString mvCoverThumb(const QString &url)
+{
+    if (url.isEmpty()) return url;
+    QString out = url;
+    if (out.startsWith(QLatin1String("http://")))
+        out = QStringLiteral("https://") + out.mid(7);
+    if (!out.contains(QLatin1Char('?')) && out.contains(QLatin1String("music.126.net")))
+        out += QStringLiteral("?param=400y225");
+    return out;
 }
 
 MusicSource::MusicSource(const SourceDesc &desc, QObject *parent)
@@ -345,6 +360,104 @@ void MusicSource::cover(const Song &song, StringCallback cb)
         // 接口偶尔会返回空串或错误页文本，别把它当图片地址塞给 QML Image
         if (!out.startsWith(QLatin1String("http"), Qt::CaseInsensitive)) out.clear();
         if (cb) cb(out);
+    });
+}
+
+void MusicSource::mv(const Song &song, MvCallback cb)
+{
+    const Endpoint mvEp = m_desc.endpoints.value(QStringLiteral("mvUrl"));
+    if (!mvEp.valid()) {
+        if (cb) cb(false, QUrl(), QStringLiteral("该平台暂未配置 MV"));
+        return;
+    }
+    auto deliverUrl = [this, mvEp, song, cb](const QString &mvId) {
+        if (mvId.isEmpty() || mvId == QLatin1String("0")) {
+            if (cb) cb(false, QUrl(), QStringLiteral("该歌曲没有 MV"));
+            return;
+        }
+        auto attempt = [this, mvEp, song](const QString &id, const QString &r) {
+            QVariantMap v = songVars(song, QStringLiteral("standard"));
+            v.insert(QStringLiteral("mvId"), id);
+            v.insert(QStringLiteral("mvR"), r);
+            return v;
+        };
+        call(mvEp, attempt(mvId, QStringLiteral("1080")),
+             [this, mvEp, song, mvId, cb, attempt](const HttpClient::Reply &r1) {
+            const QString url = r1.ok
+                ? Json::firstString(Json::rootOf(r1.json), mvEp.resultPaths) : QString();
+            if (!url.isEmpty()) { if (cb) cb(true, QUrl(url), QString()); return; }
+            // 高清源缺失（老 MV 只有 480p）退一档再试一次
+            call(mvEp, attempt(mvId, QStringLiteral("480")), [mvEp, cb](const HttpClient::Reply &r2) {
+                const QString url2 = r2.ok
+                    ? Json::firstString(Json::rootOf(r2.json), mvEp.resultPaths) : QString();
+                if (!url2.isEmpty()) { if (cb) cb(true, QUrl(url2), QString()); return; }
+                if (cb) cb(false, QUrl(), QStringLiteral("未取到 MV 播放地址"));
+            });
+        });
+    };
+    const QVariantMap v = songVars(song, QStringLiteral("standard"));
+    // 网易云搜索响应里每首歌自带 mvid 字段，mapSong 把原始 JSON 整个存进了 Song.extra
+    const QString mvId = song.extra.value(QStringLiteral("mvid")).toString();
+    if (!mvId.isEmpty() && mvId != QLatin1String("0")) {
+        deliverUrl(mvId);
+        return;
+    }
+    const Endpoint infoEp = m_desc.endpoints.value(QStringLiteral("mvInfo"));
+    if (!infoEp.valid()) {
+        if (cb) cb(false, QUrl(), QStringLiteral("该歌曲没有 MV"));
+        return;
+    }
+    call(infoEp, v, [deliverUrl, infoEp](const HttpClient::Reply &r) {
+        const QString id2 = r.ok
+            ? Json::firstString(Json::rootOf(r.json), infoEp.resultPaths) : QString();
+        deliverUrl(id2);
+    });
+}
+
+// 公开 MV 榜单：字段映射全部来自 mvList 端点配置，与歌单/歌曲共用同一套
+// Json::stringAt 取值规则，平台没配这个端点就返回空列表（UI 显示空态而不是报错）。
+void MusicSource::mvList(const QString &area, int limit, int offset, MvListCallback cb)
+{
+    const Endpoint ep = m_desc.endpoints.value(QStringLiteral("mvList"));
+    if (!ep.valid()) {
+        if (cb) cb(QVector<QVariantMap>(), false);
+        return;
+    }
+    QVariantMap v = baseVars();
+    v.insert(QStringLiteral("area"), area);
+    v.insert(QStringLiteral("limit"), QString::number(limit));
+    v.insert(QStringLiteral("offset"), QString::number(offset));
+    v.insert(QStringLiteral("page"), QString::number(offset / qMax(1, limit) + 1));
+    call(ep, v, [this, ep, cb](const HttpClient::Reply &r) {
+        QVector<QVariantMap> out;
+        bool hasMore = false;
+        if (r.ok) {
+            const QJsonValue root = Json::rootOf(r.json);
+            const QJsonArray arr = Json::arrayAt(root, ep.root);
+            const QVariantMap f = ep.fields;
+            for (const QJsonValue &val : arr) {
+                const QString id = Json::stringAt(val, f.value(QStringLiteral("id")).toString());
+                if (id.isEmpty()) continue;
+                QVariantMap m;
+                m.insert(QStringLiteral("id"), id);
+                m.insert(QStringLiteral("title"),
+                        Json::stringAt(val, f.value(QStringLiteral("title")).toString()));
+                m.insert(QStringLiteral("artist"),
+                        Json::stringAt(val, f.value(QStringLiteral("artist")).toString()));
+                m.insert(QStringLiteral("cover"), mvCoverThumb(
+                        Json::stringAt(val, f.value(QStringLiteral("cover")).toString())));
+                m.insert(QStringLiteral("playCount"),
+                        Json::stringAt(val, f.value(QStringLiteral("playCount")).toString()).toLongLong());
+                m.insert(QStringLiteral("duration"),
+                        Json::stringAt(val, f.value(QStringLiteral("duration")).toString()).toLongLong());
+                m.insert(QStringLiteral("source"), m_desc.id);
+                out << m;
+            }
+            // 服务端 hasMore 为真但本页空数组时也要收口，否则「加载更多」会无限打转
+            const QJsonValue more = Json::valueAt(root, QStringLiteral("hasMore"));
+            hasMore = (more.isBool() ? more.toBool() : !arr.isEmpty()) && !out.isEmpty();
+        }
+        if (cb) cb(out, hasMore);
     });
 }
 

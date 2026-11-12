@@ -20,6 +20,8 @@ Item {
     property bool queueOpen: false
     // 播放页是沉浸页：从它退出时回到进入前的那一页
     property int lastContentPage: 0
+    // MV 页同理：从哪页进的，返回键/关闭就回哪页
+    property int mvReturnPage: 1
     onPageIndexChanged: {
         // 切页收起软键盘并放掉输入焦点：焦点会活过页面切换，不处理的话
         // 键盘会一直盖在下一个页面上（触屏笔记本/二合一设备上很明显）
@@ -35,10 +37,16 @@ Item {
         }
     }
 
-    // 返回键 / Esc：队列 → 播放页 → 首页，逐级回退；已在首页则交还系统
+    // 返回键 / Esc：队列 → MV → 播放页 → 首页，逐级回退；已在首页则交还系统
     function handleBack() {
         if (queueOpen) {
             queueOpen = false
+            return true
+        }
+        if (pageIndex === 4) {
+            // close() 会停掉媒体并经 requestClose 回到进入前的页；
+            // 只改 pageIndex 的话 MV 会在后台继续出声
+            mvPage.close()
             return true
         }
         if (pageIndex === 1) {
@@ -234,7 +242,9 @@ Item {
                 id: pageStack
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                currentIndex: root.pageIndex
+                // index 4 是外壳级 MV 覆盖层，不属于页面栈；钳到 0..3 避免越界，
+                // MV 关闭后还能原样看到进入前那一页
+                currentIndex: Math.min(root.pageIndex, 3)
                 onCurrentIndexChanged: pageFade.restart()
 
                 LibraryPage { }
@@ -283,8 +293,8 @@ Item {
 
         PlayBar {
             Layout.fillWidth: true
-            // 播放页自带同一套控件，常驻栏让位（否则同屏两套进度/音量）
-            visible: root.pageIndex !== 1
+            // 播放页与 MV 页自带同一套控件，常驻栏让位（否则同屏两套进度/音量）
+            visible: root.pageIndex !== 1 && root.pageIndex !== 4
             onOpenPlayer: root.pageIndex = 1
             onOpenSettings: root.pageIndex = 3
             onToggleQueue: root.queueOpen = !root.queueOpen
@@ -297,5 +307,28 @@ Item {
         id: pageFade
         NumberAnimation { target: pageStack; property: "opacity"; to: 0.6; duration: 70 }
         NumberAnimation { target: pageStack; property: "opacity"; to: 1; duration: 160 }
+    }
+
+    // MV 沉浸式覆盖层：挂在外壳根级而非页面栈里，桌面左侧导航、标题栏、
+    // 底部播放栏都会被盖住，与 AlgerMusicPlayer 的全屏 drawer 一致。
+    // 只留 pageIndex=4 这个状态位，返回键/关闭仍走原来的逐级回退。
+    MvPage {
+        id: mvPage
+        anchors.fill: parent
+        z: 1000
+        visible: root.pageIndex === 4
+        onRequestClose: root.pageIndex = root.mvReturnPage
+    }
+
+    // app.mvOpened 由 AppController 解析完 MV 地址后发出：
+    // 收起队列 → 记住来路页 → 切到 MV 覆盖层 → 把地址交给页面
+    Connections {
+        target: app
+        function onMvOpened(mv) {
+            root.queueOpen = false
+            if (root.pageIndex !== 4) root.mvReturnPage = root.pageIndex
+            root.pageIndex = 4
+            mvPage.open(mv)
+        }
     }
 }

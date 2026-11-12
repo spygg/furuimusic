@@ -4,7 +4,11 @@
 QT += core network sql multimedia qml quick quickcontrols2
 CONFIG += c++14
 TEMPLATE = app
+# 桌面主交付已切 Qt 6（QtMultimedia 官方 FFmpeg 后端，见 scripts/build_windows.bat）。
+# Qt 5 qmake 保留为兼容构建，可用 FURUI_QT5_OUTDIR 指定独立输出目录，
+# 避免覆盖 bin 里的 Qt 6 产物（Qt5/Qt6 运行库混放会互相污染）。
 DESTDIR = $$PWD/../bin
+!isEmpty(FURUI_QT5_OUTDIR): DESTDIR = $$FURUI_QT5_OUTDIR
 win32: CONFIG += windows
 
 INCLUDEPATH += $$PWD
@@ -23,6 +27,7 @@ msvc: QMAKE_CXXFLAGS += /utf-8
 }
 
 CORE_HEADERS += \
+    core/QtCompat.h \
     core/Types.h \
     core/Settings.h \
     core/JsonMapper.h \
@@ -106,6 +111,33 @@ CONFIG(legacy_widgets) {
     HEADERS += ui/PlatformAdapter.h ui/ThemeManager.h ui/GlyphImageProvider.h
     SOURCES += ui/main.cpp ui/PlatformAdapter.cpp ui/ThemeManager.cpp ui/GlyphImageProvider.cpp
     RESOURCES += ui/qml.qrc ui/icons/icons.qrc
+
+    # Qt5 自编译 FFmpeg 播放后端：src/scripts/build_ffmpeg_desktop.bat 产出
+    # build_output/ffmpeg-qt5。检测到静态库就启用 C++ 自解码播放器，
+    # 完全绕开 DirectShow；没检测到仍可构建，MV 只是给出降级说明。
+    # Android 的 Qt5 qmake 链路不能链接桌面 MinGW 编译的 .a，显式排除
+    !android {
+    FURUI_FF_ROOT = $$(FURUI_FFMPEG_ROOT)
+    isEmpty(FURUI_FF_ROOT): FURUI_FF_ROOT = $$PWD/../build_output/ffmpeg-qt5
+    exists($$FURUI_FF_ROOT/lib/libavformat.a) {
+        DEFINES += FURUI_HAVE_FFMPEG
+        INCLUDEPATH += $$FURUI_FF_ROOT/include
+        HEADERS += ui/FfmpegVideoPlayer.h
+        SOURCES += ui/FfmpegVideoPlayer.cpp
+        # 静态库顺序：被依赖的 avutil 放最后，再重复一次兜底循环依赖
+        LIBS += -L$$FURUI_FF_ROOT/lib \
+                -lavformat -lavcodec -lswscale -lswresample -lavutil -lavutil
+        win32 {
+            LIBS += -lws2_32 -lsecur32 -lcrypt32 -lbcrypt -lm -lz \
+                    -lpsapi -ladvapi32 -lshell32 -lole32 -luser32 -lgdi32
+        } else {
+            LIBS += -lm -lz -lpthread -ldl
+        }
+        message("Qt5 FFmpeg playback backend enabled: $$FURUI_FF_ROOT")
+    } else {
+        message("Qt5 FFmpeg backend not found - MV falls back to DirectShow")
+    }
+    }
     OTHER_FILES += \
         ui/qml/Main.qml \
         ui/qml/MainDesktop.qml \
@@ -113,15 +145,19 @@ CONFIG(legacy_widgets) {
         ui/qml/TitleBar.qml \
         ui/qml/ResizeHandle.qml \
         ui/qml/GlyphIcon.qml \
-        ui/qml/SearchPage.qml \
         ui/qml/LibraryPage.qml \
         ui/qml/LoginPage.qml \
         ui/qml/CaptchaField.qml \
+        ui/qml/MvPage.qml \
+        ui/qml/MvMedia5.qml \
+        ui/qml/MvMedia5Ffmpeg.qml \
+        ui/qml/MvMedia6.qml \
+        ui/qml/SoftShadow.qml \
+        ui/qml/Toast.qml \
         ui/qml/PlayerPage.qml \
         ui/qml/SettingsPage.qml \
         ui/qml/PlayBar.qml \
         ui/qml/QueueDrawer.qml \
-        ui/qml/ControlButton.qml \
         ui/qml/NavButton.qml \
         ui/qml/SongRow.qml \
         ui/qml/AlbumCard.qml \

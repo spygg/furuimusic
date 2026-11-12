@@ -22,6 +22,9 @@ Item {
     // 封面宽度 = delegate 宽 - card 的 6*2 margins - ColumnLayout 的 10*2 margins
     readonly property real innerWidth: Math.max(40, width - 32)
 
+    // 投影垫在卡片背面，随 hover 缩放同步走（SoftShadow 内部绑定了 target.scale）
+    SoftShadow { target: card }
+
     Rectangle {
         id: card
         anchors.fill: parent

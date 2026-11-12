@@ -106,13 +106,20 @@ private:
     void kuwoWxExchange(const QString &code);
     // 酷我登录结果的统一收口：解析 data.cookies → 落库 → 补资料
     void finishKuwoLogin(const HttpClient::Reply &r, const QString &okMessage);
-    // 汽水：登录闭环在账号 API 服务里（secsdk 设备签名 + 扫码状态机都在服务端），
-    // 客户端只跑契约：GET /auth/qrcode -> POST /auth/qrcode/status -> POST /auth/me。
+    // 汽水：登录闭环在汽水服务端（passport/web/* 出码 + check_qrconnect 轮询 + /luna/pc/me 换
+    // session），客户端只跑出码 → 轮询 → 拿 sessionid → 换账号；未配置自建账号 API 服务时
+    // 直接走官方 endpoint，无需任何外部服务即可「直接扫码」登录。
     // 与 src/tools/qishui_login_flow_test.py 的探针链路保持一致。
     void startQishuiQr();
     void pollQishuiQr();
     void finishQishuiLogin(const QString &sessionId);
+    // 汽水：把本轮扫码会话的 Cookie 映射拼成 "name=value; ..." 头（passport_csrf_token / sessionid）
+    QString qishuiCookieHeader() const;
+    // 汽水扫码轮询统一的应答处理：统一解析状态文案 + 拿 sessionid（Set-Cookie / body 两条链路共用）
+    void handleQishuiPollReply(const HttpClient::Reply &r, const QString &sessionId, const QString &st);
     void generateQrImage(const QString &content, const QString &sourceId);
+    // data:image/png;base64,... 形态的二维码（汽水 passport 出码返回）→ 直接落盘
+    bool saveQrDataUrl(const QString &dataUrl, const QString &sourceId);
     // 会话超时则收尾（停轮询、置「已过期」）并返回 true，调用方直接 return
     bool qrTimedOut();
     void saveSession(const QString &sourceId, const QString &cookie,
@@ -152,9 +159,13 @@ private:
     QString m_mgCookie;
     // 咪咕扫码成功后拿到的凭据（ticket/uid 等），用于换取门户登录态
     QString m_mgTicket;
-    // 汽水扫码会话：base 是账号 API 服务地址，token 出码后用于轮询，sessionid 是登录凭据
+    // 汽水扫码会话：base 是自建账号 API 服务地址（/auth 契约）；未配置时登录走官方
+    // passport/web/* 直连（m_qsBase 留空即可区分两条链路）。
     QString m_qsBase;
     QString m_qsToken;
+    // 汽水扫码会话的 Cookie 映射：passport get_qrcode 会下发 passport_csrf_token，
+    // check_qrconnect 确认后下发 sessionid，轮询与登录都要带上同一份。
+    QMap<QString, QString> m_qsCookies;
     // 连续收到空回复/无法解析的次数，用于把接口异常显式暴露出来而不是一直"等待扫码"
     int m_qrEmptyStreak = 0;
     // 网易云扫码会话的 Cookie 罐（只保存 name=value）：出码与轮询共用一个会话

@@ -25,6 +25,26 @@ Rectangle {
 
     color: theme.surface
 
+    // 顶缘向上的渐隐投影：让底栏“浮”在内容之上，与 2px 进度线构成层次
+    Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.top
+        height: 14
+        gradient: Gradient {
+            orientation: Gradient.Vertical
+            GradientStop {
+                position: 0.0
+                color: Qt.rgba(theme.shadowTint.r, theme.shadowTint.g, theme.shadowTint.b, 0)
+            }
+            GradientStop {
+                position: 1.0
+                color: Qt.rgba(theme.shadowTint.r, theme.shadowTint.g, theme.shadowTint.b,
+                               theme.dark ? 0.22 : 0.08)
+            }
+        }
+    }
+
     function mmss(ms) {
         if (isNaN(ms) || ms < 0)
             ms = 0

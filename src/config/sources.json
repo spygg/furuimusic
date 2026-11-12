@@ -146,6 +146,47 @@
             "songs[0].album.blurPicUrl",
             "songs[0].al.picUrl"
           ]
+        },
+        "mvInfo": {
+          "method": "GET",
+          "path": "/api/song/detail",
+          "params": {
+            "ids": "[{id}]"
+          },
+          "resultPaths": [
+            "songs[0].mvid"
+          ]
+        },
+        "mvUrl": {
+          "method": "POST",
+          "contentType": "form",
+          "path": "/api/song/enhance/play/mv/url",
+          "params": {
+            "id": "{mvId}",
+            "r": "{mvR}"
+          },
+          "resultPaths": [
+            "data.url"
+          ]
+        },
+        "mvList": {
+          "method": "GET",
+          "path": "/api/mv/all",
+          "params": {
+            "area": "{area}",
+            "limit": "{limit}",
+            "offset": "{offset}"
+          },
+          "root": "data",
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "artist": "artistName",
+            "cover": "cover",
+            "playCount": "playCount",
+            "duration": "duration"
+          },
+          "_note": "官方 /api/mv/all 返回 {count,hasMore,data:[{id,cover,name,playCount,artistName,duration}]}；area 取值 全部/内地/港台/欧美/日本/韩国。与 AlgerMusicPlayer 的 /mv/all 契约一致。"
         }
       },
       "login": {
@@ -1217,7 +1258,7 @@
         "methods": [
           "qrcode"
         ],
-        "_note": "汽水的登录接口由字节 secsdk 保护（x-helios/x-medusa 设备签名），客户端算不出签名，扫码闭环放在账号 API 服务侧：客户端只跑 GET /auth/qrcode -> POST /auth/qrcode/status -> POST /auth/me（契约同 src/tools/qishui_login_flow_test.py）。未配置 accountApiBase 时会提示先启动账号 API 服务。"
+        "_note": "汽水现已内置扫码登录：客户端直连官方 passport 端点（GET /passport/web/get_qrcode -> POST /passport/web/check_qrconnect -> GET /luna/pc/me?aid=386088），无需账号 API 服务即可「直接扫码」（出码后用抖音 App 扫一扫确认）。用户在「设置 → 网络 → 账号 API 服务」填了自建服务时，则走其 GET /auth/* -> POST /auth/me 契约。"
       },
       "userApi": {
         "driver": "",
@@ -1226,7 +1267,7 @@
         "extraMethods": [
           "qrcode"
         ],
-        "_note": "汽水的账号接口同样受设备签名保护：部署账号 API 服务（src/tools/account_api_server.py，或自行接 guowenye/qishui-api）并在设置里填 accountApiBase 后，客户端用 /auth 扫码登录、用 userApiContract 同步歌单与收藏。"
+        "_note": "汽水账号接口（userApiContract）同样由部署账号 API 服务提供（src/tools/account_api_server.py，或自行接 guowenye/qishui-api）后填 accountApiBase 即可用 /auth 契约同步歌单与收藏；扫码登录本身已内置，无需服务。"
       }
     }
   ],

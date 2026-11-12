@@ -8,7 +8,7 @@
 // 性能无关紧要——登录是一次性的，模幂用二进制法，1024 位密钥子秒完成。
 // 正确性由 selfTest() 在启动时验证（与 Aes128 / Netease 自检同级）。
 #include <QByteArray>
-#include <QRandomGenerator>
+#include "core/QtCompat.h"
 #include <QString>
 #include <cstdint>
 #include <vector>

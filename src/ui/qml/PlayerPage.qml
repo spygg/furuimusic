@@ -212,10 +212,11 @@ Item {
             anchors.margins: 22
             spacing: 8
 
-            // 队列 / 设置：与参考项目右上角一样是两个小的半透明方按钮
+            // 队列 / MV / 设置：与参考项目右上角一样是小的半透明方按钮
             Repeater {
                 model: [
                     { icon: "list", tip: "播放队列" },
+                    { icon: "video", tip: "播放 MV" },
                     { icon: "settings", tip: "设置" }
                 ]
                 delegate: Item {
@@ -238,7 +239,11 @@ Item {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: index === 0 ? root.requestQueue() : root.requestSettings()
+                        onClicked: {
+                            if (index === 0) root.requestQueue()
+                            else if (index === 1) app.playMvCurrent()
+                            else root.requestSettings()
+                        }
                     }
                 }
             }
@@ -529,26 +534,8 @@ Item {
         Item {
             anchors.fill: parent
 
-            // 封面投影：用三层极淡的圆角矩形代替 DropShadow。
-            // 不再需要 layer.enabled（离屏渲染 + 每次缩放都重算模糊），
-            // 视觉上仍然是柔和的落影，但开销只有几个普通矩形。
-            Repeater {
-                model: 3
-                Rectangle {
-                    anchors.fill: coverCard
-                    anchors.margins: -(index + 1) * 4
-                    anchors.topMargin: -(index + 1) * 2 + 10
-                    anchors.bottomMargin: -(index + 1) * 2 - 4
-                    radius: coverCard.radius + (index + 1) * 4
-                    color: root.isDark
-                           ? Qt.rgba(0, 0, 0, 0.12)
-                           : Qt.rgba(0.24, 0.28, 0.36, 0.05)
-                    z: -1 - index
-                    // 不需要再挂一个 Behavior：scale 直接跟随 coverCard.scale，
-                    // 而 coverCard 自身已经在做 240ms 动画，这里再加会让投影滞后于封面
-                    scale: coverCard.scale * 0.995
-                }
-            }
+            // 封面投影：三层伪投影，内联实现抽成了 SoftShadow 全局共用
+            SoftShadow { target: coverCard }
 
             Rectangle {
                 id: coverCard
@@ -640,7 +627,7 @@ Item {
                 width: parent.width
                 text: root.hasSong
                       ? (app.currentArtist.length > 0 ? app.currentArtist : "未知艺人")
-                      : "在搜索页或歌单里选一首开始"
+                      : "在曲库或歌单里选一首开始"
                 color: root.inkSub
                 font.pixelSize: root.wide ? 15 : 13
                 elide: Text.ElideRight

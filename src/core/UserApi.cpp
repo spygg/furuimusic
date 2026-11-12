@@ -1,3 +1,4 @@
+#include "core/QtCompat.h"
 #include "UserApi.h"
 
 #include <QJsonArray>
@@ -153,8 +154,11 @@ HttpClient::Reply failure(const QString &message)
 bool hasNativeQrLogin(const QString &sourceId)
 {
     // 咪咕 2026-11 起也走内置扫码（passport.migu.cn 的 qrcWeb 接口），酷我走微信开放平台，一并算原生
+    // 汽水 2026-11：官方 passport/web 出码链路对浏览器常规头可直连，客户端内建「直接扫码」，
+    // 同样算原生（无需自建账号 API 服务即可登录，只是歌单同步仍未内置）
     return sourceId == QLatin1String("qq") || sourceId == QLatin1String("kugou")
-           || sourceId == QLatin1String("migu") || sourceId == QLatin1String("kuwo");
+           || sourceId == QLatin1String("migu") || sourceId == QLatin1String("kuwo")
+           || sourceId == QLatin1String("qishui");
 }
 
 } // namespace
@@ -263,9 +267,10 @@ QString UserApi::loginUnavailableReason(const QString &sourceId) const
     }
     if (sourceId == QLatin1String("qishui")) {
         return QStringLiteral(
-            "汽水音乐的登录接口由字节 secsdk 保护（x-helios / x-medusa 设备签名），"
-            "签名在客户端算不出来。扫码链路已内置，但需要在「设置 → 网络 → 账号 API 服务」"
-            "配置实现了 /auth 契约的服务（src/tools/account_api_server.py 或自建 qishui-api）。");
+            "汽水音乐现在已内置扫码登录（官方 passport 出码链路直连，无需配置账号 API 服务）："
+            "点「二维码」出码后用抖音 App 扫一扫即可登录。"
+            "仅密码 / 账号密码登录不可用；扫码确认后如需同步「我的歌单 / 收藏」，"
+            "再配置自建账号 API 服务（src/tools/account_api_server.py 或自建 qishui-api）。");
     }
     return QStringLiteral("该平台暂无可用的应用内登录方式。");
 }
@@ -283,8 +288,10 @@ QString UserApi::qrUnavailableReason(const QString &sourceId) const
                               "i.kuwo.cn/US/platform/WeixinCallback.jsp。应用已内置这条链路；"
                               "QQ / 微博回调是 HTML 弹窗，需要内嵌浏览器，故未内置。") + apiHint;
     if (sourceId == QLatin1String("qishui"))
-        return QStringLiteral("汽水的出码与会话换取都在账号 API 服务侧完成（设备签名 + 风控），"
-                              "客户端按 /auth 契约轮询。") + apiHint;
+        // 汽水：官方 passport 出码链路已内建（出码/轮询走 api.qishui.com/passport/web/*），
+        // 扫码可用，无需再配置自建账号 API 服务（账号接口本身不提供扫码，仅用于歌单同步）
+        return QStringLiteral("");
+
     return QStringLiteral("该平台未配置二维码登录接口，请在「设置」里配置实现了扫码端点的账号 API 服务。");
 }
 

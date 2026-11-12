@@ -23,6 +23,7 @@
 | 在线 JS 音源 | 支持导入洛雪（LX Music）风格的在线脚本 URL；内嵌 QuickJS 2024-01-13 执行，脚本能力、版本、检查状态、失败原因分类（syntax/runtime/timeout/network/tls/http/empty）全部可查；支持启用/禁用/更新/删除与持久化 |
 | 播放器 | 播放/暂停、上一首/下一首、进度拖动、音量、顺序/列表循环/单曲循环/随机、播放队列；沉浸式播放页与底部播放栏的版式参照 AlgerMusicPlayer（见下） |
 | 曲库 | 收藏、播放历史、搜索历史、下载、按平台筛选歌单/收藏/历史；**发现榜单**页并发拉取各平台公开榜单（网易 `/api/toplist`、酷我 `wapi.kuwo.cn/api/www/bang`），未登录也能浏览榜单与曲目，参考 AlgerMusicPlayer 的 toplist / personalized 组织方式 |
+| MV 播放 | 曲库内「MV」Tab（全部/内地/港台/欧美/日本/韩国，16:9 封面网格 + 播放量角标 + 滚动续页），点封面进沉浸式播放器：进度拖动、音量/静音、单曲循环、全屏、上一个/下一个、单击暂停、双击 ±10s、控制条自动隐藏。视频解码：Qt 6 用 QtMultimedia 官方 FFmpeg 后端；Qt 5 用自编译 FFmpeg（`FfmpegVideoPlayer`），未编译该后端时才退回 DirectShow 并如实提示 |
 | 主题与窗口 | 深色 / 浅色 / 跟随系统（Windows 注册表、macOS `defaults`、Linux `gsettings`，Android 回退浅色）；无边框窗口 + 自绘标题栏 + 边缘缩放 |
 | 本地 OpenAPI | 可选的本地 HTTP 服务开关，便于外部控制播放 |
 | 手机适配 | 窄屏布局（`MainMobile.qml`）、竖屏截图见 `src/docs/screenshots/` |
@@ -37,21 +38,40 @@
 - 播放页自带全套控件，进入后底部播放栏让位（`visible: pageIndex !== 3`），避免同屏两套进度/音量。
 - 只让封面做「弹入」，整页不做 opacity 0→1 的淡入：一旦动画被打断（离屏截图、窗口刚显示）整页会永久停在透明而白屏。
 
+## MV 播放（参照 AlgerMusicPlayer）
+
+MV 按 AlgerMusicPlayer 的 `MvPlayer.vue` + `views/mv/index.vue` 组织：
+
+- **入口**：曲库新增「MV」Tab（主导航仍是曲库 / 播放 / 账号 / 设置 4 项），地区分类 全部 / 内地 / 港台 / 欧美 / 日本 / 韩国，16:9 封面网格 + 播放量角标 + 滚动续页；歌曲行与播放页的「播放 MV」按钮也能直接进。数据用网易云 `/api/mv/all`，取址走 `/api/song/enhance/play/mv/url`，封面统一加 `?param=400y225` 并升 HTTPS（原图实测 1~7 秒，缩略图约 80ms）。
+- **播放器**：窗口级全屏覆盖层（桌面左侧导航与底部播放栏、移动端标签栏与迷你条都被盖住），黑底 contain 视频；顶部标题 / 艺人 / 解码后端徽标，底部进度、播放暂停、上下曲、音量静音、单曲循环、全屏；播放中静止 3 秒自动收起控制条；单击暂停、双击左右 ±10s、中间全屏；缓冲、失败、播完都有明确状态与出口。
+- **跨 Qt 版本**：Qt 5 的 `MediaPlayer` 用 `volume` / `VideoOutput.source`，Qt 6 改为 `AudioOutput` + `MediaPlayer.videoOutput`（Qt 6 的 `VideoOutput` **没有 `source` 属性**，照搬会报 `Cannot assign to non-existent property "source"` 且黑屏）。因此拆成 `MvMedia5.qml` / `MvMedia5Ffmpeg.qml` / `MvMedia6.qml` 三份媒体原语，页面按 `platform.qtMajor` 与 `platform.ffmpegBackend` 加载，UI 只依赖归一化接口（`playing/busy/ended/position/duration/seekable/failed/open/seekTo/...`）。
+- **后端矩阵**：
+
+  | 构建 | 后端 | MP4/H.264 |
+  |---|---|---|
+  | Qt 6（Windows / Android / Linux / macOS） | QtMultimedia 官方 FFmpeg 插件（`ffmpegmediaplugin.dll` / `libavcodec.so` 等，随 `windeployqt` / `androiddeployqt` 部署） | 直接可放 |
+  | Qt 5 + 自编译 FFmpeg（Windows / Linux / macOS） | `FfmpegVideoPlayer`：FFmpeg 解码 + `QQuickPaintedItem` 出画 + `QAudioOutput` 出声，不经过任何 mediaservice 插件 | 直接可放 |
+  | Qt 5 且未编译 FFmpeg | DirectShow，缺 MP4 分离器 | 页面如实提示并给「用系统播放器打开」与「重试」 |
+
+  Qt5 后端由 `src/scripts/build_ffmpeg_desktop.sh`（Windows 包装 `build_ffmpeg_desktop.bat`）从**随仓库入库**的 `src/thirdparty/ffmpeg/FFmpeg-n6.1.2` 编译静态库。桌面 Qt 5 的 CMake 构建会在 configure 阶段自动调用该脚本（详见「Qt 5 自编译 FFmpeg 播放后端」），再自动定义 `FURUI_HAVE_FFMPEG` 并链接；qmake 与手工脚本仍使用传统产物目录。检测不到产物就退回 DirectShow，**不影响构建**。这套编译脚本参照 `reference/*_build_script` 的源码布局与增量约定，但组件裁剪按「播放」重做——reference 里的 FFmpeg 是屏幕**编码**用的（禁用 avformat/swresample、只留 h264 编码器），不能直接拿来播 MP4。
+
 ## 支持平台与依赖
 
 | 平台 | 状态 | 工具链 |
 |---|---|---|
-| Windows 10/11 x64 | 已本机实测 | Qt 5.15.2 + MinGW 8.1（本项目主验证组合）；CMake 也支持 Qt 6（MSVC 组合未实测） |
-| Linux x64 | 构建脚本已提供，**未实机验证** | Qt 5.15.2 gcc_64 或 Qt 6 + CMake |
-| macOS | 构建脚本已提供，**未实机验证** | Qt 5.15.2 clang_64 或 Qt 6 + CMake |
+| Windows 10/11 x64 | 已本机实测（Qt 5 / Qt 6 双构建，Qt 5 已实播 MV） | **主交付**：Qt 6.11.1 `mingw_64` + MinGW 13.1 + CMake/Ninja（官方 FFmpeg 插件）；Qt 5.15.2 + MinGW 8.1 qmake 兼容构建（自编译 FFmpeg 静态库） |
+| Linux x64 | 构建脚本已提供，**未实机验证** | Qt 6.8.3 `gcc_64` + CMake（`qtmultimedia` 模块） |
+| macOS | 构建脚本已提供，**未实机验证** | Qt 6.8.3 `clang_64` + CMake（`qtmultimedia` 模块） |
 | Android arm64-v8a | Qt 6 arm64-v8a APK 已在本机编译并签名（Qt 5 打包配置保留、未实跑）；界面已在用户设备跑通，图标栅格化与网易二维码风控本轮修复待复测 | Qt 5.15.2 + qmake + NDK 21.3 + JDK 11；或 Qt 6.11 + CMake + NDK 27 + JDK 17 |
 
 通用要求：
 
-- CMake ≥ 3.16、C++14。
-- Qt 模块：Core、Gui、Network、Sql、Multimedia、Qml、Quick（Android 使用 Qt 6 时额外走 `qt_add_executable`）。
+- CMake ≥ 3.16；Qt 6 构建自动切 C++17，Qt 5 兼容构建仍是 C++14。
+- Qt 模块：Core、Gui、Network、Sql、Multimedia、Qml、Quick（Qt 6 把 Multimedia 拆成独立模块包，安装时要显式选 `qtmultimedia`；Android 使用 Qt 6 时额外走 `qt_add_executable`）。
 - 第三方库：QuickJS 2024-01-13 与 qrcodegen 已以源码形式内嵌在 `src/core/3rd/`，无需额外安装。
-- Windows 运行 HTTPS 需要 OpenSSL 1.1 的 DLL（`libssl-1_1-x64.dll`、`libcrypto-1_1-x64.dll`）与 Qt 运行库放在可执行文件旁或 PATH 中，否则会出现 `TLS initialization failed`。这两个 DLL 已随仓库放在 `src/packaging/windows/openssl/`（含来源、SHA256 与许可证），Release 的 Windows 包会一并打入。
+- **Qt 6 视频解码不需要单独编译 FFmpeg**：QtMultimedia 自带官方后端（Windows 为 `ffmpegmediaplugin.dll` + `avcodec-61.dll` 等，Android 为 `libavcodec.so` 等），`windeployqt` / `androiddeployqt` 会随包部署。**Qt 5 桌面**要走「自编译 FFmpeg 后端」小节，产物静态链接进 exe，运行时不额外带 DLL。两种构建共用 `src/thirdparty/ffmpeg/FFmpeg-n6.1.2` 源码（仅 Qt5 用），互不干扰；这份 FFmpeg n6.1.2 源码已随仓库入库（约 8.2k 文件 / 93 MB），clone 后 CMake 就能直接自动编译，不必另外下载。仓库只收录播放链路用的 n6.1.2，QtRemoteDesktop 编码链遗留的 n3.4.8 / oneVPL / nv-codec-headers / amf-sdk / install 由 `.gitignore` 排除。
+- FFmpeg 播放后端编译需要 Git Bash（Windows 提供 `sh`/`nasm`）、对应 Qt 的 MinGW 或系统 gcc/clang；Windows 用系统 SChannel、macOS 用 SecureTransport 提供 TLS，Linux 需要 OpenSSL 开发包（`libssl-dev`），都不需要额外运行时库。
+- Qt 6 Windows 用 Schannel / 自带的 OpenSSL 3，无需再手工塞 OpenSSL 1.1 DLL；仓库 `src/packaging/windows/openssl/` 仅供 Qt 5 兼容构建使用。
 
 ## 构建
 
@@ -59,18 +79,51 @@
 
 ```bash
 cmake -S src -B build -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_PREFIX_PATH=/path/to/Qt/5.15.2/gcc_64   # Windows 为 mingw81_64
+      -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64   # Windows 为 6.11.1/mingw_64
 cmake --build build --target FuruiMusic --parallel
 ```
 
 - 主目标 `FuruiMusic`（单配置生成器产物如 `build/FuruiMusic`，MSVC 多配置为 `build/Release/FuruiMusic.exe`）。
+- 仓库根新增了薄转发 `CMakeLists.txt`，所以 `cmake -S . -B build ...` 同样可用（此时 exe 在 `build/src/`）。**同一个 build 目录不能在 `-S .` 与 `-S src` 之间切换**（CMakeCache 记录源目录），换入口就换一个构建目录。
+- Qt 5 桌面**推荐 Qt 5.15.2**（工程 QML 全部 `import QtQuick 2.15 / QtQuick.Controls 2.15`）。直接指定 Qt 与编译器即可，**FFmpeg 静态库由 CMake 在 configure 阶段自动编译**，无需先跑任何脚本：
+
+  ```bash
+  cmake -S . -B build-qt5 -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_PREFIX_PATH="E:/programes/Qt/Qt/5.15.2/mingw81_64" \
+        -DCMAKE_C_COMPILER="E:/programes/Qt/Qt/Tools/mingw810_64/bin/gcc.exe" \
+        -DCMAKE_CXX_COMPILER="E:/programes/Qt/Qt/Tools/mingw810_64/bin/g++.exe"
+  cmake --build build-qt5 --target FuruiMusic --parallel
+  ```
+
+  根 `CMakeLists.txt` 会从 `CMAKE_C_COMPILER` 同目录自动找 `mingw32-make` 与 `windres`（不用手工加 PATH）；若换了自定义工具链，也可显式给 `-DCMAKE_MAKE_PROGRAM=<path>/mingw32-make.exe`。FFmpeg 用**同一个 gcc** 编译，产物目录按编译器 ABI 分开（`build_output/ffmpeg-qt5-x64-GNU_8_1_0` 等），不会把 64 位 `.a` 链进 32 位 exe。首次 configure 多花几分钟，之后脚本增量跳过。
+- **Qt 5.7 只能编译、不能运行**：C++ 侧已加 `src/core/QtCompat.h` 兼容层（`QRandomGenerator`、`Qt::SkipEmptyParts`、`qEnvironmentVariable`、`windowStates()`、`QSysInfo::machineUniqueId()`、`QByteArray` 忽略大小写比较等），Qt 5.7 + MinGW 5.3 32 位能完整编译并链接出 `FuruiMusic.exe`（含自编译 FFmpeg 静态库）；但 Qt 5.7 只提供 `QtQuick 2.7 / Controls 2.0 / Layouts 1.0 / Window 2.2`，qmlscene 实测 `module "QtQuick" version 2.15 is not installed`，运行时 QML 无法加载。因此老 Qt 5 仅作编译兼容验证，实际运行请用 Qt 5.15.2 或 Qt 6。
 - 核心逻辑在静态库 `FuruiCore` 中，桌面与 Android 共用。
 - 迁移期保留的 Widgets 旧前端默认不构建，需要时加 `-DFURUI_BUILD_LEGACY_WIDGETS=ON`。
-- Qt 5 的 MinGW 构建里，QuickJS 固定用 `-O1`（`-O2` 会触发 MinGW 8.1 的 SEH 汇编错误）；MSVC 下不走该编译参数。
+- 老 Qt 5 / MinGW 8.1 构建里，QuickJS 固定用 `-O1`（`-O2` 会触发 MinGW 8.1 的 SEH 汇编错误）；MSVC 与 MinGW 13.1 下不走该编译参数。
+- **Windows 一键脚本** `src/scripts/build_windows.bat` 主路径已切 Qt 6.11.1 + MinGW 13.1：CMake 增量编译 → 复制 `bin/FuruiMusic.exe` → Qt 6 `windeployqt`（会带出 `ffmpegmediaplugin.dll` 与 `avcodec-61.dll`，MV 才能播）。设置 `FURUI_BUILD_QT5=1` 会先增量编译 Qt5 专用 FFmpeg，再跑 Qt 5 qmake 兼容构建，产物落在 `build/desktop-qt5`，不覆盖主交付。
 
-### 桌面（qmake，可选）
+### 桌面（qmake，仅 Qt 5 兼容路径）
 
-`src/FuruiMusic.pro` 同样可构建统一 QML 前端，仓库里的 `src/scripts/build_windows.bat`、`build_linux.sh`、`build_macos.sh` 就是包装脚本。注意脚本里的 Qt 路径是作者本机路径（如 `E:\programes\Qt\...`），在其他机器上需要改成自己的 Qt 目录或用 `QT_DIR` 环境变量。
+`src/FuruiMusic.pro` 仍可构建统一 QML 前端。检测到 `build_output/ffmpeg-qt5` 时自动启用 `FURUI_HAVE_FFMPEG` 并静态链接，Qt 5 也能在应用内播 MP4；未检测到则退回 DirectShow 降级说明。可用 `FURUI_QT5_OUTDIR` 指定输出目录避免与 Qt 6 主产物混放，用 `FURUI_FFMPEG_ROOT` 指定别的 FFmpeg 前缀。注意脚本里的 Qt 路径是作者本机路径（如 `E:\programes\Qt\...`），在其他机器上需要改成自己的 Qt 目录或用 `QT_DIR` 环境变量。
+
+### Qt 5 自编译 FFmpeg 播放后端
+
+**CMake 用户无需手工执行**：桌面 Qt 5 的 `cmake` 会在 configure 阶段自动编译并链接（首次数分钟，之后增量跳过）。下面两份脚本主要给 qmake / 手工构建用：
+
+```bash
+sh src/scripts/build_ffmpeg_desktop.sh          # Linux / macOS / Git Bash
+src\scripts\build_ffmpeg_desktop.bat            # Windows（自动找 Git Bash）
+```
+
+- 源码：`src/thirdparty/ffmpeg/FFmpeg-n6.1.2`（已入库）；手工产物：`build_output/ffmpeg-qt5/{include,lib}` 下 5 个静态库 `libavformat/libavcodec/libavutil/libswscale/libswresample.a`。
+- **CMake 自动编译**（`src/cmake/FuruiFfmpeg.cmake`，`FURUI_AUTO_BUILD_FFMPEG` 默认 `ON`）：把 `CMAKE_C_COMPILER` 原样传给 FFmpeg 的 `--cc`，保证静态库与主程序 ABI 一致；产物按工具链分到 `build_output/ffmpeg-qt5-<位数>-<编译器>-<版本>`（例：`ffmpeg-qt5-x86-GNU_5_3_0`、`ffmpeg-qt5-x64-GNU_8_1_0`），中间目录为 `build/ffmpeg-qt5-<tag>`。产物目录里的 `.toolchain` 记录编译器 target / 版本 / FFmpeg 版本，指纹不符就换目录重编，**旧产物一律保留不删除**。只在 Qt 5 桌面生效，Qt 6、Android、MSVC 都不触发。
+- 常用开关：`-DFURUI_AUTO_BUILD_FFMPEG=OFF` 只探测不编译（离线/已有产物）；`-DFURUI_FFMPEG_ROOT=<prefix>` 显式指定产物前缀；`-DFURUI_FFMPEG_JOBS=16` 并行度；`-DFURUI_FFMPEG_RECONFIGURE=ON` 强制重跑 configure（不删产物）；`-DFURUI_FFMPEG_VERSION=6.1.2` 指定源码版本。缺 Git Bash / 编译失败时只打印 WARNING 并退回 DirectShow，不会让 Qt 5 主构建失败。
+- qmake（`src/FuruiMusic.pro`）仍默认读 `build_output/ffmpeg-qt5`；要复用 CMake 自动编译的带 tag 目录，设环境变量 `FURUI_FFMPEG_ROOT=<该目录>` 再跑 qmake 即可。
+- 增量：产物齐全就直接复用，**不删除任何已有构建产物**；`FURUI_FFMPEG_RECONFIGURE=1` 可强制重跑 configure（仍不删产物）。`FURUI_FFMPEG_JOBS` / `-j` 控制并行度，`FURUI_MINGW_BIN` 指定 MinGW 工具链，`FURUI_FFMPEG_CC` 指定与 Qt 相同的 gcc（CMake 自动传入）。
+- 裁剪：`--disable-everything` 后只启用播放所需 demuxer / decoder / parser / protocol（mov/mp4、h264/hevc、aac/mp3、file/http/https/tls/httpproxy…），不编任何编码器、复用器、程序，比全量 FFmpeg 小得多。`httpproxy` 是给有 `https_proxy` 的环境走 HTTP CONNECT 隧道用的，缺了它 https 直链会报 `Protocol not found`。
+- TLS：Windows 用系统 SChannel、macOS 用 SecureTransport、Linux 用 OpenSSL（缺开发包时自动禁用 https 并给出警告）。
+- CMake configure 日志会打印「Qt5 FFmpeg 后端：检查/编译 <prefix>」以及「已启用 / 未找到」；qmake 打印 `Qt5 FFmpeg playback backend enabled`。
+- Windows 上两个已踩过的坑：Git Bash 的 `TMPDIR` 必须换成工程内 POSIX 路径（否则 configure 的 sanity test 失败）；`mingw32-make.exe` 不认 `/g/...`，脚本会把 `SRC_PATH`/`Makefile` 的 include 重写成 `G:/...`，并手工拷贝头文件而不是用 MSYS 的 `make install`。
 
 ### Android
 
@@ -156,7 +209,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
     - 三条接口都要求 **JSON 请求体**（form 提交直接 415）；`www.kuwo.cn/api/www` 那条老路对
       非浏览器指纹一律回 `The request is illegal!`，不要再走
     - QQ / 微博登录的回调是 HTML 弹窗，需要内嵌浏览器，本工程未链 WebEngine，故未内置
-  - 汽水音乐：登录由字节 secsdk 设备签名保护（`x-helios` / `x-medusa`），纯 HTTP + 无客户端时无法完成
+  - 汽水音乐：登录现已内置官方 `passport/web` 出码链路（`GET /passport/web/get_qrcode → POST /passport/web/check_qrconnect → GET /luna/pc/me?aid=386088`，浏览器常规头直连即可，服务端完成 secsdk 设备签名）；二维码出码后需用抖音 App 扫一扫确认，扫描后自动登录。未配置自建账号 API 服务即可「直接扫码」；自建账号 API 服务 /auth 契约仍作为可选部署链路（主要用于歌单同步）。
   - 登录页版式参考 [AlgerMusicPlayer](https://github.com/algerkong/AlgerMusicPlayer)：平台先选、方式用分段 Tab、
     二维码带「生成中 / 已扫码 / 已过期」三态遮罩，出错时原因常驻卡片底部
 
@@ -164,7 +217,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 
 - **内置平台接口是示例模板**：`src/config/sources.json` 里的搜索/取链端点可按需替换；部分平台的取链依赖登录态或已失效，失败时界面会给出如实原因，而不是静默跳过。
 - **在线音源现状**：详见下节「在线音源实测（2026-11-09）」；本次 5 个公开源都只声明 `musicUrl`、没有 `search`，所以不会贡献搜索结果。
-- **扫码登录**：网易云默认走密码，扫码若被账号级风控（8821）拒绝会自动切到密码页；QQ / 酷狗 / 咪咕 / 酷我（微信）扫码为内置原生链路。
+- **扫码登录**：网易云默认走密码，扫码若被账号级风控（8821）拒绝会自动切到密码页；QQ / 酷狗 / 咪咕 / 酷我（微信）扫码为内置原生链路；汽水扫码为内置官方 passport 直连链路（出码后用抖音 App 扫一扫）。
 - **宿主能力边界**：在线脚本运行时的 `crypto.aesEncrypt`、`crypto.rsaEncrypt`、`utils.zlib` 为显式桩（本次 5 个公开源未使用），用到时会明确报“宿主未实现该能力”。
 - **未实机验证**：Linux、macOS 仅有构建配置/脚本；Android 已完成 Qt 6 编译、签名与界面真机运行，图标/二维码修复待用户复测；Windows 为唯一完整实机验证的桌面平台。
 - **旧 Widgets 前端**：`src/desktop/` 为迁移期保留，默认不编译、不再新增功能。
@@ -197,26 +250,30 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 
 ## 目录结构
 
-工程根已统一为 `src/`：CMake / qmake 构建入口、源码、资源、配置、脚本、Android 打包资源与文档全部在其中；仓库根只保留说明、许可证与 CI（以及不入库的 `bin/`、`build/`、`reference/` 本机产物）。因此所有构建命令都以 `src` 为源目录。
+源码、资源、配置、脚本、Android 打包资源与文档都在 `src/`；仓库根另有 `CMakeLists.txt`（薄转发到 `src`，方便 `cmake -S . -B build`）、说明、许可证与 CI（以及不入库的 `bin/`、`build*/`、`reference/` 本机产物）。构建命令用 `-S src` 或 `-S .` 均可，但同一个 build 目录不能混用两种源目录。
 
 ```
 .
 ├── README.md  LICENSE  .gitignore     # 仓库说明与元信息
+├── CMakeLists.txt                     # 根入口：add_subdirectory(src)
 ├── .github/workflows/                 # Release 工作流（见下）
 ├── bin/                               # 本机运行产物：exe / DLL / APK（不入库）
-├── build/                             # 本机增量构建目录（不入库）
+├── build*/                            # 本机增量构建目录（不入库）
+├── build_output/                      # FFmpeg 静态库等本机产物（不入库）
 ├── reference/                         # 本地研究用参考源码（不入库）
 └── src/                               # 工程根（全部源码、资源、构建入口）
     ├── CMakeLists.txt                 # 主构建（FuruiCore / FuruiMusic）
+    ├── cmake/FuruiFfmpeg.cmake        # Qt5 FFmpeg 自动编译 / ABI 分目录 / 探测
     ├── FuruiMusic.pro                 # qmake 构建（桌面与 Qt5 Android）
     ├── config/sources.json            # 平台音源配置与契约（搜索/取链/登录/账号 API）
     ├── core/                          # C++ 后端：音源、聚合、账号、播放、曲库、在线音源宿主
     │   └── 3rd/                       # QuickJS、qrcodegen（源码内嵌）
+    ├── thirdparty/ffmpeg/FFmpeg-n6.1.2/  # 入库的 FFmpeg 源码（Qt5 播放后端）
     ├── ui/                            # QML 前端、主题、平台适配、main.cpp
     ├── desktop/                       # 迁移期 Widgets 旧前端（默认不构建）
     ├── android/  android_qt6/         # Android 打包资源（manifest、res、OpenSSL）
     ├── packaging/windows/openssl/     # Windows Release 所需 OpenSSL 1.1 DLL 与许可证
-    ├── scripts/                       # 各平台构建脚本
+    ├── scripts/                       # 各平台构建脚本（含 build_ffmpeg_desktop.*）
     ├── tools/                         # 账号 API / 自定义音源示例服务
     └── docs/                          # 架构/迁移/研究文档与截图
 ```
@@ -227,8 +284,8 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 
 | Job | Runner / 工具链 | 产物 |
 |---|---|---|
-| Windows (MinGW 8.1 x64) | `windows-2022`，Qt 5.15.2 `win64_mingw81` + MinGW 8.1 + Ninja | `FuruiMusic-windows-x64.zip`（含 windeployqt 运行库、QML 模块，以及仓库内 `src/packaging/windows/openssl/` 的 OpenSSL 1.1 DLL 与许可证） |
-| Linux (x86_64) | `ubuntu-22.04`，Qt 5.15.2 `gcc_64` | `FuruiMusic-linux-x86_64.AppImage` |
+| Windows (MinGW 13.1 x64) | `windows-2022`，Qt 6.8.3 `win64_mingw` + MinGW 13.1 + Ninja + `qtmultimedia` | `FuruiMusic-windows-x64.zip`（windeployqt 部署 Qt 6 运行库、QML 模块与 FFmpeg 多媒体插件） |
+| Linux (x86_64) | `ubuntu-22.04`，Qt 6.8.3 `gcc_64` + `qtmultimedia` | `FuruiMusic-linux-x86_64.AppImage` |
 | macOS (x86_64) | `macos-15-intel`，Qt 6.8.3 `clang_64` | `FuruiMusic-macos-x86_64.zip`（`FuruiMusic.app`，bundle id `cn.furui.music`） |
 | Android arm64-v8a | `ubuntu-22.04`，Qt 6.8.3 `android_arm64_v8a` + `gcc_64` host、NDK 26.1、JDK 17、build-tools 35 | `FuruiMusic-android-arm64-v8a.apk`（debug keystore 签名，zipalign + `apksigner verify` 复检） |
 | Publish release | `ubuntu-22.04`，`needs: [build, build-android]` | 汇总全部 artifacts，`generate_release_notes` 自动生成发布说明 |

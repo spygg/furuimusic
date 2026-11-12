@@ -9,9 +9,10 @@
 #include <QJsonValue>
 #include <QSet>
 #include <QDateTime>
-#include <QRandomGenerator>
+#include "core/QtCompat.h"
 #include <memory>
 #include <QUrl>
+#include <QUrlQuery>
 #include <functional>
 #include <memory>
 
@@ -31,12 +32,13 @@
 #include <QImage>
 #include <QPainter>
 #include <QCryptographicHash>
-#include <QRandomGenerator>
+#include "core/QtCompat.h"
 
 namespace Furui {
 
 // 前置声明：定义在文件后半段的匿名命名空间里，二维码分支要用它拿浏览器常规头
-namespace { QVariantMap neeWebHeaders(const QString &cookie = QString()); }
+namespace { QVariantMap neeWebHeaders(const QString &cookie = QString());
+         QVariantMap qishuiPassportHeaders(const QString &cookie = QString()); }
 
 static QStringList listOf(const QVariant &v)
 {
@@ -277,8 +279,8 @@ void AuthManager::startQrLogin(const QString &sourceId)
         startKuwoWxQr();
         return;
     }
-    // 汽水：登录闭环在账号 API 服务侧（secsdk 设备签名 + 扫码状态机都在服务端），
-    // 客户端只按契约跑：GET /auth/qrcode -> POST /auth/qrcode/status -> POST /auth/me
+    // 汽水：登录闭环走官方 passport 出码链路（secsdk 设备签名由服务端完成），
+    // 客户端按 GET /passport/web/* → GET /luna/pc/me 直接跑；也可配置自建账号 API 服务走其 /auth 契约。
     if (sourceId == QLatin1String("qishui")) {
         cancelQrLogin();
         startQishuiQr();
@@ -1152,6 +1154,19 @@ QVariantMap neeWebHeaders(const QString &cookie)
     return h;
 }
 
+// 汽水 passport 类端点（出码 / check_qrconnect）的常规浏览器头：UA 用真实 Chrome 内核，
+// 服务端出码接口对浏览器指纹（UA/头）有校验，裸 QNetworkAccessManager 请求会被拒。
+QVariantMap qishuiPassportHeaders(const QString &cookie)
+{
+    QVariantMap h;
+    h.insert(QStringLiteral("User-Agent"),
+        QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"));
+    h.insert(QStringLiteral("Accept"), QStringLiteral("application/json, text/plain, */*"));
+    if (!cookie.isEmpty()) h.insert(QStringLiteral("Cookie"), cookie);
+    return h;
+}
+
 // 把网易云的业务错误码翻译成能行动的提示，别把所有失败都叫「风控」
 QString neeLoginError(const QString &code, const QString &serverMessage)
 {
@@ -1422,6 +1437,17 @@ void AuthManager::neteaseEapiPost(const QString &apiPath, const QJsonObject &pay
                                     Netease::eapiForm(api, body), handler);
 }
 
+QString AuthManager::qishuiCookieHeader() const
+{
+    // Qt5 的 QMap range-for 只给 value，取键值对必须走迭代器
+    QString cookie;
+    for (auto it = m_qsCookies.constBegin(); it != m_qsCookies.constEnd(); ++it) {
+        if (!cookie.isEmpty()) cookie += QLatin1Char(';');
+        cookie += it.key() + QLatin1Char('=') + it.value();
+    }
+    return cookie;
+}
+
 void AuthManager::generateQrImage(const QString &content, const QString &sourceId)
 {
     using namespace qrcodegen;
@@ -1446,6 +1472,31 @@ void AuthManager::generateQrImage(const QString &content, const QString &sourceI
         m_qrImagePath = path;
         emit qrChanged();
     }
+}
+
+bool AuthManager::saveQrDataUrl(const QString &dataUrl, const QString &sourceId)
+{
+    // 汽水 passport 出码返回的 qrcode 是 data:image/png;base64,... 形态的完整二维码图片，
+    // 不能拿它当二维码内容再用 QrCode 重新编码 —— 直接解码落盘即可。
+    const int comma = dataUrl.indexOf(QLatin1Char(','));
+    if (comma < 0) {
+        generateQrImage(dataUrl, sourceId);
+        return !m_qrImagePath.isEmpty();
+    }
+    const QByteArray img = QByteArray::fromBase64(dataUrl.mid(comma + 1).toUtf8());
+    if (img.isEmpty()) {
+        generateQrImage(dataUrl, sourceId);
+        return !m_qrImagePath.isEmpty();
+    }
+    const QString path = Settings::filePath(QStringLiteral("qr_") + sourceId + QStringLiteral(".png"));
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) return false;
+    f.write(img);
+    f.close();
+    if (f.error() != QFileDevice::NoError) return false;
+    m_qrImagePath = path;
+    emit qrChanged();
+    return true;
 }
 
 void AuthManager::loginKugouPassword(const QString &account, const QString &password)
@@ -1510,7 +1561,7 @@ void AuthManager::loginKugouPassword(const QString &account, const QString &pass
     p.insert(QStringLiteral("appid"), 1005);
     p.insert(QStringLiteral("clientver"), 20489);
     p.insert(QStringLiteral("userid"), 0);
-    p.insert(QStringLiteral("clienttime"), QDateTime::currentSecsSinceEpoch());
+    p.insert(QStringLiteral("clienttime"), furuiCurrentSecsSinceEpoch());
     const QString url = Kugou::signedUrl(
         QStringLiteral("https://login.user.kugou.com/v9/login_by_pwd"), p, body,
         Kugou::Keyparam::App);
@@ -1623,12 +1674,13 @@ void AuthManager::loginByPassword(const QString &sourceId, const QString &accoun
         return;
     }
     if (driver != QLatin1String("netease")) {
-        // 汽水这类「网页端也被 SDK 签名挡住」的平台，按实际卡点给话，别用一句「未内置」糊过去
+        // 汽水这类「网页端也被 SDK 签名挡住」的平台，按实际卡点给话，别用一句「未内置」糊过去；
+        // 2026-11 已确认官方 passport 出码链路对浏览器常规头直连可用，密码登录仍无内置实现
         if (sourceId == QLatin1String("qishui")) {
             emit loginStateChanged(sourceId, false,
-                QStringLiteral("汽水的登录需要官方客户端的原生签名组件，"
-                               "本机未检测到汽水音乐客户端"));
-            emit toast(QStringLiteral("需要本机安装汽水音乐客户端"));
+                QStringLiteral("汽水音乐仅支持扫码登录：客户端已内置官方 passport 出码链路，"
+                               "请改用「二维码」登录。"));
+            emit toast(QStringLiteral("汽水音乐仅支持扫码登录"));
             return;
         }
         emit loginStateChanged(sourceId, false,
@@ -2381,36 +2433,95 @@ void AuthManager::loginKuwoPhone(const QString &phone, const QString &smsCode)
         });
 }
 
-// ---- 汽水音乐：扫码登录（走自建账号 API 服务）----
-// 汽水接口由字节 secsdk 保护（x-helios / x-medusa 设备签名），纯 HTTP 在客户端算不出来，
-// 所以登录闭环放在账号 API 服务里（参考 src/tools/qishui_login_flow_test.py 探针契约）：
-//   GET  {base}/auth/qrcode         -> {token, qrcode_index_url, expire_time}
-//   POST {base}/auth/qrcode/status  -> {status, sessionid}   # 扫码确认后才有 sessionid
-//   POST {base}/auth/me             -> {profile:{uid,nickname,avatar}, cookie?}
-// 客户端只负责出码、轮询、落库，不接触任何签名算法。
+// ---- 汽水音乐：扫码登录（官方 passport 直连 / 可配置走自建账号 API 服务）----
+// 2026-11 实测：汽水官方的出码/轮询/换 session 端点（passport/web/*，再换 luna/pc/me 拉账号）其实就是
+// 普通浏览器形态的 passport 接口，带浏览器常规头即可直接拿到二维码与轮询链路，客户端不需要字节
+// secsdk 设备签名。因此未配置自建账号 API 服务时，客户端即可「直接扫码」登录：
+//   1) GET  https://api.qishui.com/passport/web/get_qrcode/ -> {data:{token,qrcode,...}}
+//   2) POST https://api.qishui.com/passport/web/check_qrconnect/ -> {data:{status, auth:{sessionid}}}
+//   3) GET  https://api.qishui.com/luna/pc/me?aid=386088          -> {data:{my_info:{uid,...}}}
+// 与 src/tools/qishui_login_flow_test.py 的探针链路保持一致；用户在「设置 → 网络 → 账号 API 服务」
+// 填了自建服务时，才走其 GET /auth/qrcode -> POST /auth/qrcode/status -> POST /auth/me 契约。
 void AuthManager::startQishuiQr()
 {
-    const UserApiConfig cfg = UserApi::instance()->config(QStringLiteral("qishui"));
+    const QString sourceId = QStringLiteral("qishui");
+    m_qrMode = sourceId;
+    m_qrSource = sourceId;
+    m_qsToken.clear();
+    m_qsCookies.clear();
+    m_qrImagePath.clear();
+    emit qrChanged();
+
+    const UserApiConfig cfg = UserApi::instance()->config(sourceId);
     QString base = cfg.base.trimmed();
     if (base.isEmpty())
         base = Settings::string(QStringLiteral("accountApiBase")).trimmed();
     while (base.endsWith(QLatin1Char('/')))
         base.chop(1);
 
-    m_qrMode = QStringLiteral("qishui");
-    m_qrSource = QStringLiteral("qishui");
-    m_qsBase = base;
-    m_qsToken.clear();
-    m_qrImagePath.clear();
-    emit qrChanged();
-
     if (base.isEmpty()) {
-        m_qrStatus = QStringLiteral("汽水扫码需要先配置账号 API 服务（设置 → 网络 → 账号 API 服务）");
+        // 未配置自建账号 API 服务：直接用官方 passport 端点完成扫码登录，无需任何外部服务
+        m_qsBase.clear();
+        m_qrHint = QStringLiteral("正在获取汽水二维码…");
+        m_qrStatus = QStringLiteral("准备中");
         emit qrChanged();
-        emit toast(m_qrStatus);
+        QUrl url(QStringLiteral("https://api.qishui.com/passport/web/get_qrcode/"));
+        QUrlQuery query;
+        query.addQueryItem(QStringLiteral("passport_jssdk_version"), QStringLiteral("2.4.13"));
+        query.addQueryItem(QStringLiteral("passport_jssdk_type"), QStringLiteral("normal"));
+        query.addQueryItem(QStringLiteral("is_from_ttaccountsdk"), QStringLiteral("1"));
+        query.addQueryItem(QStringLiteral("aid"), QStringLiteral("386088"));
+        query.addQueryItem(QStringLiteral("next"), QStringLiteral("https://api.qishui.com"));
+        query.addQueryItem(QStringLiteral("need_logo"), QStringLiteral("false"));
+        query.addQueryItem(QStringLiteral("need_short_url"), QStringLiteral("false"));
+        query.addQueryItem(QStringLiteral("is_new_login"), QStringLiteral("1"));
+        url.setQuery(query);
+        QVariantMap headers = qishuiPassportHeaders(QStringLiteral());
+        headers.insert(QStringLiteral("Accept"), QStringLiteral("application/json, text/plain, */*"));
+        HttpClient::instance()->request(
+            QStringLiteral("GET"), url, headers, QByteArray(),
+            [this, sourceId](const HttpClient::Reply &r) {
+                if (m_qrMode != QLatin1String("qishui")) return;
+                if (!r.ok) {
+                    m_qrStatus = QStringLiteral("二维码获取失败：") + shortNetworkError(r.error);
+                    emit qrChanged();
+                    return;
+                }
+                // 出码响应里的 Set-Cookie（passport_csrf_token）要回灌进轮询的 Cookie 头
+                QMap<QString, QString> cookies = m_qsCookies;
+                for (const QString &c : r.setCookies) {
+                    const QString kv = c.section(QLatin1Char(';'), 0, 0).trimmed();
+                    const int eq = kv.indexOf(QLatin1Char('='));
+                    if (eq <= 0) continue;
+                    cookies.insert(kv.left(eq).trimmed().toLower(), kv.mid(eq + 1).trimmed());
+                }
+                m_qsCookies = cookies;
+                QJsonObject root = Json::rootOf(r.json).toObject();
+                const QJsonObject data = root.contains(QStringLiteral("data"))
+                                             ? root.value(QStringLiteral("data")).toObject() : root;
+                m_qsToken = Json::firstString(data, {QStringLiteral("token"),
+                                                     QStringLiteral("qrcode_token")});
+                const QString qr = Json::firstString(data, {
+                    QStringLiteral("qrcode"), QStringLiteral("qrcode_url"),
+                    QStringLiteral("login_url"), QStringLiteral("url")});
+                if (m_qsToken.isEmpty() || qr.isEmpty()) {
+                    m_qrStatus = QStringLiteral("账号接口未返回二维码（缺 token 或 qrcode 字段）");
+                    emit qrChanged();
+                    emit toast(m_qrStatus);
+                    return;
+                }
+                m_qrHint = QStringLiteral("请用抖音 App 扫一扫");
+                m_qrStatus = QStringLiteral("等待扫码");
+                if (!saveQrDataUrl(qr, sourceId)) generateQrImage(qr, sourceId);
+                // generateQrImage 只负责画图；轮询由这里显式启动（token 已在手）
+                startQrPolling();
+                emit qrChanged();
+            });
         return;
     }
 
+    // 已配置自建账号 API 服务（/auth 契约）→ 走服务侧链路
+    m_qsBase = base;
     m_qrHint = QStringLiteral("正在获取汽水二维码…");
     m_qrStatus = QStringLiteral("准备中");
     emit qrChanged();
@@ -2450,9 +2561,86 @@ void AuthManager::startQishuiQr()
 
 void AuthManager::pollQishuiQr()
 {
-    if (!m_polling || m_qsBase.isEmpty() || m_qsToken.isEmpty()) {
+    if (!m_polling || m_qsToken.isEmpty()) {
         m_poll.stop();
         m_polling = false;
+        return;
+    }
+    // 未配置自建账号 API 服务 → 官方 passport/web/check_qrconnect；已配置 → 服务侧 /auth/qrcode/status
+    if (m_qsBase.isEmpty()) {
+        QUrl url(QStringLiteral("https://api.qishui.com/passport/web/check_qrconnect/"));
+        QUrlQuery query;
+        query.addQueryItem(QStringLiteral("need_logo"), QStringLiteral("false"));
+        query.addQueryItem(QStringLiteral("need_short_url"), QStringLiteral("false"));
+        query.addQueryItem(QStringLiteral("is_frontier"), QStringLiteral("true"));
+        query.addQueryItem(QStringLiteral("token"), m_qsToken);
+        query.addQueryItem(QStringLiteral("is_new_login"), QStringLiteral("1"));
+        query.addQueryItem(QStringLiteral("next"), QStringLiteral("https://api.qishui.com"));
+        url.setQuery(query);
+        QVariantMap headers = qishuiPassportHeaders(qishuiCookieHeader());
+        headers.insert(QStringLiteral("Content-Type"), QStringLiteral("application/x-www-form-urlencoded"));
+        QUrlQuery bodyQuery;
+        bodyQuery.addQueryItem(QStringLiteral("passport_jssdk_version"), QStringLiteral("2.4.13"));
+        bodyQuery.addQueryItem(QStringLiteral("passport_jssdk_type"), QStringLiteral("normal"));
+        bodyQuery.addQueryItem(QStringLiteral("is_from_ttaccountsdk"), QStringLiteral("1"));
+        bodyQuery.addQueryItem(QStringLiteral("aid"), QStringLiteral("386088"));
+        bodyQuery.addQueryItem(QStringLiteral("iid"), QStringLiteral("27960026095955"));
+        bodyQuery.addQueryItem(QStringLiteral("need_logo"), QStringLiteral("false"));
+        bodyQuery.addQueryItem(QStringLiteral("need_short_url"), QStringLiteral("false"));
+        bodyQuery.addQueryItem(QStringLiteral("is_frontier"), QStringLiteral("true"));
+        bodyQuery.addQueryItem(QStringLiteral("token"), m_qsToken);
+        bodyQuery.addQueryItem(QStringLiteral("is_new_login"), QStringLiteral("1"));
+        bodyQuery.addQueryItem(QStringLiteral("next"), QStringLiteral("https://api.qishui.com"));
+        const QByteArray formBody = bodyQuery.toString().toUtf8();
+        HttpClient::instance()->request(
+            QStringLiteral("POST"), url, headers, formBody,
+            [this](const HttpClient::Reply &r) {
+                if (m_qrMode != QLatin1String("qishui") || !m_polling) return;
+                if (m_qsBase.isEmpty()) {
+                    // 官方 passport 链路：扫码确认后 sessionid 走 Set-Cookie，这里统一收口
+                    QMap<QString, QString> cookies = m_qsCookies;
+                    for (const QString &c : r.setCookies) {
+                        const QString kv = c.section(QLatin1Char(';'), 0, 0).trimmed();
+                        const int eq = kv.indexOf(QLatin1Char('='));
+                        if (eq <= 0) continue;
+                        cookies.insert(kv.left(eq).trimmed().toLower(), kv.mid(eq + 1).trimmed());
+                    }
+                    m_qsCookies = cookies;
+                    const QString session = cookies.value(QStringLiteral("sessionid"));
+                    const QString st = Json::firstString(
+                                          Json::rootOf(r.json).toObject(),
+                                          {QStringLiteral("status"), QStringLiteral("state"),
+                                           QStringLiteral("msg"), QStringLiteral("message")}).toLower();
+                    handleQishuiPollReply(r, session, st);
+                    return;
+                }
+                const QJsonObject body{{QStringLiteral("token"), m_qsToken}};
+                QVariantMap jsonHeaders;
+                jsonHeaders.insert(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
+                HttpClient::instance()->request(
+                    QStringLiteral("POST"), QUrl(m_qsBase + QStringLiteral("/auth/qrcode/status")), jsonHeaders,
+                    QJsonDocument(body).toJson(QJsonDocument::Compact),
+                    [this](const HttpClient::Reply &r) {
+                        if (m_qrMode != QLatin1String("qishui") || !m_polling) return;
+                        if (!r.ok) {
+                            // 单次网络抖动不该终止会话，继续下一轮
+                            m_qrStatus = QStringLiteral("轮询失败，正在重试：") + shortNetworkError(r.error);
+                            emit qrChanged();
+                            return;
+                        }
+                        QJsonObject root = Json::rootOf(r.json).toObject();
+                        const QJsonObject data = root.contains(QStringLiteral("data"))
+                                                     ? root.value(QStringLiteral("data")).toObject() : root;
+                        const QString session = Json::firstString(data, {
+                            QStringLiteral("sessionid"), QStringLiteral("session_id"),
+                            QStringLiteral("session")});
+                        const QString st = Json::firstString(data, {
+                            QStringLiteral("status"), QStringLiteral("state"),
+                            QStringLiteral("msg"), QStringLiteral("message")}).toLower();
+                        handleQishuiPollReply(r, session, st);
+                    });
+                return;
+            });
         return;
     }
     const QJsonObject body{{QStringLiteral("token"), m_qsToken}};
@@ -2469,6 +2657,7 @@ void AuthManager::pollQishuiQr()
                 return;
             }
             QJsonObject root = Json::rootOf(r.json).toObject();
+
             const QJsonObject data = root.contains(QStringLiteral("data"))
                                          ? root.value(QStringLiteral("data")).toObject() : root;
             const QString session = Json::firstString(data, {
@@ -2495,31 +2684,62 @@ void AuthManager::pollQishuiQr()
                 emit qrChanged();
                 return;
             }
-            if (st.contains(QLatin1String("scanned")) || st.contains(QLatin1String("confirm"))
-                || st.contains(QStringLiteral("已扫"))) {
-                m_qrStatus = QStringLiteral("已扫码，请在手机上确认登录");
-            } else {
-                m_qrStatus = QStringLiteral("等待扫码");
-            }
-            emit qrChanged();
+            handleQishuiPollReply(r, session, st);
         });
+    }
+
+void AuthManager::handleQishuiPollReply(const HttpClient::Reply &r, const QString &sessionId,
+                                       const QString &st)
+{
+    if (m_qrMode != QLatin1String("qishui") || !m_polling) return;
+    if (!r.ok) {
+        // 单次网络抖动不该终止会话，继续下一轮
+        m_qrStatus = QStringLiteral("轮询失败，正在重试：") + shortNetworkError(r.error);
+        emit qrChanged();
+        return;
+    }
+    if (!sessionId.isEmpty()) {
+        m_poll.stop();
+        m_polling = false;
+        m_qrStatus = QStringLiteral("扫码成功，正在读取账号…");
+        emit qrChanged();
+        finishQishuiLogin(sessionId);
+        return;
+    }
+    if (st.contains(QLatin1String("expire")) || st.contains(QStringLiteral("过期"))
+        || st.contains(QLatin1String("timeout")) || st.contains(QLatin1String("invalid"))
+        || st.contains(QLatin1String("cancel"))) {
+        m_poll.stop();
+        m_polling = false;
+        m_qrImagePath.clear();
+        m_qrStatus = QStringLiteral("二维码已过期，请重新获取");
+        emit qrChanged();
+        return;
+    }
+    if (st.contains(QLatin1String("scanned")) || st.contains(QLatin1String("confirm"))
+        || st.contains(QStringLiteral("已扫"))) {
+        m_qrStatus = QStringLiteral("已扫码，请在手机上确认登录");
+    } else {
+        m_qrStatus = QStringLiteral("等待扫码");
+    }
+    emit qrChanged();
 }
 
 // 用 sessionid 换账号资料：资料只是锦上添花，拿不到也要把会话存下来
 void AuthManager::finishQishuiLogin(const QString &sessionId)
 {
     const QString sourceId = QStringLiteral("qishui");
-    const QJsonObject body{{QStringLiteral("sessionid"), sessionId}};
-    QVariantMap headers;
-    headers.insert(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
-    HttpClient::instance()->request(
-        QStringLiteral("POST"), QUrl(m_qsBase + QStringLiteral("/auth/me")), headers,
-        QJsonDocument(body).toJson(QJsonDocument::Compact),
-        [this, sourceId, sessionId](const HttpClient::Reply &r) {
-            QString uid;
-            QString nick;
-            QString avatar;
-            QString cookie;
+    QString cookie = QStringLiteral("sessionid=") + sessionId;
+    QString uid;
+    QString nick;
+    QString avatar;
+    if (m_qsBase.isEmpty()) {
+        // 官方直连链路：GET /luna/pc/me?aid=386088，Cookie 带上 sessionid
+        HttpClient::instance()->request(
+            QStringLiteral("GET"),
+            QUrl(QStringLiteral("https://api.qishui.com/luna/pc/me") + QStringLiteral("?aid=386088")),
+            qishuiPassportHeaders(cookie), QByteArray(),
+            [this, sourceId, sessionId, uid, nick, avatar, cookie](const HttpClient::Reply &r) mutable {
             if (r.ok) {
                 QJsonObject root = Json::rootOf(r.json).toObject();
                 const QJsonObject data = root.contains(QStringLiteral("data"))
@@ -2541,6 +2761,44 @@ void AuthManager::finishQishuiLogin(const QString &sessionId)
                 cookie = QStringLiteral("sessionid=") + sessionId;
             // 收尾：把码面清掉、状态收敛成「登录成功」（QML 的 qrPhase 认「成功」这个词 → done），
             // 否则卡片上会一直挂着一张已经用过的二维码和「正在读取账号…」的文案。
+            m_polling = false;
+            m_poll.stop();
+            m_qrImagePath.clear();
+            m_qrStatus = QStringLiteral("登录成功");
+            emit qrChanged();
+            saveSession(sourceId, onlyCookiePairs(cookie), uid, nick, avatar,
+                        nick.isEmpty() ? QStringLiteral("汽水音乐登录成功")
+                                       : QStringLiteral("汽水音乐登录成功：") + nick);
+            });
+            return;
+        }
+    // 自建账号 API 服务（/auth 契约）链路：POST {base}/auth/me，body 带 sessionid
+    const QJsonObject body{{QStringLiteral("sessionid"), sessionId}};
+    QVariantMap headers;
+    headers.insert(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
+    HttpClient::instance()->request(
+        QStringLiteral("POST"), QUrl(m_qsBase + QStringLiteral("/auth/me")), headers,
+        QJsonDocument(body).toJson(QJsonDocument::Compact),
+        [this, sourceId, sessionId, uid, nick, avatar, cookie](const HttpClient::Reply &r) mutable {
+            if (r.ok) {
+                QJsonObject root = Json::rootOf(r.json).toObject();
+                const QJsonObject data = root.contains(QStringLiteral("data"))
+                                                 ? root.value(QStringLiteral("data")).toObject() : root;
+                const QJsonObject profile = data.contains(QStringLiteral("profile"))
+                                                 ? data.value(QStringLiteral("profile")).toObject()
+                                                 : data;
+                uid = Json::firstString(profile, {QStringLiteral("uid"), QStringLiteral("user_id"),
+                                                  QStringLiteral("id")});
+                nick = Json::firstString(profile, {QStringLiteral("nickname"),
+                                                   QStringLiteral("nick_name"),
+                                                   QStringLiteral("name")});
+                avatar = Json::firstString(profile, {QStringLiteral("avatar"),
+                                                     QStringLiteral("avatar_url")});
+                cookie = Json::firstString(data, {QStringLiteral("cookie"),
+                                                  QStringLiteral("cookies")});
+            }
+            if (cookie.trimmed().isEmpty())
+                cookie = QStringLiteral("sessionid=") + sessionId;
             m_polling = false;
             m_poll.stop();
             m_qrImagePath.clear();

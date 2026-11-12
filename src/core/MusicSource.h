@@ -22,6 +22,9 @@ public:
     using PlaylistsCallback = std::function<void(const QVector<Playlist> &)>;
     using PlayableCallback = std::function<void(const Playable &)>;
     using StringCallback = std::function<void(const QString &)>;
+    using MvCallback = std::function<void(bool ok, const QUrl &url, const QString &error)>;
+    // MV 榜单：扁平化的卡片数据（id/title/artist/cover/playCount/duration/source）
+    using MvListCallback = std::function<void(const QVector<QVariantMap> &items, bool hasMore)>;
     using ReplyCallback = HttpClient::Callback;
 
     explicit MusicSource(const SourceDesc &desc, QObject *parent = nullptr);
@@ -44,6 +47,11 @@ public:
     // 搜索接口不返回封面时（网易云新版只给 album.picId），用配置里的
     // cover 端点按歌曲 id 单独补一张，避免播放页/播放栏一直是占位图。
     void cover(const Song &song, StringCallback cb);
+    // 解析歌曲的 MV 播放地址：mvid 优先取搜索结果透传的原始字段（Song.extra），
+    // 没有再用 mvInfo 端点查歌曲详情；取址失败退低一档清晰度再试一次。
+    void mv(const Song &song, MvCallback cb);
+    // 公开 MV 榜单（无需登录），按地区分页；字段映射完全由 mvList 端点描述。
+    void mvList(const QString &area, int limit, int offset, MvListCallback cb);
 
     void userPlaylists(PlaylistsCallback cb);
     void userFavorites(SongsCallback cb);

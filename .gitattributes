@@ -1,0 +1,12 @@
+# 行尾约定（本机 core.autocrlf=true，必须显式锁住 Git Bash 要执行的脚本）
+#
+# FFmpeg 源码树整体禁止任何换行转换：configure、Makefile、*.mak、*.sh 一旦
+# 被转成 CRLF，Git Bash 下会报 `\r: command not found`，CMake 自动编译直接失败。
+# 上游自带 .gitattributes 只处理 *.pnm / tests/ref/fate/sub-scc，深层规则仍优先。
+/src/thirdparty/ffmpeg/** -text
+/src/thirdparty/ffmpeg/FFmpeg-n6.1.2/.gitattributes -text
+
+# 工程自己的 POSIX 脚本保持 LF；.bat 显式锁 CRLF（cmd.exe 下更稳），
+# 免得别人用 core.autocrlf=false clone 后拿到 LF 版批处理。
+/src/scripts/*.sh text eol=lf
+/src/scripts/*.bat text eol=crlf

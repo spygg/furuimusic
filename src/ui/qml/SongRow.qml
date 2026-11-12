@@ -24,6 +24,8 @@ Rectangle {
     property bool showFavorite: true
     property bool showDownload: false
     property bool showRemove: false
+    // 该行是否提供「播放 MV」入口（由使用处按平台的 MV 支持情况传入）
+    property bool showMv: false
     // 交错入场序号（传 index % 30）；< 0 表示不参与交错
     property int stagger: -1
     // 触屏设备没有悬停：操作胶囊常驻，行内只留「更多」入口
@@ -36,6 +38,7 @@ Rectangle {
         var m = []
         if (showFavorite) m.push("favorite")
         if (showAdd) m.push("add")
+        if (showMv) m.push("mv")
         if (showDownload) m.push("download")
         if (showRemove) m.push("remove")
         return m
@@ -44,6 +47,7 @@ Rectangle {
     function triggerAction(kind) {
         if (kind === "favorite") favoriteRequested()
         else if (kind === "add") addRequested()
+        else if (kind === "mv") mvRequested()
         else if (kind === "download") downloadRequested()
         else if (kind === "remove") removeRequested()
     }
@@ -51,6 +55,7 @@ Rectangle {
     function actionLabel(kind) {
         if (kind === "favorite") return root.favorite ? "取消收藏" : "收藏"
         if (kind === "add") return "加入播放队列"
+        if (kind === "mv") return "播放 MV"
         if (kind === "download") return "下载到本地"
         return "从播放队列移除"
     }
@@ -58,6 +63,7 @@ Rectangle {
     signal playRequested()
     signal favoriteRequested()
     signal addRequested()
+    signal mvRequested()
     signal downloadRequested()
     signal removeRequested()
 
@@ -286,6 +292,23 @@ Rectangle {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
                         onClicked: root.addRequested()
+                    }
+                }
+
+                // 播放 MV（桌面端胶囊直达；触屏端没有 hover，走「更多」菜单）
+                Item {
+                    width: theme.touchMin; height: theme.touchMin
+                    visible: root.showMv && !root.touchMode
+                    GlyphIcon {
+                        anchors.centerIn: parent
+                        name: "video"
+                        size: 15
+                        color: root.cSub
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.mvRequested()
                     }
                 }
 

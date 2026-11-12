@@ -1,6 +1,7 @@
 #include "AppController.h"
 
 #include <QDesktopServices>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -408,7 +409,7 @@ QString AppController::loginAppName(const QString &id) const
     // 酷我的内置扫码是「微信扫码」（走开放平台 snsapi_login + i.kuwo.cn 回调），
     // 提示文案必须说微信，不能写酷我 App —— 拿酷我 App 扫这张码是扫不动的
     if (id == QLatin1String("kuwo"))    return QStringLiteral("微信");
-    if (id == QLatin1String("qishui"))  return QStringLiteral("汽水音乐");
+    if (id == QLatin1String("qishui"))  return QStringLiteral("抖音"); // 汽水二维码的扫码目标是抖音 App（同账号体系）
     const QString n = SourceConfig::instance()->nameOf(id);
     return n.isEmpty() ? QStringLiteral("官方 App") : n;
 }
@@ -907,6 +908,106 @@ void AppController::downloadResult(int index)
     });
 }
 
+// ---- MV 播放 ----
+void AppController::openMv(const Song &song)
+{
+    // MV 的画面与声音独立于音频播放器，音乐继续放会两路声音重叠
+    if (playing()) togglePause();
+    setStatus(QStringLiteral("正在解析「%1」的 MV…").arg(song.title));
+    SourceManager::instance()->mv(song, [this, song](bool ok, const QUrl &url, const QString &error) {
+        if (!ok) {
+            setStatus(error);
+            emit notify(error, QStringLiteral("error"));
+            return;
+        }
+        emit mvOpened(QVariantMap{
+            {QStringLiteral("url"), url.toString()},
+            {QStringLiteral("title"), song.title},
+            {QStringLiteral("artist"), song.artist},
+            {QStringLiteral("cover"), song.cover},
+            {QStringLiteral("source"), song.source},
+            {QStringLiteral("hasPrev"), mvHasPrev()},
+            {QStringLiteral("hasNext"), mvHasNext()}});
+        setStatus(QStringLiteral("正在播放 MV：%1 - %2").arg(song.title, song.artist));
+    });
+}
+
+void AppController::playMv(int index)
+{
+    const QVector<Song> &songs = m_results->songs();
+    if (index < 0 || index >= songs.size()) return;
+    // 从歌曲行单点进入：没有榜单上下文，禁用上一个/下一个
+    m_mvIndex = -1;
+    emit mvContextChanged();
+    openMv(songs.at(index));
+}
+
+void AppController::playMvCurrent()
+{
+    const Song cur = PlayerController::instance()->current();
+    if (cur.title.isEmpty()) { emit notify(QStringLiteral("当前没有正在播放的歌曲"), QStringLiteral("warning")); return; }
+    m_mvIndex = -1;
+    emit mvContextChanged();
+    openMv(cur);
+}
+
+void AppController::loadMvList(const QString &area, bool append)
+{
+    if (m_mvLoading || (append && !m_mvHasMore)) return;
+    if (!append) {
+        m_mvList.clear();
+        m_mvOffset = 0;
+        m_mvHasMore = true;
+        m_mvIndex = -1;
+    }
+    m_mvArea = area.isEmpty() ? QStringLiteral("全部") : area;
+    m_mvLoading = true;
+    emit mvListChanged();
+    emit mvContextChanged();
+    const int pageSize = 24;
+    SourceManager::instance()->mvList(QStringLiteral("netease"), m_mvArea, pageSize,
+                                      m_mvOffset,
+        [this](const QVector<QVariantMap> &items, bool hasMore) {
+            for (const QVariantMap &m : items)
+                m_mvList.append(m);
+            m_mvOffset += items.size();
+            m_mvHasMore = hasMore;
+            m_mvLoading = false;
+            emit mvListChanged();
+            if (m_mvList.isEmpty())
+                emit notify(QStringLiteral("MV 榜单暂时拉不到数据，检查网络后重试"),
+                            QStringLiteral("warning"));
+        });
+}
+
+void AppController::playMvItem(int index)
+{
+    if (index < 0 || index >= m_mvList.size()) return;
+    m_mvIndex = index;
+    const QVariantMap item = m_mvList.at(index).toMap();
+    Song s;
+    s.source = item.value(QStringLiteral("source")).toString();
+    if (s.source.isEmpty()) s.source = QStringLiteral("netease");
+    s.sourceId = item.value(QStringLiteral("id")).toString();
+    s.title = item.value(QStringLiteral("title")).toString();
+    s.artist = item.value(QStringLiteral("artist")).toString();
+    s.cover = item.value(QStringLiteral("cover")).toString();
+    // 榜单条目本身就是 MV：id 即 mvid，塞进 extra 可跳过 mvInfo 那一次额外请求
+    s.extra.insert(QStringLiteral("mvid"), s.sourceId);
+    emit mvContextChanged();
+    openMv(s);
+}
+
+void AppController::playMvNext()
+{
+    if (mvHasNext()) playMvItem(m_mvIndex + 1);
+}
+
+void AppController::playMvPrev()
+{
+    if (mvHasPrev()) playMvItem(m_mvIndex - 1);
+}
+
 void AppController::togglePause() { PlayerController::instance()->togglePause(); }
 void AppController::next() { PlayerController::instance()->next(); }
 void AppController::previous() { PlayerController::instance()->previous(); }
@@ -983,6 +1084,12 @@ void AppController::refreshCustomSources()
 
 void AppController::openExternal(const QString &url)
 { QDesktopServices::openUrl(QUrl(url)); }
+
+void AppController::quitApp()
+{
+    // Android 等系统没有返回键默认行为时，通过 QML 侧「退出」入口直接收尾整个应用
+    QCoreApplication::exit(0);
+}
 
 void AppController::importScriptSource(const QString &url)
 {

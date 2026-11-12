@@ -1,6 +1,7 @@
 #include "PlatformAdapter.h"
 
 #include "../core/Settings.h"
+#include "core/QtCompat.h"
 
 #include <QQuickWindow>
 #include <QScreen>
@@ -72,7 +73,8 @@ bool PlatformAdapter::startSystemMove(QQuickWindow *window)
     if (!window || isMobile())
         return false;
     // 交给窗口管理器 / 系统做原生拖动，双击最大化等行为也随之保留
-    return window->startSystemMove();
+    // Qt < 5.15 没有该 API，furuiStartSystemMove 返回 false，QML 侧回退手算拖动
+    return furuiStartSystemMove(window);
 }
 
 bool PlatformAdapter::startSystemResize(QQuickWindow *window, int edges)
@@ -80,14 +82,14 @@ bool PlatformAdapter::startSystemResize(QQuickWindow *window, int edges)
     if (!window || isMobile() || edges == 0)
         return false;
     // Qt 5.15 起支持原生边缘拉伸；不支持的窗口管理器返回 false，由 QML 侧回退手算
-    return window->startSystemResize(Qt::Edges(edges));
+    return furuiStartSystemResize(window, Qt::Edges(edges));
 }
 
 bool PlatformAdapter::isMaximized(QQuickWindow *window) const
 {
     if (!window)
         return false;
-    const Qt::WindowStates states = window->windowStates();
+    const Qt::WindowStates states = furuiWindowStates(window);
     return states.testFlag(Qt::WindowMaximized) || states.testFlag(Qt::WindowFullScreen);
 }
 

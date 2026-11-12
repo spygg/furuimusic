@@ -10,13 +10,18 @@
         <file alias="LoginPage.qml">qml/LoginPage.qml</file>
         <file alias="CaptchaField.qml">qml/CaptchaField.qml</file>
         <file alias="PlayerPage.qml">qml/PlayerPage.qml</file>
+        <file alias="MvPage.qml">qml/MvPage.qml</file>
+        <file alias="MvMedia5.qml">qml/MvMedia5.qml</file>
+        <file alias="MvMedia5Ffmpeg.qml">qml/MvMedia5Ffmpeg.qml</file>
+        <file alias="MvMedia6.qml">qml/MvMedia6.qml</file>
         <file alias="SettingsPage.qml">qml/SettingsPage.qml</file>
         <file alias="PlayBar.qml">qml/PlayBar.qml</file>
         <file alias="QueueDrawer.qml">qml/QueueDrawer.qml</file>
-        <file alias="ControlButton.qml">qml/ControlButton.qml</file>
         <file alias="NavButton.qml">qml/NavButton.qml</file>
         <file alias="SongRow.qml">qml/SongRow.qml</file>
         <file alias="AlbumCard.qml">qml/AlbumCard.qml</file>
+        <file alias="SoftShadow.qml">qml/SoftShadow.qml</file>
+        <file alias="Toast.qml">qml/Toast.qml</file>
         <file alias="EmptyState.qml">qml/EmptyState.qml</file>
         <file alias="art/default_cover.jpg">art/default_cover.jpg</file>
     </qresource>

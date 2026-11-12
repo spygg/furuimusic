@@ -1,3 +1,4 @@
+#include "core/QtCompat.h"
 #include "Types.h"
 
 #include <QRegularExpression>

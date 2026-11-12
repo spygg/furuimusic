@@ -28,11 +28,9 @@
     GET  /auth/qrcode         -> {ok, token, qrcode_index_url, expire_time}
     POST /auth/qrcode/status  -> {ok, status, sessionid?}   # 扫码确认后返回 sessionid
     POST /auth/me             -> {ok, profile:{uid,nickname,avatar}, cookie?}
+本服务的 qishui 登录端点提供「账号 API 服务 /auth 契约」链路（供已配置 accountApiBase 的部署使用）；
+客户端默认已内置官方 passport/web 出码直连（无需本服务），本服务主要提供歌单/收藏同步。
 
-汽水的真实出码/换会话需要字节 secsdk 的 x-helios / x-medusa 设备签名，纯 Python 依然算不出来，
-所以这里提供两条路：
-    --qishui-upstream http://127.0.0.1:3300   转发到你自建的 qishui-api（guowenye/qishui-api 等）
-    不带 --qishui-upstream                     演示模式：出码 -> 轮询两次 -> 自动确认，
                                                用于验证客户端整条登录链路（不是真实登录）
 """
 import argparse

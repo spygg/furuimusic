@@ -1,4 +1,5 @@
 // 福瑞音乐 - 桌面与移动共用的 QML 入口
+#include "core/QtCompat.h"
 #include <QFile>
 #include <QGuiApplication>
 #include <QIcon>
@@ -10,6 +11,7 @@
 #include <QScreen>
 #include <QTimer>
 #include <QUrl>
+#include <QVariantMap>
 #include <functional>
 #include <QtGlobal>
 
@@ -19,6 +21,9 @@
 #include "GlyphImageProvider.h"
 #include "PlatformAdapter.h"
 #include "ThemeManager.h"
+#ifdef FURUI_HAVE_FFMPEG
+#include "FfmpegVideoPlayer.h"
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -56,6 +61,11 @@ int main(int argc, char *argv[])
     if (!qEnvironmentVariableIsEmpty("FURUI_THEME"))
         theme.previewMode(qEnvironmentVariable("FURUI_THEME"));
     QQmlApplicationEngine engine;
+    // Qt5 + 自编译 FFmpeg 后端才注册；Qt6 用官方 QtMultimedia 插件，不链接 FFmpeg。
+    // MvMedia5Ffmpeg.qml 只会在 platform.ffmpegBackend 为 true 时被 Loader 加载。
+#ifdef FURUI_HAVE_FFMPEG
+    qmlRegisterType<Furui::FfmpegVideoPlayer>("FuruiMusic", 1, 0, "FfmpegVideoPlayer");
+#endif
     // 图标统一由 C++ 侧栅格化，QML 里用 image://glyph/... 引用（见 GlyphIcon.qml）
     engine.addImageProvider(QStringLiteral("glyph"), new Furui::GlyphImageProvider);
     engine.rootContext()->setContextProperty(QStringLiteral("app"),
@@ -152,6 +162,59 @@ int main(int argc, char *argv[])
                         QMetaObject::invokeMethod(a, "search",
                                                   Q_ARG(QString, wantSearch), Q_ARG(QString, QString()));
                 }
+                // FURUI_CAPTURE_TAB_EARLY=<n>：在拉数据之前就把音乐库切到目标 Tab。
+                // 抓图那一刻才切 Tab 会让隐藏页面里的 Image 来不及完成异步加载，
+                // 用它来区分「网络取不到」和「页面隐藏时没加载」两种情况。
+                const QString earlyTab = qEnvironmentVariable("FURUI_CAPTURE_TAB_EARLY");
+                if (!earlyTab.isEmpty() && window->contentItem()) {
+                    std::function<bool(QQuickItem *)> seekEarly = [&seekEarly, earlyTab](QQuickItem *it) {
+                        if (it->property("tabIndex").isValid()
+                            && it->property("tabTitles").isValid()) {
+                            it->setProperty("tabIndex", earlyTab.toInt());
+                            return true;
+                        }
+                        for (QQuickItem *c : it->childItems())
+                            if (seekEarly(c)) return true;
+                        return false;
+                    };
+                    for (QQuickItem *child : window->contentItem()->childItems())
+                        if (seekEarly(child)) break;
+                }
+                // FURUI_CAPTURE_MV=1：提前拉一次 MV 榜单，配合 FURUI_CAPTURE_TAB=5
+                // 与较长的 FURUI_CAPTURE_MS 截到真实封面网格，而不是空态
+                if (qEnvironmentVariableIntValue("FURUI_CAPTURE_MV") > 0) {
+                    if (QObject *a = engine.rootContext()
+                            ->contextProperty(QStringLiteral("app")).value<QObject *>())
+                        QMetaObject::invokeMethod(a, "loadMvList",
+                                                  Q_ARG(QString, QStringLiteral("全部")),
+                                                  Q_ARG(bool, false));
+                }
+                // FURUI_MV_PLAY_URL=<url>：无人值守验证 MV 播放后端（Qt5 自编译
+                // FFmpeg / Qt6 官方插件）。直接发 mvOpened，外壳会切到沉浸式
+                // MV 页并调用 open(url)；配 FURUI_CAPTURE_MS 等到解出画面再抓图。
+                const QString mvPlayUrl = qEnvironmentVariable("FURUI_MV_PLAY_URL");
+                if (!mvPlayUrl.isEmpty()) {
+                    if (QObject *a = engine.rootContext()
+                            ->contextProperty(QStringLiteral("app")).value<QObject *>()) {
+                        QVariantMap mv;
+                        mv.insert(QStringLiteral("url"), mvPlayUrl);
+                        mv.insert(QStringLiteral("title"), QStringLiteral("FFmpeg 后端验证"));
+                        mv.insert(QStringLiteral("artist"), QStringLiteral("FuruiMusic"));
+                        mv.insert(QStringLiteral("cover"), QString());
+                        mv.insert(QStringLiteral("hasPrev"), false);
+                        mv.insert(QStringLiteral("hasNext"), false);
+                        QMetaObject::invokeMethod(a, "mvOpened", Q_ARG(QVariantMap, mv));
+                    }
+                }
+                // FURUI_CAPTURE_TOAST=<text>：发一条带语义色的通知，用来截统一 Toast
+                const QString toastText = qEnvironmentVariable("FURUI_CAPTURE_TOAST");
+                if (!toastText.isEmpty()) {
+                    if (QObject *a = engine.rootContext()
+                            ->contextProperty(QStringLiteral("app")).value<QObject *>())
+                        QMetaObject::invokeMethod(a, "notify",
+                                                  Q_ARG(QString, toastText),
+                                                  Q_ARG(QString, QStringLiteral("success")));
+                }
                 // FURUI_CAPTURE_PLAY=<kw>：搜索并把第一条结果播起来，用来截「有歌词的播放页」。
                 // 播放页的歌词渐隐、扫光都得有歌才看得见，光切 pageIndex 只能截到空态。
                 const QString wantPlay = qEnvironmentVariable("FURUI_CAPTURE_PLAY");
@@ -174,8 +237,8 @@ int main(int argc, char *argv[])
                               ? qEnvironmentVariableIntValue("FURUI_CAPTURE_MS") : 1900;
         QTimer::singleShot(captureMs, &engine, [&engine, path] {
             if (auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0))) {
-                // FURUI_CAPTURE_PAGE 可在截图前直接切到指定页面（0 搜索 / 1 歌单 / 2 账号 /
-                // 3 播放 / 4 设置），免得为了截播放页去模拟点击侧栏
+                // FURUI_CAPTURE_PAGE 可在截图前直接切到指定页面（0 曲库 / 1 播放 /
+                // 2 账号 / 3 设置，4 是 MV 覆盖页），免得为了截播放页去模拟点击侧栏
                 const QString page = qEnvironmentVariable("FURUI_CAPTURE_PAGE");
                 if (!page.isEmpty() && window->contentItem()) {
                     // 页面索引在 MainDesktop / MainMobile 里，外壳是经 Loader 载入的，
@@ -263,7 +326,7 @@ int main(int argc, char *argv[])
         auto showPlayer = [probeWindow] {
             std::function<bool(QQuickItem *)> toPlayer = [&toPlayer](QQuickItem *it) {
                 if (it->property("pageIndex").isValid()) {
-                    it->setProperty("pageIndex", 3);
+                    it->setProperty("pageIndex", 1);
                     return true;
                 }
                 for (QQuickItem *c : it->childItems()) if (toPlayer(c)) return true;
@@ -474,7 +537,7 @@ int main(int argc, char *argv[])
                             .arg(QString::fromLatin1(tag))
                             .arg(g.x()).arg(g.y()).arg(g.width()).arg(g.height())
                             .arg(a.x()).arg(a.y()).arg(a.width()).arg(a.height())
-                            .arg(int(window->windowStates()))
+                            .arg(int(furuiWindowStates(window)))
                             .arg(platform.insetLeft()).arg(platform.insetTop())
                             .arg(platform.insetRight()).arg(platform.insetBottom())
                             .toUtf8());

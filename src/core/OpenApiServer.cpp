@@ -1,3 +1,4 @@
+#include "core/QtCompat.h"
 #include "OpenApiServer.h"
 
 #include <QHostAddress>
@@ -24,7 +25,7 @@ QByteArray headerValue(const QByteArray &request, const QByteArray &name)
         const QByteArray line = raw.trimmed();
         const int colon = line.indexOf(':');
         if (colon <= 0) continue;
-        if (line.left(colon).trimmed().compare(name, Qt::CaseInsensitive) == 0)
+        if (furuiByteArrayEqualsIC(line.left(colon).trimmed(), name))
             return line.mid(colon + 1).trimmed();
     }
     return QByteArray();

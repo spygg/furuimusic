@@ -1,19 +1,17 @@
 #include "PlayerController.h"
 
-#include <QRandomGenerator>
+#include "core/QtCompat.h"
 #include <QRegularExpression>
 
 #include <limits>
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #include <QMediaContent>
 #endif
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QStandardPaths>
-#endif
 #include <QNetworkRequest>
 
 #include "HttpClient.h"
@@ -21,8 +19,7 @@
 
 namespace Furui {
 
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-// 缓存文件后缀：QMediaPlayer 的 FFmpeg/Android 后端靠扩展名判断容器
+// 缓存文件后缀：播放器后端（Qt6 FFmpeg/Android、Qt5 DirectShow）都靠扩展名判断容器
 static QString cacheSuffixFor(const QUrl &url)
 {
     static const QStringList known = {QStringLiteral("mp3"), QStringLiteral("flac"),
@@ -32,7 +29,6 @@ static QString cacheSuffixFor(const QUrl &url)
     const QString suffix = QFileInfo(url.path()).suffix().toLower();
     return known.contains(suffix) ? suffix : QStringLiteral("mp3");
 }
-#endif
 
 PlayerController *PlayerController::instance()
 {
@@ -99,7 +95,9 @@ PlayerController::PlayerController(QObject *parent)
                     fetchWithHeaders();
                     return;
                 }
-                emit errorOccurred(m_player->errorString());
+                // Qt5 DirectShow 失败时 errorString 可能是空串，直接透传会弹一个空 toast
+                const QString msg = m_player->errorString();
+                emit errorOccurred(msg.isEmpty() ? QStringLiteral("播放失败") : msg);
             });
 #endif
 }
@@ -136,7 +134,6 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers)
 
 void PlayerController::fetchWithHeaders()
 {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     if (!m_currentUrl.isValid() || m_headers.isEmpty()) return;
     const quint64 gen = m_playGen;
     const QUrl url = m_currentUrl;
@@ -157,25 +154,30 @@ void PlayerController::fetchWithHeaders()
         QCryptographicHash::hash(url.path().toUtf8(), QCryptographicHash::Sha1).toHex());
     const QString path = dir + QLatin1Char('/') + key + QLatin1Char('.') + cacheSuffixFor(url);
 
-    if (QFileInfo(path).size() > 0) {
-        m_player->setSource(QUrl::fromLocalFile(path));
+    auto startLocal = [this](const QString &p) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        m_player->setSource(QUrl::fromLocalFile(p));
+#else
+        m_player->setMedia(QMediaContent(QUrl::fromLocalFile(p)));
+#endif
         m_player->play();
         emit stateChanged();
+    };
+
+    if (QFileInfo(path).size() > 0) {
+        startLocal(path);
         return;
     }
 
     HttpClient::instance()->download(url, m_headers, path,
-        [this, gen, path](bool ok, const QString &error) {
+        [this, gen, startLocal, path](bool ok, const QString &error) {
             if (gen != m_playGen) return;          // 期间已经切歌
             if (!ok) {
                 emit errorOccurred(QStringLiteral("播放失败：%1").arg(error));
                 return;
             }
-            m_player->setSource(QUrl::fromLocalFile(path));
-            m_player->play();
-            emit stateChanged();
+            startLocal(path);
         }, 600000);
-#endif
 }
 
 void PlayerController::togglePause()

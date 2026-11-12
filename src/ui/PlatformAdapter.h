@@ -20,6 +20,17 @@ class PlatformAdapter : public QObject {
     Q_PROPERTY(bool supportsNotification READ supportsNotification CONSTANT)
     Q_PROPERTY(int minimumWindowWidth READ minimumWindowWidth CONSTANT)
     Q_PROPERTY(int minimumWindowHeight READ minimumWindowHeight CONSTANT)
+    // Qt 主版本：Qt5/Qt6 的 QtMultimedia QML API 有差异（seek↔setPosition、
+    // Qt6 需要 AudioOutput），QML 据此加载对应的媒体变体文件
+    Q_PROPERTY(int qtMajor READ qtMajor CONSTANT)
+    // 视频解码后端：
+    //   ffmpeg       Qt6 QtMultimedia 官方 FFmpeg 插件（Windows/Android/Linux/macOS 同一套）
+    //   ffmpeg-qt5   Qt5 + 本工程自编译 FFmpeg（build_ffmpeg_desktop.sh），跨平台、不依赖 DirectShow
+    //   directshow   Qt5 且未启用自编译 FFmpeg，MP4/H.264 需要系统额外装解码器
+    // UI 据此给出准确的降级说明，不再笼统写「本机缺少 MP4 解码器」。
+    Q_PROPERTY(QString videoBackend READ videoBackend CONSTANT)
+    // QML 用它选择 MvMedia5Ffmpeg.qml（自编译后端）还是 MvMedia5.qml（DirectShow）
+    Q_PROPERTY(bool ffmpegBackend READ ffmpegBackend CONSTANT)
     // 无边框窗口相关：UI 只读这些能力位，不写平台条件判断
     Q_PROPERTY(bool framelessSupported READ framelessSupported CONSTANT)
     Q_PROPERTY(QString titleBarStyle READ titleBarStyle CONSTANT)
@@ -48,6 +59,23 @@ public:
     // 旧的最小值 480/520 会让 App 直接进不去分屏，这里必须留出余量
     int minimumWindowWidth() const { return isMobile() ? 240 : 320; }
     int minimumWindowHeight() const { return isMobile() ? 300 : 360; }
+    int qtMajor() const { return QT_VERSION_MAJOR; }
+    QString videoBackend() const {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        return QStringLiteral("ffmpeg");
+#elif defined(FURUI_HAVE_FFMPEG)
+        return QStringLiteral("ffmpeg-qt5");
+#else
+        return QStringLiteral("directshow");
+#endif
+    }
+    bool ffmpegBackend() const {
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0) && defined(FURUI_HAVE_FFMPEG)
+        return true;
+#else
+        return false;
+#endif
+    }
 
     // 桌面端才有无边框窗口；Android/iOS 用系统窗口
     bool framelessSupported() const { return isDesktop(); }

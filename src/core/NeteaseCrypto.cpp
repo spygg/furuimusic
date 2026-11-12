@@ -3,7 +3,7 @@
 
 #include <cstdio>
 #include <QJsonDocument>
-#include <QRandomGenerator>
+#include "core/QtCompat.h"
 #include <QCryptographicHash>
 
 #include <algorithm>

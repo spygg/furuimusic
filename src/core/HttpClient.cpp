@@ -1,3 +1,4 @@
+#include "core/QtCompat.h"
 #include "HttpClient.h"
 
 #include <QElapsedTimer>
@@ -69,12 +70,23 @@ void HttpClient::request(const QString &method, const QUrl &url, const QVariantM
     // 酷狗 login.user.kugou.com 全 IP 都下发 CN=*.kugou.com 的单级通配证书，
     // 按 RFC 6125 不匹配二级子域，Qt 会直接 SSL handshake failed。连接本身仍走
     // 原域名（Host/SNI 不变），这里把校验名降到证书确实覆盖的 kugou.com。
+    // setPeerVerifyName 是 Qt 5.14+ API：老 Qt 5 只能按原域名校验，
+    // 酷狗那个 CN=*.kugou.com 的端点在 Qt 5.7 上会 SSL 失败并有明确报错。
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
     if (!peerVerifyName.isEmpty() && url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0)
         req.setPeerVerifyName(peerVerifyName);
-    // Qt 6.11 已移除 FollowRedirectsAttribute，RedirectPolicyAttribute 在 Qt 5.9+ / Qt 6 均可用
+#else
+    Q_UNUSED(peerVerifyName);
+#endif
+    // Qt 6.11 已移除 FollowRedirectsAttribute，RedirectPolicyAttribute 在 Qt 5.9+ / Qt 6 均可用；
+    // Qt 5.7/5.8 只有布尔版 FollowRedirectsAttribute，语义等价地降级。
+#if QT_VERSION >= QT_VERSION_CHECK(5, 9, 0)
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                      followRedirects ? QNetworkRequest::NoLessSafeRedirectPolicy
                                      : QNetworkRequest::ManualRedirectPolicy);
+#else
+    req.setAttribute(QNetworkRequest::FollowRedirectsAttribute, followRedirects);
+#endif
     // Cookie 全部由业务层手动管理：AuthManager/MusicSource 会从 Set-Cookie 解析并
     // 自己拼 "Cookie" 头。QNAM 默认 cookieJar 会再自动附加一份，形成重复/畸形 Cookie 头，
     // 网易云对这种请求直接回 -462「检测到您的网络环境存在风险」（Android/Qt 6 尤其明显）。
@@ -157,8 +169,12 @@ void HttpClient::download(const QUrl &url, const QVariantMap &headers,
                           int timeoutMs)
 {
     QNetworkRequest req(url);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 9, 0)
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                      QNetworkRequest::NoLessSafeRedirectPolicy);
+#else
+    req.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
+#endif
     // Cookie 全部由业务层手动管理：AuthManager/MusicSource 会从 Set-Cookie 解析并
     // 自己拼 "Cookie" 头。QNAM 默认 cookieJar 会再自动附加一份，形成重复/畸形 Cookie 头，
     // 网易云对这种请求直接回 -462「检测到您的网络环境存在风险」（Android/Qt 6 尤其明显）。

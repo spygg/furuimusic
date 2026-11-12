@@ -558,6 +558,24 @@ Item {
                 wrapMode: Text.Wrap
             }
 
+            // Android / 车机：没有物理返回键兜底，给一个显式的「退出应用」入口。
+            // 桌面（含触控优先的车机桌面壳）不展示，避免多余入口。
+            RowLayout {
+                Layout.fillWidth: true
+                visible: !platform.isDesktop
+                spacing: 8
+                Text { Layout.fillWidth: true; text: "退出应用"; color: cText; font.pixelSize: 12 }
+                Button {
+                    id: quitAppBtn
+                    text: "退出"
+                    Layout.preferredWidth: 72
+                    Layout.preferredHeight: theme.touchMin
+                    background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
+                    contentItem: Text { text: quitAppBtn.text; color: cPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    onClicked: app.quitApp()
+                }
+            }
+
             Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
 
             Text {

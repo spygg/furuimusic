@@ -134,6 +134,14 @@ class AppController : public QObject {
     // 自建账号 API 服务地址（未配置时只有网易云是内置真实实现）
     Q_PROPERTY(QString accountApiBase READ accountApiBase WRITE setAccountApiBase NOTIFY settingsChanged)
     Q_PROPERTY(QVariantList scriptSources READ scriptSources NOTIFY scriptSourcesChanged)
+    // ---- MV 榜单 / 播放上下文 ----
+    // 榜单是扁平的 QVariantList（id/title/artist/cover/playCount/duration/source），
+    // GridView 直接拿它当 model；播放上下文只记索引，切上下曲由 C++ 重新解析地址
+    Q_PROPERTY(QVariantList mvList READ mvList NOTIFY mvListChanged)
+    Q_PROPERTY(bool mvLoading READ mvLoading NOTIFY mvListChanged)
+    Q_PROPERTY(bool mvHasMore READ mvHasMore NOTIFY mvListChanged)
+    Q_PROPERTY(bool mvHasPrev READ mvHasPrev NOTIFY mvContextChanged)
+    Q_PROPERTY(bool mvHasNext READ mvHasNext NOTIFY mvContextChanged)
     // ---- 应用信息 ----
     Q_PROPERTY(QString appName READ appName CONSTANT)
     Q_PROPERTY(QString version READ version CONSTANT)
@@ -190,6 +198,11 @@ public:
     QString captchaImagePath() const;
     QString accountApiBase() const;
     void setAccountApiBase(const QString &value);
+    QVariantList mvList() const { return m_mvList; }
+    bool mvLoading() const { return m_mvLoading; }
+    bool mvHasMore() const { return m_mvHasMore; }
+    bool mvHasPrev() const { return m_mvIndex > 0; }
+    bool mvHasNext() const { return m_mvIndex >= 0 && m_mvIndex + 1 < m_mvList.size(); }
     QString appName() const { return QStringLiteral("福瑞音乐"); }
     QString version() const { return QStringLiteral("1.0.0"); }
 
@@ -226,6 +239,15 @@ public:
     Q_INVOKABLE void removeQueue(int index);
     Q_INVOKABLE void clearQueue();
     Q_INVOKABLE void downloadResult(int index);
+    // MV：搜索/榜单/收藏等结果列表按下标打开；播放页用当前歌
+    Q_INVOKABLE void playMv(int index);
+    Q_INVOKABLE void playMvCurrent();
+    // MV 榜单：按地区分页拉取；append=true 用于滚到底自动续页
+    Q_INVOKABLE void loadMvList(const QString &area, bool append = false);
+    // 从榜单封面进入沉浸式播放器，并记住上下曲上下文
+    Q_INVOKABLE void playMvItem(int index);
+    Q_INVOKABLE void playMvNext();
+    Q_INVOKABLE void playMvPrev();
 
     Q_INVOKABLE void togglePause();
     Q_INVOKABLE void next();
@@ -279,9 +301,12 @@ public:
     Q_INVOKABLE void checkScriptSource(const QString &id);
     Q_INVOKABLE void checkAllScriptSources();
     Q_INVOKABLE void openExternal(const QString &url);
+    Q_INVOKABLE void quitApp();   // Android：从设置页「退出应用」直接退出
 
 signals:
     void toast(const QString &message);
+    // 带语义色的通知（kind: info / success / error / warning），给统一 Toast 组件用
+    void notify(const QString &message, const QString &kind);
     void statusChanged();
     void playerChanged();
     void playingChanged();
@@ -305,10 +330,15 @@ signals:
     void captchaChanged();
     void substituteInfo(const QString &text);
     void downloadFinished(const QString &path);
+    // MV 解析成功后外壳切到 MV 页（url/title/artist/cover/source/hasPrev/hasNext）
+    void mvOpened(const QVariantMap &mv);
+    void mvListChanged();
+    void mvContextChanged();
 
 private:
     void setStatus(const QString &text);
     void resolveAndPlay(const Song &song);
+    void openMv(const Song &song);
     void syncQueueModel();
     void syncAccountModel();
     // 按 Impl::playlistFilter 把本地全部歌单过滤后写入模型
@@ -323,6 +353,13 @@ private:
     PlaylistListModel *m_playlists;
     PlaylistListModel *m_discovery;
     AccountListModel *m_accounts;
+    // MV 榜单分页状态；m_mvIndex < 0 表示从歌曲行/播放页单点进入，无上下曲
+    QVariantList m_mvList;
+    QString m_mvArea;
+    int m_mvOffset = 0;
+    int m_mvIndex = -1;
+    bool m_mvLoading = false;
+    bool m_mvHasMore = true;
     static AppController *s_instance;
 };
 

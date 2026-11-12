@@ -17,6 +17,8 @@ public:
     using PlaylistsCallback = std::function<void(const QVector<Playlist> &)>;
     using PlayableCallback = std::function<void(const Playable &)>;
     using StringCallback = std::function<void(const QString &)>;
+    using MvCallback = std::function<void(bool ok, const QUrl &url, const QString &error)>;
+    using MvListCallback = std::function<void(const QVector<QVariantMap> &items, bool hasMore)>;
 
     static SourceManager *instance();
 
@@ -31,6 +33,9 @@ public:
     void resolve(const Song &song, const QString &quality, PlayableCallback cb);
     void lyric(const Song &song, StringCallback cb);
     void cover(const Song &song, StringCallback cb);
+    void mv(const Song &song, MvCallback cb);
+    void mvList(const QString &sourceId, const QString &area, int limit, int offset,
+                MvListCallback cb);
 
 private:
     explicit SourceManager(QObject *parent = nullptr);

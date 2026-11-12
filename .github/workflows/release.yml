@@ -24,29 +24,31 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          # Windows 使用本工程唯一完整验证过的组合：Qt 5.15.2 + MinGW 8.1 + Ninja
-          - name: Windows (MinGW 8.1 x64)
+          # 桌面三条腿统一 Qt 6：QtMultimedia 自带 FFmpeg 后端（Windows 另有 WMF 兜底），
+          # MV 才能在应用内解码 MP4/H.264；Qt 5.15 桌面只有 DirectShow，放不了 MP4。
+          # 本地主构建 Qt 6.11.1 + MinGW 13.1 已实跑，CI 用 6.8.3 与 Android/macOS 对齐。
+          - name: Windows (MinGW 13.1 x64)
             key: windows-x64
             os: windows-2022
-            qt: '5.15.2'
+            qt: '6.8.3'
             host: windows
             target: desktop
-            arch: win64_mingw81
-            # Qt 包本身不含编译器；按 install-qt-action 语法装 MinGW 8.1 工具链
-            # （tools_mingw + 变体 qt.tools.win64_mingw810，落到 Tools/mingw810_64）
-            tools: 'tools_mingw,qt.tools.win64_mingw810'
-            modules: ''
+            arch: win64_mingw
+            # Qt 包本身不含编译器；按 install-qt-action 语法装 MinGW 13.1 工具链
+            # （tools_mingw + 变体 qt.tools.win64_mingw1310，落到 Tools/mingw1310_64）
+            tools: 'tools_mingw,qt.tools.win64_mingw1310'
+            modules: 'qtmultimedia'
             artifact: FuruiMusic-windows-x64.zip
-          # Linux 构建配置与本地脚本一致，CI 环境尚未实跑
+          # Linux 同样切 Qt 6，避免 Qt5/GStreamer 依赖 runner 上不确定的解码插件
           - name: Linux (x86_64)
             key: linux-x86_64
             os: ubuntu-22.04
-            qt: '5.15.2'
+            qt: '6.8.3'
             host: linux
             target: desktop
             arch: gcc_64
             tools: ''
-            modules: ''
+            modules: 'qtmultimedia'
             artifact: FuruiMusic-linux-x86_64.AppImage
           # Qt 5.15.2 的旧 macdeployqt 在新 Xcode 下解析 otool 失败，故 macOS 用 Qt 6.8.3；
           # CMake 在 Qt 6 下自动切到 C++17（见 src/CMakeLists.txt）
@@ -92,8 +94,10 @@ jobs:
           set -o pipefail
           EXTRA=""
           if [ "${{ matrix.config.key }}" = "windows-x64" ]; then
-            # runner 默认是 MSVC 生成器，这里必须显式指定 MinGW 的 gcc/g++
+            # runner 默认是 MSVC 生成器，这里必须显式指定 MinGW 的 gcc/g++；
+            # Qt 6 配套 MinGW 13.1 不在默认 PATH，configure 与 build 两步都要补
             EXTRA="-G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++"
+            export PATH="$IQTA_TOOLS/mingw1310_64/bin:$PATH"
           fi
           cmake -S src -B build -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
@@ -101,26 +105,30 @@ jobs:
 
       - name: Build
         shell: bash
-        run: cmake --build build --config Release --parallel 2>&1 | tee build.log
+        run: |
+          set -o pipefail
+          if [ "${{ matrix.config.key }}" = "windows-x64" ]; then
+            export PATH="$IQTA_TOOLS/mingw1310_64/bin:$PATH"
+          fi
+          cmake --build build --config Release --parallel 2>&1 | tee build.log
 
-      # ---------- Windows：windeployqt（Qt 5.15.2 / MinGW） ----------
+      # ---------- Windows：windeployqt（Qt 6 / MinGW 13.1） ----------
       - name: Deploy (Windows)
         if: matrix.config.key == 'windows-x64'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:IQTA_TOOLS) { $env:PATH = "$env:IQTA_TOOLS\mingw810_64\bin;$env:PATH" }
+          if ($env:IQTA_TOOLS) { $env:PATH = "$env:IQTA_TOOLS\mingw1310_64\bin;$env:PATH" }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item build\FuruiMusic.exe dist\
-          # 不加 --qmldir 时 QtQuick/Controls 模块不会被复制；Qt 5.15 的 windeployqt
-          # 在传 --release 时会误判为 debug 并报 "Unable to find the platform plugin"，
-          # 所以这里让它自动识别（本地已用同版本工具链验证过该命令）。
+          # 不加 --qmldir 时 QtQuick/Controls 模块不会被复制；让 windeployqt 自动
+          # 识别 exe 的 Qt 版本，同时部署 Qt 6 的 FFmpeg 多媒体插件与 avcodec-61.dll
+          # 等运行库（MV 在应用内解码 MP4 就靠这一组文件）。
           windeployqt --no-translations --qmldir src\ui\qml dist\FuruiMusic.exe
-          # Qt 5.15.2 不自带 OpenSSL 1.1，缺了它所有 HTTPS 请求都会报
-          # "TLS initialization failed"；仓库内置的 1.1.1k 运行库直接放到 exe 旁
-          Copy-Item src\packaging\windows\openssl\libssl-1_1-x64.dll dist\
-          Copy-Item src\packaging\windows\openssl\libcrypto-1_1-x64.dll dist\
-          Copy-Item src\packaging\windows\openssl\LICENSE-OpenSSL-1.1.txt dist\OPENSSL-LICENSE.txt
+          # Qt 6 Windows 默认 Schannel / 自带 OpenSSL 3，不需要再塞 1.1 运行库
+          if (-not (Get-ChildItem -Path dist -Recurse -Filter 'ffmpegmediaplugin.dll' -ErrorAction SilentlyContinue)) {
+            Write-Host "::warning::未找到 FFmpeg 多媒体插件，MV 可能退回系统解码器"
+          }
           Compress-Archive -Path dist\* -DestinationPath ${{ matrix.config.artifact }} -Force
           Get-Item ${{ matrix.config.artifact }} | Select-Object Name,Length
 
@@ -204,9 +212,9 @@ jobs:
 
   # ==========================================================================
   # Android（arm64-v8a，Qt 6 + CMake/NDK）
-  # 桌面三条腿建立在 Qt 5.15 上，Android 端要求 Qt 6（qt_add_executable +
-  # qt_finalize_executable + androiddeployqt 的 Gradle 模板），所以不并进 build 矩阵。
-  # 结构参考 .github参考/workflows/release.yml 的多平台发布；本工程没有 FFmpeg，
+  # 桌面与 Android 现在统一 Qt 6，但 Android 还要 qt_add_executable +
+  # qt_finalize_executable + androiddeployqt 的 Gradle 模板与 NDK，工具链差异大，
+  # 所以仍单独一个 job。Qt 6 的 QtMultimedia 自带 FFmpeg 解码后端，两端 MV 都能在应用内播放。
   # 直接用仓库内的 src/scripts/build_android.sh 完成 CMake 配置与 make_apk。
   # Qt 6 的 CMake 流程不签名（只交 android-build-release-unsigned.apk），
   # 这里用 CI 现场生成的 debug keystore 做 zipalign + apksigner，并 verify 复检。

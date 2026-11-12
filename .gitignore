@@ -1,6 +1,9 @@
 # 构建输出（本地生成，不入库）
 /build/
 /build_check_*/
+/build_output/
+# 按工具链/Qt 版本分别做验证的构建目录（build-qt57 / build-qt515 / build-qt6 ...）
+/build-qt*/
 /debug/
 /release/
 
@@ -30,6 +33,17 @@ qrc_*.cpp
 /reference/
 # 多平台 Release 配置的本地参考副本（同 reference/，不入库）
 /.github参考/
+
+# 第三方源码：Qt 5 播放后端的 FFmpeg n6.1.2 随仓库分发（CMake 自动编译要用）。
+# 以下都是 QtRemoteDesktop 屏幕编码链的遗留源码/预编译产物，播放用不到且体积大，不入库。
+/src/thirdparty/ffmpeg/FFmpeg-n3.4.8/
+/src/thirdparty/ffmpeg/amf-sdk-1.5.3/
+/src/thirdparty/ffmpeg/nv-codec-headers-n12.2.72.0/
+/src/thirdparty/ffmpeg/oneVPL-2.17.0/
+/src/thirdparty/ffmpeg/install/
+# FFmpeg 构建中间产物（源码树内原地 configure 时才会出现）
+/src/thirdparty/ffmpeg/FFmpeg-n6.1.2/ffbuild/config.mak
+/src/thirdparty/ffmpeg/FFmpeg-n6.1.2/config.h
 
 # 本地临时目录 / 助手状态 / 截图草稿
 /.scratch_jsprobe/

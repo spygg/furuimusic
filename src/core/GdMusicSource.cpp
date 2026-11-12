@@ -1,3 +1,4 @@
+#include "core/QtCompat.h"
 #include "GdMusicSource.h"
 
 #include <QJsonArray>

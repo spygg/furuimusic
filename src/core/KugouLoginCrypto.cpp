@@ -4,7 +4,7 @@
 
 #include <QCryptographicHash>
 #include <QJsonDocument>
-#include <QRandomGenerator>
+#include "core/QtCompat.h"
 
 #include <cstring>
 

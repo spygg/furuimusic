@@ -4,7 +4,7 @@
 
 #include <QCryptographicHash>
 #include <QDateTime>
-#include <QRandomGenerator>
+#include "core/QtCompat.h"
 #include <QUrl>
 #include <QUrlQuery>
 
@@ -57,7 +57,7 @@ QVariantMap baseParams()
         {QStringLiteral("uuid"), QStringLiteral("-")},
         {QStringLiteral("appid"), 1005},
         {QStringLiteral("clientver"), 20489},
-        {QStringLiteral("clienttime"), QDateTime::currentSecsSinceEpoch()},
+        {QStringLiteral("clienttime"), furuiCurrentSecsSinceEpoch()},
     };
 }
 

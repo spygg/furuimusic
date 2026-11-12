@@ -2,6 +2,7 @@
 // 福瑞音乐 - 描述式 JSON 映射
 // 配置里的 "path" 支持：a.b.c / a.b[0].c / artists[].name（通配数组）
 // 模板字符串支持 {placeholder} 替换，由调用方传入变量表。
+#include "core/QtCompat.h"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>

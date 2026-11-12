@@ -7,7 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMessageAuthenticationCode>
-#include <QRandomGenerator>
+#include "core/QtCompat.h"
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QSysInfo>
@@ -608,7 +608,7 @@ const char kStorePrefix[] = "FM2.";
 QByteArray storageKey()
 {
     static const QByteArray key = []() {
-        QByteArray seed = QSysInfo::machineUniqueId();
+        QByteArray seed = furuiMachineUniqueId();
         if (seed.isEmpty()) {
             // 少数平台拿不到 machineUniqueId，退回到环境指纹（仍比硬编码常量强）
             seed = qgetenv("USERNAME");

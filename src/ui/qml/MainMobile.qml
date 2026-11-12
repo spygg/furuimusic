@@ -20,11 +20,19 @@ Item {
 
     property int pageIndex: 0
     property bool queueOpen: false
+    // MV 页从哪页进的，返回键/关闭就回哪页
+    property int mvReturnPage: 1
 
-    // Android 返回键：队列面板 → 播放页 → 音乐库 → 首页，逐级回退
+    // Android 返回键：队列面板 → MV 页 → 播放页 → 音乐库 → 首页，逐级回退
     function handleBack() {
         if (queueOpen) {
             queueOpen = false
+            return true
+        }
+        if (pageIndex === 4) {
+            // close() 会停掉媒体并经 requestClose 回到进入前的页；
+            // 只改 pageIndex 的话 MV 会在后台继续出声
+            mvPage.close()
             return true
         }
         if (pageIndex === 1) {
@@ -68,7 +76,8 @@ Item {
             id: pageStack
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: root.pageIndex
+            // index 4 是外壳级 MV 覆盖层，不属于页面栈；钳到 0..3 避免越界
+            currentIndex: Math.min(root.pageIndex, 3)
             onCurrentIndexChanged: {
                 // 切页必须主动收键盘：TextField 的焦点会活过页面切换（QML 不会因为
                 // 父页被 StackLayout 藏起来就失焦），不处理的话软键盘会一直盖在新页面上
@@ -94,12 +103,12 @@ Item {
             SettingsPage { }
         }
 
-        // 迷你播放条：贴底，位于页面与底部标签栏之间；进入全屏播放页（pageIndex=1）时隐藏，避免与播放页控件重复
+        // 迷你播放条：贴底，位于页面与底部标签栏之间；进入全屏播放页（pageIndex=1）或 MV 页（index 4）时隐藏，避免控件重复
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 66
             color: cCard
-            visible: root.pageIndex !== 1
+            visible: root.pageIndex !== 1 && root.pageIndex !== 4
 
             Rectangle {
                 anchors.left: parent.left
@@ -343,5 +352,27 @@ Item {
         id: pageFade
         NumberAnimation { target: pageStack; property: "opacity"; to: 0.6; duration: 70 }
         NumberAnimation { target: pageStack; property: "opacity"; to: 1; duration: 160 }
+    }
+
+    // MV 沉浸式覆盖层：盖住底部标签栏、迷你播放条与队列面板，
+    // 只保留 pageIndex=4 状态位，Android 返回键仍走 handleBack 逐级回退
+    MvPage {
+        id: mvPage
+        anchors.fill: parent
+        z: 1000
+        visible: root.pageIndex === 4
+        onRequestClose: root.pageIndex = root.mvReturnPage
+    }
+
+    // app.mvOpened 由 AppController 解析完 MV 地址后发出：
+    // 收起队列 → 记住来路页 → 切到 MV 覆盖层 → 把地址交给页面
+    Connections {
+        target: app
+        function onMvOpened(mv) {
+            root.queueOpen = false
+            if (root.pageIndex !== 4) root.mvReturnPage = root.pageIndex
+            root.pageIndex = 4
+            mvPage.open(mv)
+        }
     }
 }

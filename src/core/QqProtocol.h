@@ -11,6 +11,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
+#include <QUrl>
 
 namespace Furui {
 namespace Qq {

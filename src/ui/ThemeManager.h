@@ -31,6 +31,9 @@ class ThemeManager : public QObject {
     Q_PROPERTY(QColor vip READ vip NOTIFY paletteChanged)
     Q_PROPERTY(QColor success READ success NOTIFY paletteChanged)
     Q_PROPERTY(QColor danger READ danger NOTIFY paletteChanged)
+    // 投影基色：浅色主题用带一点冷调的深灰（黑投影在冷灰背景上发闷），
+    // 深色主题投影几乎不可见，用纯黑低透明度即可
+    Q_PROPERTY(QColor shadowTint READ shadowTint NOTIFY paletteChanged)
 
     // 形状与排版令牌
     // 这些令牌不再是常量：车机/平板的屏幕形态（全屏、分屏、旋转）会改变窗口尺寸，
@@ -84,6 +87,7 @@ public:
     QColor vip() const { return isDark() ? QColor("#F0A23C") : QColor("#E8912A"); }
     QColor success() const { return isDark() ? QColor("#35D07F") : QColor("#2ECC71"); }
     QColor danger() const { return isDark() ? QColor("#FF6B6B") : QColor("#E5484D"); }
+    QColor shadowTint() const { return isDark() ? QColor("#000000") : QColor("#3D485C"); }
 
     // 视口驱动的缩放：width/height 用 QML 的逻辑像素（Android 上约等于 dp）。
     // adaptive=false（桌面）时恒为 1.0 —— 桌面缩放交给 Qt 的高 DPI 机制，

@@ -220,64 +220,37 @@ ApplicationWindow {
         }
     }
 
-    // 全局轻提示：所有页面通过 app 信号统一在这里展示
-    Popup {
-        id: toastPopup
-        property string message: ""
-        parent: Overlay.overlay
-        x: Math.round((parent.width - width) / 2)
-        y: parent.height - height - 88
-        width: Math.min(parent.width - 48, 380)
-        height: 44
-        modal: false
-        focus: false
-        closePolicy: Popup.NoAutoClose
-        background: Rectangle {
-            color: theme.dark ? "#2C2C36" : "#FFFFFF"
-            radius: theme.radiusSm
-            border.color: theme.line
-            border.width: 1
-        }
-        contentItem: Text {
-            text: toastPopup.message
-            color: theme.text
-            font.pixelSize: theme.fontSm
-            wrapMode: Text.Wrap
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            leftPadding: 12
-            rightPadding: 12
-        }
-        Timer {
-            id: toastTimer
-            interval: 2400
-            repeat: false
-            onTriggered: toastPopup.close()
-        }
-        function showMessage(msg) {
-            message = msg
-            open()
-            toastTimer.restart()
-        }
+    // 全局轻提示：所有页面通过 app 信号统一在这里展示。
+    // 挂在窗口层而不是 Overlay.overlay，跨 Qt5/Qt6 行为一致；
+    // z 高于窗口拉伸热区，但隐藏时 visible=false 不拦截点击。
+    Toast {
+        id: toast
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Math.round(theme.spaceLg * 5)
+        z: 10000
     }
 
     Connections {
         target: app
-        function onToast(message) { toastPopup.showMessage(message) }
+        function onToast(message) { toast.show(message, "info") }
+        // 带语义色的通知（登录失败 / MV 解析失败 / 无数据等）
+        function onNotify(message, kind) { toast.show(message, kind) }
         function onSearchFinished(count, kind) {
             // count < 0 表示这次搜索被新操作作废，只收起 loading，不弹完成提示
             if (count < 0)
                 return
             if (kind === "playlist")
-                toastPopup.showMessage("搜索完成，共 " + count + " 个歌单")
+                toast.show("搜索完成，共 " + count + " 个歌单", "info")
             else if (kind === "song")
-                toastPopup.showMessage("搜索完成，共 " + count + " 首结果")
+                toast.show("搜索完成，共 " + count + " 首结果", "info")
         }
         function onLoginStateChanged(sourceId, ok, message) {
-            toastPopup.showMessage((ok ? "登录成功：" : "登录失败：") + message)
+            toast.show((ok ? "登录成功：" : "登录失败：") + message,
+                       ok ? "success" : "error")
         }
-        function onSubstituteInfo(text) { toastPopup.showMessage(text) }
-        function onDownloadFinished(path) { toastPopup.showMessage("下载完成：" + path) }
+        function onSubstituteInfo(text) { toast.show(text, "info") }
+        function onDownloadFinished(path) { toast.show("下载完成：" + path, "success") }
     }
 
 }
