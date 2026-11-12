@@ -578,6 +578,45 @@ Item {
 
             Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
 
+            // 在线检测更新：检查 -> 弹层展示更新说明 -> 同意后应用内直接下载 -> 安装
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Text { text: app.appName + " v" + app.version; color: cText; font.pixelSize: theme.fontMd }
+                    Text {
+                        Layout.fillWidth: true
+                        text: {
+                            if (updater.checking) return "正在检查更新…"
+                            if (updater.downloading)
+                                return "正在下载更新 " + (updater.progress >= 0 ? updater.progress + "%" : "…")
+                            if (updater.downloadedPath.length > 0) return "更新包已就绪：" + updater.downloadedPath
+                            if (updater.remoteVersion.length > 0
+                                && updater.remoteVersion !== app.version)
+                                return "发现新版本 v" + updater.remoteVersion
+                            return "已是最新版本"
+                        }
+                        color: (updater.remoteVersion.length > 0
+                                && updater.remoteVersion !== app.version) ? cPrimary : cSub
+                        font.pixelSize: theme.fontSm
+                        elide: Text.ElideMiddle
+                    }
+                }
+                Button {
+                    id: checkBtn
+                    text: updater.checking ? "检查中…" : "检查更新"
+                    Layout.preferredHeight: theme.touchMin
+                    enabled: !updater.checking && !updater.downloading
+                    background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
+                    contentItem: Text { text: checkBtn.text; color: cPrimary; font.pixelSize: theme.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    onClicked: updater.checkForUpdates()
+                }
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
+
             Text {
                 Layout.fillWidth: true
                 text: app.appName + " " + app.version + "\n仅用于学习研究；请使用你拥有合法授权的自定义音源"
@@ -586,6 +625,156 @@ Item {
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter
             }
+        }
+    }
+
+    // 更新弹层：设置页内聚展示，有新版本时由 checkFinished 打开
+    Rectangle {
+        id: updateOverlay
+        anchors.fill: parent
+        z: 20
+        color: "#88000000"
+        visible: opacity > 0
+        opacity: show ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 150 } }
+        property bool show: false
+        property string errorText: ""
+        // 最新版本说明 + 历史版本合并成一份滚动文本
+        readonly property string changelogAll: {
+            var t = updater.changelog
+            for (var i = 0; i < updater.history.length; ++i) {
+                var h = updater.history[i]
+                t += "\n\nv" + h.version + "\n" + h.desc
+            }
+            return t
+        }
+        // 阻断穿透点击：空白处点击不关闭，避免误触丢掉更新提示
+        MouseArea { anchors.fill: parent }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.min(parent.width - 32, 520)
+            height: Math.min(parent.height - 40, 620)
+            radius: theme.radiusLg
+            color: cCard
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 20
+                spacing: 10
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "发现新版本 v" + updater.remoteVersion
+                    color: cText
+                    font.pixelSize: 18
+                    font.bold: true
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "当前版本 v" + app.version
+                    color: cSub
+                    font.pixelSize: theme.fontSm
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "更新内容"
+                    color: cSub
+                    font.pixelSize: theme.fontSm
+                }
+                Flickable {
+                    id: logFlick
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    contentWidth: width
+                    contentHeight: logText.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+                    Text {
+                        id: logText
+                        width: logFlick.width
+                        text: updateOverlay.changelogAll
+                        color: cText
+                        font.pixelSize: theme.fontSm
+                        wrapMode: Text.Wrap
+                    }
+                    ScrollBar.vertical: ScrollBar { }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: updateOverlay.errorText.length > 0
+                    text: updateOverlay.errorText
+                    color: theme.danger
+                    font.pixelSize: theme.fontSm
+                    wrapMode: Text.Wrap
+                }
+                ProgressBar {
+                    Layout.fillWidth: true
+                    visible: updater.downloading || updater.downloadedPath.length > 0
+                    from: 0
+                    to: 100
+                    value: updater.progress >= 0 ? updater.progress : 0
+                    indeterminate: updater.downloading && updater.progress < 0
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Button {
+                        id: updateBtn
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: theme.touchMin
+                        text: updater.downloading ? "下载中…"
+                              : updater.downloadedPath.length > 0 ? "安装更新"
+                              : "下载更新"
+                        enabled: !updater.downloading
+                        background: Rectangle { radius: 6; color: updateBtn.down ? cPrimaryPress : cPrimary }
+                        contentItem: Text { text: updateBtn.text; color: "#FFFFFF"; font.pixelSize: theme.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                        onClicked: {
+                            updateOverlay.errorText = ""
+                            if (updater.downloadedPath.length > 0)
+                                updater.installUpdate()
+                            else
+                                updater.downloadUpdate()
+                        }
+                    }
+                    Button {
+                        id: laterBtn
+                        Layout.preferredWidth: Math.max(72, theme.touchMin)
+                        Layout.preferredHeight: theme.touchMin
+                        text: "稍后"
+                        enabled: !updater.downloading
+                        background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
+                        contentItem: Text { text: laterBtn.text; color: cPrimary; font.pixelSize: theme.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                        onClicked: updateOverlay.show = false
+                    }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "更新包将直接在应用内下载，完成后自动拉起安装（桌面端打开所在文件夹）"
+                    color: cSub
+                    font.pixelSize: theme.fontXs
+                    wrapMode: Text.Wrap
+                }
+            }
+        }
+    }
+
+    Connections {
+        target: updater
+        function onCheckFinished(hasUpdate, message) {
+            if (hasUpdate) {
+                updateOverlay.errorText = ""
+                updateOverlay.show = true
+            }
+        }
+        function onDownloadFinished(path) {
+            // 下载完成即自动拉起安装器（Android）或打开所在文件夹（桌面）
+            updater.installUpdate()
+        }
+        function onDownloadFailed(error) {
+            updateOverlay.errorText = error
         }
     }
 }

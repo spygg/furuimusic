@@ -29,9 +29,11 @@ msvc: QMAKE_CXXFLAGS += /utf-8
 CORE_HEADERS += \
     core/QtCompat.h \
     core/Types.h \
+    core/Version.h \
     core/Settings.h \
     core/JsonMapper.h \
     core/HttpClient.h \
+    core/UpdateChecker.h \
     core/SourceConfig.h \
     core/Library.h \
     core/MusicSource.h \
@@ -56,6 +58,7 @@ CORE_HEADERS += \
 CORE_SOURCES += \
     core/Types.cpp \
     core/HttpClient.cpp \
+    core/UpdateChecker.cpp \
     core/SourceConfig.cpp \
     core/Library.cpp \
     core/MusicSource.cpp \

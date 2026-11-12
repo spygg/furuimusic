@@ -65,6 +65,7 @@ struct Account {
 struct Playable {
     QUrl url;
     bool ok = false;
+    QString source;             // 实际提供该直链的音源 id（原平台或替代音源），用于"成功源置顶"
     bool substituted = false;   // 是否使用了替代音源
     bool needSubstitute = false; // 原平台判定为 VIP / 不可播放，需要替代音源
     QString substituteSource;   // 替代音源名称

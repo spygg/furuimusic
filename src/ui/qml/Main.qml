@@ -253,4 +253,16 @@ ApplicationWindow {
         function onDownloadFinished(path) { toast.show("下载完成：" + path, "success") }
     }
 
+    // 在线更新：启动自动检查与下载失败用全局 Toast；有新版本时引导到「设置」页，
+    // 弹层（更新说明/下载进度/安装）内聚在 SettingsPage 里
+    Connections {
+        target: updater
+        function onCheckFinished(hasUpdate, message) {
+            if (hasUpdate)
+                toast.show("发现新版本 " + updater.remoteVersion + "，可到「设置」页更新", "info")
+        }
+        function onDownloadFinished(path) { toast.show("更新包下载完成：" + path, "success") }
+        function onDownloadFailed(error) { toast.show("更新下载失败：" + error, "error") }
+    }
+
 }

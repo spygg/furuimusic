@@ -166,7 +166,7 @@ void HttpClient::request(const QString &method, const QUrl &url, const QVariantM
 
 void HttpClient::download(const QUrl &url, const QVariantMap &headers,
                           const QString &destPath, const DownloadCallback &cb,
-                          int timeoutMs)
+                          int timeoutMs, const DownloadProgressCallback &progress)
 {
     QNetworkRequest req(url);
 #if QT_VERSION >= QT_VERSION_CHECK(5, 9, 0)
@@ -224,6 +224,11 @@ void HttpClient::download(const QUrl &url, const QVariantMap &headers,
     connect(reply, &QNetworkReply::readyRead, this, [reply, file]() {
         file->write(reply->readAll());
     });
+
+    if (progress) {
+        connect(reply, &QNetworkReply::downloadProgress, this,
+                [progress](qint64 received, qint64 total) { progress(received, total); });
+    }
 
     connect(reply, &QNetworkReply::finished, this, [reply, finish, file]() {
         file->write(reply->readAll());

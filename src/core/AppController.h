@@ -8,6 +8,7 @@
 #include <QVariantList>
 
 #include "Types.h"
+#include "Version.h"
 
 namespace Furui {
 
@@ -204,7 +205,7 @@ public:
     bool mvHasPrev() const { return m_mvIndex > 0; }
     bool mvHasNext() const { return m_mvIndex >= 0 && m_mvIndex + 1 < m_mvList.size(); }
     QString appName() const { return QStringLiteral("福瑞音乐"); }
-    QString version() const { return QStringLiteral("1.0.0"); }
+    QString version() const { return QStringLiteral(FURUI_APP_VERSION); }
 
     Q_INVOKABLE QString sourceName(const QString &id) const;   // 平台 id -> 显示名
 
@@ -339,6 +340,8 @@ signals:
 private:
     void setStatus(const QString &text);
     void resolveAndPlay(const Song &song);
+    // 播放（已取到直链但播不出来）失败：逐源换源重试，成功源置顶。d->inFallback 防重入。
+    void onPlayerError(const QString &msg);
     void openMv(const Song &song);
     void syncQueueModel();
     void syncAccountModel();

@@ -18,6 +18,7 @@
 #include "../core/AppController.h"
 #include "../core/AuthManager.h"
 #include "../core/HttpClient.h"
+#include "../core/UpdateChecker.h"
 #include "GlyphImageProvider.h"
 #include "PlatformAdapter.h"
 #include "ThemeManager.h"
@@ -72,6 +73,9 @@ int main(int argc, char *argv[])
                                              Furui::AppController::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("platform"), &platform);
     engine.rootContext()->setContextProperty(QStringLiteral("theme"), &theme);
+    // 在线检测更新：设置页检查/下载/安装，QML 经 updater 属性访问
+    engine.rootContext()->setContextProperty(QStringLiteral("updater"),
+                                             Furui::UpdateChecker::instance());
     // QML 组件加载失败时 Qt 只在部分路径打印警告；排障时打开 FURUI_QML_WARN=1 可确保全量输出，
     // 否则 Loader 静默变成空壳（status=Error）很难定位。
     if (!qEnvironmentVariableIsEmpty("FURUI_QML_WARN")) {
@@ -84,6 +88,14 @@ int main(int argc, char *argv[])
 
     if (engine.rootObjects().isEmpty())
         return -1;
+
+    // 启动后延迟检查更新（多镜像拉 publish/version.json），结果走全局 Toast；
+    // 截图自检模式跳过，避免弹窗与网络等待干扰无人值守抓图
+    if (qEnvironmentVariableIsEmpty("FURUI_CAPTURE")) {
+        QTimer::singleShot(5000, &engine, [] {
+            Furui::UpdateChecker::instance()->checkForUpdates();
+        });
+    }
 
     // 无人值守截图校验：设置 FURUI_CAPTURE=<png 路径> 时抓取窗口内容后退出
     if (!qEnvironmentVariableIsEmpty("FURUI_CAPTURE")) {

@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSslSocket>
+#include <QSet>
 #include <QTimer>
 #include <QUrl>
 
@@ -224,6 +225,12 @@ struct AppController::Impl {
     quint64 discoveryGen = 0;
     // 取链是异步的：用户连点两首歌时，慢的那首不能把当前播放替换掉
     quint64 resolveGen = 0;
+    // 播放失败换源：记录当前正在播的歌，以及已尝试过的源（避免重复/死循环）；
+    // inFallback 在换源解析期间置真，换源成功开始播放后清掉，以便本次播放再失败时能试下一源。
+    Song currentSong;
+    QSet<QString> triedFallback;
+    bool inFallback = false;
+    quint64 fallbackGen = 0;
 };
 
 AppController *AppController::s_instance = nullptr;
@@ -275,8 +282,7 @@ AppController::AppController(QObject *parent)
         emit playerChanged();
     });
     connect(player, &PlayerController::errorOccurred, this, [this](const QString &msg) {
-        setStatus(msg);
-        emit toast(msg);
+        onPlayerError(msg);
     });
     connect(player, &PlayerController::requestPlay, this,
             [this](const Song &song) { resolveAndPlay(song); });
@@ -759,6 +765,10 @@ void AppController::refreshAccounts() { syncAccountModel(); }
 void AppController::resolveAndPlay(const Song &song)
 {
     if (song.title.isEmpty()) return;
+    // 开始一首新歌：重置播放失败的换源状态，记录当前歌（供失败换源复用）。
+    d->currentSong = song;
+    d->triedFallback.clear();
+    d->inFallback = false;
     setStatus(QStringLiteral("正在解析「%1」的播放地址…").arg(song.title));
 
     // 歌词/封面在「切歌」这一刻就开始取，不等播放地址解析结果。
@@ -797,12 +807,61 @@ void AppController::resolveAndPlay(const Song &song)
                 ? QStringLiteral("VIP 替代 · %1").arg(p.substituteSource)
                 : (song.vip ? QStringLiteral("VIP") : QString());
         d->currentSourceLabel = SourceConfig::instance()->nameOf(song.source);
+        // 原平台取链成功：把成功源置顶，让后续换源优先尝试它（"成功源放到第一位"）。
+        SourceManager::instance()->promoteSource(song.source);
         PlayerController::instance()->playUrl(p.url, p.headers);
         Library::instance()->addHistory(song);
         setStatus(p.substituted ? p.message : QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist));
         if (p.substituted) emit substituteInfo(p.message);
         emit playerChanged();
     });
+}
+
+void AppController::onPlayerError(const QString &msg)
+{
+    // 播放失败（已取到直链但播不出来）：尝试自动换源。
+    // d->inFallback 为 true 表示正处于上一次换源的解析过程中或已成功换源正在播放，
+    // 不再二次触发；只有用户主动切歌（resolveAndPlay）才会清掉它。
+    Song song = d->currentSong;
+    if (song.title.isEmpty() || d->inFallback) {
+        setStatus(msg);
+        emit toast(msg);
+        return;
+    }
+    d->inFallback = true;
+    const quint64 gen = ++d->fallbackGen;
+    // 跳过：原平台（它已失败）+ 本次换源流程里已经试过的候选源。
+    const QStringList exclude = QStringList() << song.source << d->triedFallback.values();
+    SourceManager::instance()->resolveAlternate(song, exclude, d->quality,
+        [this, gen, msg, song](const Playable &r) {
+            if (gen != d->fallbackGen) return;     // 期间用户已切到别的歌，丢弃迟到结果
+            if (r.ok) {
+                d->triedFallback.insert(r.source);
+                // 成功源置顶：custom 永远最前，内置平台按序排到第一。
+                SourceManager::instance()->promoteSource(r.source);
+                d->substituteBadge = r.substituted ? r.substituteSource
+                                                  : (song.vip ? QStringLiteral("VIP") : QString());
+                d->currentSourceLabel = SourceConfig::instance()->nameOf(song.source)
+                        + (r.source == QLatin1String("custom")
+                               ? QString() : QStringLiteral(" → %1").arg(r.substituteSource));
+                // 放开 inFallback：若本次换源播放仍失败，errorOccurred 会再次进来试下一源；
+                // 试过的源已记入 triedFallback，不会重复，也不会死循环。
+                d->inFallback = false;
+                PlayerController::instance()->playUrl(r.url, r.headers);
+                Library::instance()->addHistory(song);
+                setStatus(r.message.isEmpty()
+                              ? QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist)
+                              : r.message);
+                emit notify(r.message.isEmpty() ? QStringLiteral("已自动换源继续播放")
+                                              : r.message, QStringLiteral("info"));
+                emit playerChanged();
+                return;
+            }
+            // 所有候选源都失败：终止换源，原样提示播放失败。
+            d->inFallback = false;
+            setStatus(msg);
+            emit toast(msg);
+        });
 }
 
 void AppController::playResult(int index)

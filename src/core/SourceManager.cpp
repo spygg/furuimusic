@@ -5,6 +5,8 @@
 #include <QPair>
 #include <QTimer>
 #include <algorithm>
+#include <functional>
+#include <memory>
 
 #include "CustomSource.h"
 #include "JsonMapper.h"
@@ -27,6 +29,12 @@ SourceManager::SourceManager(QObject *parent)
     const QVector<SourceDesc> descs = SourceConfig::instance()->sources();
     for (const SourceDesc &d : descs)
         m_sources.append(new MusicSource(d, this));
+    // 音源优先级：优先用持久化的覆盖默认顺序（避免每次启动都从默认序重来）。
+    const QString saved = Settings::string(QStringLiteral("sourceOrder"));
+    if (!saved.isEmpty())
+        m_sourceOrder = saved.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (MusicSource *s : m_sources)
+        if (!m_sourceOrder.contains(s->id())) m_sourceOrder.append(s->id());
     refreshSessions();
 }
 
@@ -270,19 +278,92 @@ void SourceManager::tryCrossSource(const Song &song, const QString &quality,
         }
         MusicSource *target = matched.title.isEmpty() ? nullptr : source(matched.source);
         if (!target) { if (cb) cb(original); return; }
-        target->resolveUrl(matched, quality, [matched, original, cb](const Playable &p) {
+        target->resolveUrl(matched, quality, [this, matched, original, cb](const Playable &p) {
             if (p.ok) {
                 Playable r = p;
                 r.substituted = true;
                 r.needSubstitute = false;
+                r.source = matched.source;
                 r.substituteSource = SourceConfig::instance()->nameOf(matched.source) + QStringLiteral("（自动换源）");
                 r.message = QStringLiteral("原曲不可播放，已自动换源到 %1").arg(r.substituteSource);
+                promoteSource(matched.source);   // 解析阶段换源成功也置顶，保持"成功源第一位"
                 if (cb) cb(r);
             } else if (cb) {
                 cb(original);
             }
         });
     });
+}
+
+void SourceManager::promoteSource(const QString &id)
+{
+    if (id.isEmpty() || id == QLatin1String("custom"))
+        return;     // 自定义音源永远优先，无需排序
+    m_sourceOrder.removeAll(id);
+    m_sourceOrder.prepend(id);
+    Settings::set(QStringLiteral("sourceOrder"), m_sourceOrder.join(QLatin1Char(',')));
+}
+
+void SourceManager::resolveAlternate(const Song &song, const QStringList &exclude,
+                                     const QString &quality, PlayableCallback cb)
+{
+    // 候选顺序：自定义音源最优先（VIP 替代），随后按 m_sourceOrder 优先级遍历内置平台。
+    // exclude 里的（已失败的原平台 + 本次已尝试过的候选）不再试，避免重复与死循环。
+    QStringList candidates;
+    if (!exclude.contains(QStringLiteral("custom")))
+        candidates << QStringLiteral("custom");
+    for (const QString &id : m_sourceOrder)
+        if (!exclude.contains(id) && source(id)) candidates << id;
+    for (MusicSource *s : m_sources)
+        if (!candidates.contains(s->id()) && !exclude.contains(s->id()))
+            candidates << s->id();
+    if (candidates.isEmpty()) { if (cb) cb(Playable()); return; }
+
+    auto attempt = std::make_shared<std::function<void(int)>>();
+    *attempt = [this, song, quality, candidates, cb, attempt](int idx) {
+        if (idx >= candidates.size()) { if (cb) cb(Playable()); return; }
+        const QString id = candidates.at(idx);
+        const int next = idx + 1;
+        if (id == QLatin1String("custom")) {
+            CustomSourceManager::instance()->resolve(song, quality,
+                [this, song, quality, cb, attempt, next](const Playable &sub) {
+                    if (sub.ok) {
+                        Playable r = sub;
+                        r.source = QStringLiteral("custom");
+                        if (cb) cb(r);
+                        return;
+                    }
+                    (*attempt)(next);
+                });
+            return;
+        }
+        MusicSource *target = source(id);
+        if (!target) { (*attempt)(next); return; }
+        const QString keyword = (song.title + QLatin1Char(' ') + song.artist).trimmed();
+        target->search(keyword, 10, 0, [this, song, quality, id, target, cb, attempt, next](const QVector<Song> &list) {
+            Song matched; qreal best = 0.55;
+            for (const Song &c : list) {
+                const qreal sc = candidateScore(song, c);
+                if (sc > best) { best = sc; matched = c; }
+            }
+            if (matched.title.isEmpty()) { (*attempt)(next); return; }
+            target->resolveUrl(matched, quality, [this, id, cb, attempt, next](const Playable &p) {
+                if (p.ok) {
+                    Playable r = p;
+                    r.substituted = true;
+                    r.needSubstitute = false;
+                    r.source = id;
+                    r.substituteSource = SourceConfig::instance()->nameOf(id) + QStringLiteral("（自动换源）");
+                    r.message = QStringLiteral("原曲播放失败，已自动换源到 ") + r.substituteSource;
+                    promoteSource(id);
+                    if (cb) cb(r);
+                } else {
+                    (*attempt)(next);
+                }
+            });
+        });
+    };
+    (*attempt)(0);
 }
 
 void SourceManager::lyric(const Song &song, StringCallback cb)

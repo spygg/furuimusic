@@ -30,6 +30,8 @@ public:
     // 下载专用：直接流式写入 QSaveFile，不把整首歌读进内存。
     // 回调 (ok, errorMessage)，成功后文件已原子落盘。
     using DownloadCallback = std::function<void(bool, const QString &)>;
+    // 下载进度回调 (received, total)，total 未知时为 0（大文件下载如更新包需要进度展示）
+    using DownloadProgressCallback = std::function<void(qint64, qint64)>;
 
     static HttpClient *instance();
 
@@ -42,7 +44,8 @@ public:
                  const QByteArray &body, const Callback &cb, int timeoutMs = -1,
                  bool followRedirects = true, const QString &peerVerifyName = QString());
     void download(const QUrl &url, const QVariantMap &headers, const QString &destPath,
-                  const DownloadCallback &cb, int timeoutMs = -1);
+                  const DownloadCallback &cb, int timeoutMs = -1,
+                  const DownloadProgressCallback &progress = DownloadProgressCallback());
     void setProxyFromSettings();
     // 与 HttpClient 完全一致的代理判定：设置里为空就 NoProxy。
     // QML 的 Image / MediaPlayer 用自己的 QNetworkAccessManager，只认应用级代理，

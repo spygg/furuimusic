@@ -5,7 +5,7 @@
 #   FuruiMusicWidgets  迁移期保留的 Widgets 旧前端（默认不构建）
 # Qt 5 Android 的 APK 打包仍使用 qmake（见 FuruiMusic.pro）。
 cmake_minimum_required(VERSION 3.16)
-project(FuruiMusic VERSION 1.1.0 LANGUAGES C CXX)
+project(FuruiMusic VERSION 1.3.0 LANGUAGES C CXX)
 
 option(FURUI_BUILD_LEGACY_WIDGETS "构建迁移期 Widgets 旧前端" OFF)
 
@@ -61,8 +61,10 @@ set_source_files_properties(core/config.qrc PROPERTIES
 set(CORE_FILES
     core/QtCompat.h
     core/Types.h core/Types.cpp
+    core/Version.h
     core/Settings.h core/JsonMapper.h
     core/HttpClient.h core/HttpClient.cpp
+    core/UpdateChecker.h core/UpdateChecker.cpp
     core/SourceConfig.h core/SourceConfig.cpp
     core/Library.h core/Library.cpp
     core/MusicSource.h core/MusicSource.cpp

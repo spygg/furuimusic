@@ -25,6 +25,7 @@
 | 曲库 | 收藏、播放历史、搜索历史、下载、按平台筛选歌单/收藏/历史；**发现榜单**页并发拉取各平台公开榜单（网易 `/api/toplist`、酷我 `wapi.kuwo.cn/api/www/bang`），未登录也能浏览榜单与曲目，参考 AlgerMusicPlayer 的 toplist / personalized 组织方式 |
 | MV 播放 | 曲库内「MV」Tab（全部/内地/港台/欧美/日本/韩国，16:9 封面网格 + 播放量角标 + 滚动续页），点封面进沉浸式播放器：进度拖动、音量/静音、单曲循环、全屏、上一个/下一个、单击暂停、双击 ±10s、控制条自动隐藏。视频解码：Qt 6 用 QtMultimedia 官方 FFmpeg 后端；Qt 5 用自编译 FFmpeg（`FfmpegVideoPlayer`），未编译该后端时才退回 DirectShow 并如实提示 |
 | 主题与窗口 | 深色 / 浅色 / 跟随系统（Windows 注册表、macOS `defaults`、Linux `gsettings`，Android 回退浅色）；无边框窗口 + 自绘标题栏 + 边缘缩放 |
+| 在线检测更新 | 设置页「检查更新」+ 启动延迟自动检查（参照洛雪音乐 `publish/version.json` 机制，多镜像容错）；有新版本时弹层展示更新说明，用户同意后**应用内直接下载**对应平台的 GitHub Release 产物（不跳转网页），Android 下载完成经 FileProvider 自动拉起系统安装器，桌面端打开安装包所在文件夹 |
 | 本地 OpenAPI | 可选的本地 HTTP 服务开关，便于外部控制播放 |
 | 手机适配 | 窄屏布局（`MainMobile.qml`）、竖屏截图见 `src/docs/screenshots/` |
 
@@ -314,6 +315,15 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 - 未纳入 Release：Windows XP（Qt 5.7 加载不了 QML 2.15）、MSVC 组合（本工程未验证）、Inno Setup 安装包（仓库没有 `installer/` 脚本）。
 - 验证状态：Windows 的构建/部署命令、Android 的 CMake → APK → 签名链路均已在本机跑通；Linux、macOS、Android 三个 CI job 仍属按配置推断，需要实际推一次 tag 才能确认。
 - 工作流不会把构建日志推送到分支；失败时请查看 Actions 日志。
+
+## 在线更新（publish/version.json）
+
+参照洛雪音乐的版本清单机制：仓库根目录的 [`publish/version.json`](publish/version.json) 是「最新版是什么、有什么更新、去哪下载」的唯一事实来源，应用（`src/core/UpdateChecker`）启动 5 秒后自动检查，设置页也可手动检查。
+
+- **拉取镜像链**（依次容错）：`raw.githubusercontent.com` → `cdn.jsdelivr.net` → `fastly.jsdelivr.net` → `gcore.jsdelivr.net`，全部走 `https`。
+- **清单字段**：`version`（最新版本号，与 `src/core/Version.h` 的 `FURUI_APP_VERSION` 及 `src/CMakeLists.txt` 的 `project(... VERSION ...)` 三处同步）、`desc`（本次更新说明）、`history`（历史版本列表，弹层一并展示）、`downloads`（各平台下载直键，可选；缺省时按 CI 产物命名拼 `https://github.com/spygg/furuimusic/releases/download/v<version>/<产物名>`）。
+- **下载与安装**：用户在弹层点「下载更新」后，`HttpClient::download` 流式写入本地并上报进度（0-100）；Android 存到 AppData（`files-path` 已被 Qt 的 FileProvider 覆盖），完成后经 `androidx FileProvider` + `ACTION_VIEW` 拉起系统安装器（AndroidManifest 已声明 `REQUEST_INSTALL_PACKAGES`）；桌面端下载到用户下载目录，完成后打开安装包所在文件夹（Windows 产物是 zip，解压覆盖安装）。
+- **发版流程**：改 `Version.h` + CMake `project(VERSION)` + `publish/version.json` → 推 tag（`v*`）→ CI 自动构建并发布 Release → 老版本应用即可收到更新提示。
 
 ## 许可证
 

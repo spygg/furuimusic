@@ -108,13 +108,20 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers)
         emit errorOccurred(QStringLiteral("无效的播放地址"));
         return;
     }
+    // 网易云等平台返回的播放直链常为 http://（如 http://m?.music.126.net/...）。
+    // Android 9+ 默认禁止明文流量、桌面 Qt 部分环境也会拒绝 http 拉流，表现为
+    // "Error transferring http://..."。与封面统一策略（MusicSource::mvCoverThumb）对齐，
+    // 在此把 http 升 https，避免明文直链整批播放失败。
+    QUrl play = url;
+    if (play.scheme().compare(QLatin1String("http"), Qt::CaseInsensitive) == 0)
+        play.setScheme(QStringLiteral("https"));
     ++m_playGen;
     m_headerRetry = false;
     m_headers = headers;
-    m_currentUrl = url;
+    m_currentUrl = play;
     // 平台的直链几乎都带防盗链：sources.json 里声明的 Referer/Cookie 必须随请求发出。
     // 原来只把 headers 存起来，播放器从来没用到，QQ/网易/酷狗的直链在非官方来源上会被 CDN 拒掉。
-    QNetworkRequest req(url);
+    QNetworkRequest req(play);
     for (auto it = headers.constBegin(); it != headers.constEnd(); ++it) {
         const QByteArray value = it.value().toString().toUtf8();
         if (!value.trimmed().isEmpty()) req.setRawHeader(it.key().toUtf8(), value);
@@ -124,7 +131,7 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers)
     // 策略：先按地址直连（多数直链不需要头）；如果播放器报错，errorOccurred
     // 里会调用 fetchWithHeaders() 带 headers 下载到缓存后改播本地文件。
     Q_UNUSED(req);
-    m_player->setSource(url);
+    m_player->setSource(play);
 #else
     m_player->setMedia(QMediaContent(req));
 #endif
