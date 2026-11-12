@@ -90,6 +90,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgl1-mesa-dev libxkbcommon-x11-0 libxcb-xinerama0 libxcb-cursor0 \
             desktop-file-utils patchelf file
+          # Qt 6.8 新增的 Mimer SQL 驱动（libqsqlmimer.so）依赖 Qt 包里没有的
+          # libmimerapi.so，linuxdeploy-plugin-qt 部署 sqldrivers 时会整包失败；
+          # 本应用不用 SQL，直接删掉该插件
+          rm -f "$QT_ROOT_DIR/plugins/sqldrivers/libqsqlmimer.so"
 
       - name: Configure (CMake)
         shell: bash
@@ -271,25 +275,38 @@ jobs:
           dir: ${{ runner.temp }}/Qt
           cache: false
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-      - name: Install SDK / NDK / build-tools
+      # android-actions/setup-android 在 2026-11 的 runner 上偶发 Node 崩溃
+      # （无明确错误即退出），改为手动装 cmdline-tools + sdkmanager，
+      # 与 QtRemoteDesktop 的做法对齐（新版 cmdline-tools 才能解析新仓库元数据）
+      - name: Setup Android SDK (cmdline-tools)
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install "platform-tools" "platforms;android-35" \
-            "build-tools;35.0.0" "ndk;26.1.10909125"
-          test -f "$ANDROID_HOME/ndk/26.1.10909125/build/cmake/android.toolchain.cmake"
-          test -f "$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          SDK="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$SDK/cmdline-tools"
+          wget -q --tries=5 --timeout=60 \
+            "https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip" \
+            -O "$RUNNER_TEMP/clt.zip"
+          unzip -q "$RUNNER_TEMP/clt.zip" -d "$SDK/cmdline-tools"
+          mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          export ANDROID_SDK_ROOT="$SDK"
+          (yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null) || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platform-tools" "platforms;android-35" "build-tools;35.0.0" \
+            "ndk;26.1.10909125" >/dev/null
+          test -f "$SDK/ndk/26.1.10909125/build/cmake/android.toolchain.cmake"
+          test -f "$SDK/build-tools/35.0.0/apksigner"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
 
       - name: Build APK
         shell: bash
         run: |
           set -euo pipefail
           export QT_ANDROID="${{ runner.temp }}/Qt/$QT_VERSION/android_arm64_v8a"
-          export QT_HOST="${{ runner.temp }}/Qt/$QT_VERSION/linux_gcc_64"
+          # install-qt-action 归一化后的 host kit 目录（action 自带 QT_ROOT_DIR，
+          # 不要手拼路径——arch 写 linux_gcc_64 时落盘目录仍是 gcc_64）
+          export QT_HOST="$QT_ROOT_DIR"
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/$ANDROID_NDK_VER"
           test -f "$QT_ANDROID/bin/qt-cmake" || { echo "::error::Qt Android kit 未就位"; exit 1; }
