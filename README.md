@@ -100,7 +100,7 @@ cmake --build build --target FuruiMusic --parallel
 - 核心逻辑在静态库 `FuruiCore` 中，桌面与 Android 共用。
 - 迁移期保留的 Widgets 旧前端默认不构建，需要时加 `-DFURUI_BUILD_LEGACY_WIDGETS=ON`。
 - 老 Qt 5 / MinGW 8.1 构建里，QuickJS 固定用 `-O1`（`-O2` 会触发 MinGW 8.1 的 SEH 汇编错误）；MSVC 与 MinGW 13.1 下不走该编译参数。
-- **Windows 一键脚本** `src/scripts/build_windows.bat` 主路径已切 Qt 6.11.1 + MinGW 13.1：CMake 增量编译 → 复制 `bin/FuruiMusic.exe` → Qt 6 `windeployqt`（会带出 `ffmpegmediaplugin.dll` 与 `avcodec-61.dll`，MV 才能播）。设置 `FURUI_BUILD_QT5=1` 会先增量编译 Qt5 专用 FFmpeg，再跑 Qt 5 qmake 兼容构建，产物落在 `build/desktop-qt5`，不覆盖主交付。
+- **Windows 一键脚本** `src/scripts/build_windows.bat` 主路径已切 Qt 6.11.1 + MinGW 13.1：CMake 增量编译 → 复制 exe 到 `bin_qt6/` → Qt 6 `windeployqt` 部署运行库（会带出 `ffmpegmediaplugin.dll` 与 `avcodec-61.dll`，MV 才能播）。设置 `FURUI_BUILD_QT5=1` 会先增量编译 Qt5 专用 FFmpeg，再跑 Qt 5 qmake 兼容构建，最终分发产物落在 `bin_qt5/`（`windeployqt` 同样部署 Qt 5 运行库），不覆盖主交付。两个目录里的 exe 都已由 `windeployqt` 部署好运行库，可直接运行。
 
 ### 桌面（qmake，仅 Qt 5 兼容路径）
 
@@ -144,9 +144,23 @@ src/scripts/build_android.sh
 
 Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路径**只支持 Qt 6**，Qt 5 会直接报错提示改用 qmake。
 
-`build_android_qt6.bat` 在 `FuruiMusic_make_apk` 之后会自动 `zipalign` + `apksigner` 签名（优先用 `%USERPROFILE%\.android\debug.keystore`，没有则现场生成 debug keystore），产出可直接安装的 `bin/FuruiMusic-android-arm64-v8a.apk` 并跑 `apksigner verify` 复检。`build_android.sh` 与 Qt 6 的 CMake 流程本身只产出 `android-build-release-unsigned.apk`，签名交给 CI 或手工执行；Windows 下 `.bat` 必须是 CRLF 换行，LF 会让 `cmd.exe` 解析错乱。
+`build_android_qt6.bat` 在 `FuruiMusic_make_apk` 之后会自动 `zipalign` + `apksigner` 签名（优先用 `%USERPROFILE%\.android\debug.keystore`，没有则现场生成 debug keystore），产出可直接安装的 `bin_android/FuruiMusic-android-arm64-v8a.apk` 并跑 `apksigner verify` 复检。`build_android.sh` 与 Qt 6 的 CMake 流程本身只产出 `android-build-release-unsigned.apk`，签名交给 CI 或手工执行；Windows 下 `.bat` 必须是 CRLF 换行，LF 会让 `cmd.exe` 解析错乱。
 
 **Android 端两处平台差异（2026-11-10 修复）**：① 图标由 `GlyphImageProvider` 栅格化，Qt 6 Android 的纹理上传对预乘 `QImage` + `QPen` 描边不稳定，图标会退化成黑色方块；现改为非预乘画布 + `QPainterPathStroker` 纯填充路径 + `RGBA8888` 返回，并关闭 QML 侧 `mipmap`。② 网易二维码在重复/空值 Cookie 头下会被风控（`code=-462`，界面提示「获取网络设备失败」一类文案）；现禁用 `QNetworkAccessManager` 自动 Cookie（`Manual` 加载/保存）、Cookie 拼接跳过空值、`Set-Cookie` 去重，并把出码改成 eapi → 明文带设备指纹 → 无 Cookie 明文三级兜底。若仍显示黑块，可查 `logcat` 的 `FuruiGlyph` 行与 App 私有目录下的 `glyph_debug.png`。
+
+### 可分发产物目录（bin_qt5 / bin_qt6 / bin_android）
+
+构建脚本把**可直接运行 / 安装**的产物按工具链与 Qt 版本分开落到三个目录，互相不覆盖：
+
+| 目录 | 内容 | 由谁生成 |
+|---|---|---|
+| `bin_qt6/` | Qt 6.11.1 (MinGW 13.1) 桌面 exe + `windeployqt` 部署的运行库、QML 模块与 FFmpeg 多媒体插件（含 `ffmpegmediaplugin.dll` / `avcodec-61.dll`，MV 才能播） | `src/scripts/build_windows.bat`（默认主路径） |
+| `bin_qt5/` | Qt 5.15.2 (MinGW 8.1) 桌面 exe + 运行库（`FURUI_BUILD_QT5=1` 时生成；自编译 FFmpeg 静态库已链进 exe，不需额外 DLL） | `src/scripts/build_windows.bat`（设 `FURUI_BUILD_QT5=1`） |
+| `bin_android/` | 已 `zipalign` + `apksigner` 签名的 `FuruiMusic-android-arm64-v8a.apk`（可直接安装） | `src/scripts/build_android_qt6.bat` |
+
+- 三个目录**全部本地生成、不入库**（`.gitignore` 已排除 `bin_qt5/`、`bin_qt6/`、`bin_android/`、`*.exe`、`*.dll`、`*.apk`）。`build*/` 只放增量构建中间物，分发产物统一收口到这三个目录，便于整体打包或单独拷给测试机。
+- Windows 上直接双击 `bin_qt6/FuruiMusic.exe`（或 `bin_qt5/FuruiMusic.exe`）即可启动，无需再手动 `windeployqt`。
+- 旧的单一 `bin/` 目录已弃用：主交付改走 `bin_qt6/`，Qt 5 兼容构建走 `bin_qt5/`，Android 走 `bin_android/`，避免不同工具链的 DLL 混在同一目录互相覆盖。
 
 ### 运行期自检（可选）
 
@@ -221,7 +235,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 - **宿主能力边界**：在线脚本运行时的 `crypto.aesEncrypt`、`crypto.rsaEncrypt`、`utils.zlib` 为显式桩（本次 5 个公开源未使用），用到时会明确报“宿主未实现该能力”。
 - **未实机验证**：Linux、macOS 仅有构建配置/脚本；Android 已完成 Qt 6 编译、签名与界面真机运行，图标/二维码修复待用户复测；Windows 为唯一完整实机验证的桌面平台。
 - **旧 Widgets 前端**：`src/desktop/` 为迁移期保留，默认不编译、不再新增功能。
-- 仓库不包含 `bin/`（运行库、OpenSSL DLL、APK）与 `reference/`（本地研究用的洛雪源码副本），所以 `src/docs/multi-platform-music-research.md` 中指向 `reference/...` 的路径在远端不可访问。
+- 仓库不包含 `bin_qt5/` / `bin_qt6/` / `bin_android/`（运行库、OpenSSL DLL、签名 APK，全部本地构建产物）与 `reference/`（本地研究用的洛雪源码副本），所以 `src/docs/multi-platform-music-research.md` 中指向 `reference/...` 的路径在远端不可访问。
 
 ## 在线音源实测（2026-11-09）
 
@@ -250,14 +264,16 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 
 ## 目录结构
 
-源码、资源、配置、脚本、Android 打包资源与文档都在 `src/`；仓库根另有 `CMakeLists.txt`（薄转发到 `src`，方便 `cmake -S . -B build`）、说明、许可证与 CI（以及不入库的 `bin/`、`build*/`、`reference/` 本机产物）。构建命令用 `-S src` 或 `-S .` 均可，但同一个 build 目录不能混用两种源目录。
+源码、资源、配置、脚本、Android 打包资源与文档都在 `src/`；仓库根另有 `CMakeLists.txt`（薄转发到 `src`，方便 `cmake -S . -B build`）、说明、许可证与 CI（以及不入库的 `bin_qt5/` / `bin_qt6/` / `bin_android/`、`build*/`、`reference/` 本机产物）。构建命令用 `-S src` 或 `-S .` 均可，但同一个 build 目录不能混用两种源目录。
 
 ```
 .
 ├── README.md  LICENSE  .gitignore     # 仓库说明与元信息
 ├── CMakeLists.txt                     # 根入口：add_subdirectory(src)
 ├── .github/workflows/                 # Release 工作流（见下）
-├── bin/                               # 本机运行产物：exe / DLL / APK（不入库）
+├── bin_qt6/                          # Qt 6 桌面可分发产物：windeployqt 部署的 exe + 运行库/QML/FFmpeg 插件（不入库）
+├── bin_qt5/                          # Qt 5 桌面可分发产物（自编译 FFmpeg 后端，不入库）
+├── bin_android/                      # Android 签名 APK（arm64-v8a，不入库）
 ├── build*/                            # 本机增量构建目录（不入库）
 ├── build_output/                      # FFmpeg 静态库等本机产物（不入库）
 ├── reference/                         # 本地研究用参考源码（不入库）
