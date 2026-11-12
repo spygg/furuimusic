@@ -1,7 +1,11 @@
 {
-  "version": "1.3.0",
-  "desc": "新增\n- 在线检测更新：设置页一键检查，同意后应用内直接下载安装包（Windows/Android），不跳转网页；Android 下载完成自动拉起系统安装器\n- 播放失败自动换源：失败后依次尝试自定义源与其它平台，成功源置顶并跨启动持久化\n\n修复\n- Android 播放 http 直链被系统禁止导致「播放失败」的问题（播放直链统一升级 https）\n- build_android.bat 在 MSYS 环境下 .so 复制静默失败导致打包报错\n\n优化\n- 未登录切换音源平台时，展示该平台默认榜单歌单",
+  "version": "1.4.0",
+  "desc": "新增\n- 内置在线音源：首次启动自动预置洛雪音乐（LX 脚本协议）整理的七套音源（六音 / Huibq / Fish / 洛雪LX / 长青 / 幻音 / 星海），每套带多条加速镜像自动回退，成功即用，无需手动导入\n\n优化\n- 设置页精简：移除实际不使用的「自定义音源 / 本地音源目录 / 下载目录 / 代理 / 超时 / 账号API / 网易云IP」配置项，仅保留外观、音质与开放API",
   "history": [
+    {
+      "version": "1.3.0",
+      "desc": "新增\n- 在线检测更新：设置页一键检查，同意后应用内直接下载安装包（Windows/Android），不跳转网页；Android 下载完成自动拉起系统安装器\n- 播放失败自动换源：失败后依次尝试自定义源与其它平台，成功源置顶并跨启动持久化\n\n修复\n- Android 播放 http 直链被系统禁止导致「播放失败」的问题（播放直链统一升级 https）\n- build_android.bat 在 MSYS 环境下 .so 复制静默失败导致打包报错\n\n优化\n- 未登录切换音源平台时，展示该平台默认榜单歌单"
+    },
     {
       "version": "1.2.0",
       "desc": "新增\n- 曲库页 MV 标签与全屏 MV 播放器（Qt6 QtMultimedia FFmpeg 后端，Qt5 自编译 FFmpeg）\n- 分发产物按 bin_qt5 / bin_qt6 / bin_android 目录划分\n\n优化\n- README 补充版本产物目录与截图"
@@ -12,9 +16,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.3.0/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.3.0/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.3.0/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.3.0/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.0/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.0/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.0/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.0/FuruiMusic-android-arm64-v8a.apk"
   }
 }

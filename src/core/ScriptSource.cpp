@@ -14,10 +14,50 @@
 
 #include "HttpClient.h"
 #include "Library.h"
+#include "Settings.h"
 
 namespace Furui {
 
 namespace {
+
+// 内置在线音源（LX 脚本协议），来自 github.com/skxingyu/lx_music- 整理的
+// pdone/lx-music-source 在线导入地址（README 测试可用至 2026-11-06）。
+// 同一脚本给多条镜像（加速站可达性随时变化，依次回退，成功即用）；
+// 仅首次启动预置下载，用户在设置页删除后不再补回（记入 builtinScriptRemoved）。
+struct BuiltinSource {
+    const char *name;
+    const char *mirrors[4];
+};
+const BuiltinSource kBuiltinSources[] = {
+    { u8"六音",   { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/sixyin/latest.js",
+                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/sixyin/latest.js",
+                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/sixyin/latest.js",
+                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/sixyin/latest.js" } },
+    { u8"Huibq",  { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js",
+                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js",
+                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js",
+                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js" } },
+    { u8"Fish",   { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/fish/latest.js",
+                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/fish/latest.js",
+                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/fish/latest.js",
+                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/fish/latest.js" } },
+    { u8"洛雪LX", { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/lx/latest.js",
+                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/lx/latest.js",
+                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/lx/latest.js",
+                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/lx/latest.js" } },
+    { u8"长青",   { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/changqing/latest.js",
+                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/changqing/latest.js",
+                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/changqing/latest.js",
+                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/changqing/latest.js" } },
+    { u8"幻音",   { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/huanyin/latest.js",
+                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/huanyin/latest.js",
+                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/huanyin/latest.js",
+                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/huanyin/latest.js" } },
+    { u8"星海",   { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/xinghai/latest.js",
+                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/xinghai/latest.js",
+                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/xinghai/latest.js",
+                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/xinghai/latest.js" } },
+};
 
 QJsonArray stringsToJson(const QStringList &list)
 {
@@ -128,7 +168,9 @@ ScriptSourceManager::ScriptSourceManager(QObject *parent)
     : QObject(parent)
 {
     load();
-    // 重启后不自动联网，先用落库状态展示；用户点「检查」或真正用到时再初始化
+    // 重启后不自动联网，先用落库状态展示；用户点「检查」或真正用到时再初始化。
+    // 例外：内置在线音源只在缺失时补齐（首次启动/新版本追加），补齐动作入事件循环。
+    QTimer::singleShot(0, this, [this] { seedBuiltinSources(); });
 }
 
 void ScriptSourceManager::load()
@@ -169,6 +211,63 @@ ScriptSourceManager::Item *ScriptSourceManager::find(const QString &id)
 {
     auto it = m_items.find(id);
     return it == m_items.end() ? nullptr : &it.value();
+}
+
+QString ScriptSourceManager::scriptIdForUrl(const QString &url)
+{
+    return QStringLiteral("lx_") +
+           QString::fromUtf8(QCryptographicHash::hash(url.trimmed().toUtf8(),
+                                                      QCryptographicHash::Sha1).toHex()).left(12);
+}
+
+bool ScriptSourceManager::isBuiltinUrl(const QString &url)
+{
+    const QString trimmed = url.trimmed();
+    for (const BuiltinSource &b : kBuiltinSources)
+        for (const char *m : b.mirrors)
+            if (trimmed == QLatin1String(m)) return true;
+    return false;
+}
+
+void ScriptSourceManager::seedBuiltinSources()
+{
+    const QStringList removed = Settings::get(QStringLiteral("builtinScriptRemoved"))
+                                    .toStringList();
+    for (const BuiltinSource &b : kBuiltinSources) {
+        QStringList urls;
+        bool skip = false;
+        for (const char *m : b.mirrors) {
+            const QString u = QLatin1String(m);
+            urls << u;
+            if (removed.contains(u)) { skip = true; continue; }
+            // 已有可用条目（ok/pending/disabled）→ 该源已就位；error 条目是
+            // 上次启动回退链留下的坏镜像产物，本次清掉并重新走回退
+            const Item it = m_items.value(scriptIdForUrl(u));
+            if (it.id.isEmpty()) continue;
+            if (it.status == QLatin1String("error")) {
+                m_items.remove(it.id);
+                Library::instance()->removeScriptSource(it.id);
+            } else {
+                skip = true;
+            }
+        }
+        if (skip) continue;
+        // 依次回退：加速站可达性随时变化，某镜像成功后 item.url 固定为该镜像，
+        // 之后「更新」按钮继续用同一条；失败则试下一镜像。
+        importWithFallback(urls, 0);
+    }
+}
+
+void ScriptSourceManager::importWithFallback(const QStringList &urls, int index)
+{
+    if (index >= urls.size()) return;
+    QPointer<ScriptSourceManager> self(this);
+    importUrl(urls.at(index), [self, urls, index](bool ok, const QString &) {
+        if (ok || !self) return;
+        QTimer::singleShot(0, self.data(), [self, urls, index] {
+            if (self) self->importWithFallback(urls, index + 1);
+        });
+    });
 }
 
 QVariantMap ScriptSourceManager::itemToVariant(const Item &item) const
@@ -504,9 +603,7 @@ void ScriptSourceManager::importUrl(const QString &url, DoneCallback cb)
                 return;
             }
             Item item;
-            item.id = QStringLiteral("lx_") +
-                      QString::fromUtf8(QCryptographicHash::hash(trimmed.toUtf8(),
-                                                                 QCryptographicHash::Sha1).toHex()).left(12);
+            item.id = scriptIdForUrl(trimmed);
             item.url = trimmed;
             item.script = QString::fromUtf8(r.body);
             item.hash = QString::fromUtf8(QCryptographicHash::hash(r.body, QCryptographicHash::Sha256).toHex());
@@ -574,6 +671,16 @@ void ScriptSourceManager::checkAll()
 
 void ScriptSourceManager::remove(const QString &id)
 {
+    // 内置音源被用户显式删除后不再随启动补回
+    const Item removed = m_items.value(id);
+    if (isBuiltinUrl(removed.url)) {
+        QStringList list = Settings::get(QStringLiteral("builtinScriptRemoved"))
+                               .toStringList();
+        if (!list.contains(removed.url)) {
+            list << removed.url;
+            Settings::set(QStringLiteral("builtinScriptRemoved"), list);
+        }
+    }
     if (QPointer<ScriptEngine> e = m_engines.take(id)) {
         e->stop();
         e->deleteLater();

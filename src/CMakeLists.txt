@@ -5,7 +5,7 @@
 #   FuruiMusicWidgets  迁移期保留的 Widgets 旧前端（默认不构建）
 # Qt 5 Android 的 APK 打包仍使用 qmake（见 FuruiMusic.pro）。
 cmake_minimum_required(VERSION 3.16)
-project(FuruiMusic VERSION 1.3.0 LANGUAGES C CXX)
+project(FuruiMusic VERSION 1.4.0 LANGUAGES C CXX)
 
 option(FURUI_BUILD_LEGACY_WIDGETS "构建迁移期 Widgets 旧前端" OFF)
 

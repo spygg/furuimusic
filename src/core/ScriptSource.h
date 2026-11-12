@@ -79,6 +79,10 @@ private:
     };
 
     void load();
+    void seedBuiltinSources();           // 首次启动预置内置在线音源（用户删除过的不再补回）
+    void importWithFallback(const QStringList &mirrorUrls, int index);
+    static QString scriptIdForUrl(const QString &url);
+    static bool isBuiltinUrl(const QString &url);
     void persist(const Item &item);
     Item *find(const QString &id);
     void ensureEngine(const QString &id, std::function<void(bool)> cb);

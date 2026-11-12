@@ -23,15 +23,6 @@ Item {
 
     // themeCombo.currentIndex 已经绑到 theme.mode，外部（标题栏快捷按钮）改主题时会自动跟随，
     // 这里再用 Connections 赋值等于把绑定改成一次性数值，反而让后续变化失效
-    Component.onCompleted: {
-        downloadDirField.text = app.setting("downloadDir", "")
-        proxyField.text = app.setting("proxy", "")
-        timeoutField.text = app.setting("timeout", "")
-        realIpField.text = app.setting("neteaseRealIp", "")
-        accountApiField.text = app.accountApiBase
-        localDirField.text = app.customLocalDirectory
-        app.refreshCustomSources()
-    }
 
     Flickable {
         anchors.fill: parent
@@ -59,7 +50,7 @@ Item {
             }
             Text {
                 Layout.fillWidth: true
-                text: "外观、音质、下载与账号 API"
+                text: "外观、音质与在线音源"
                 color: cSub
                 font.pixelSize: 14
             }
@@ -163,98 +154,13 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: app.openApiEnabled ? ("服务地址 " + app.openApiAddress + "  /status /lyric /play /pause /skip-next") : "开放 API 未启用"
+                text: app.openApiEnabled
+                      ? ("已开启，本机服务 " + app.openApiAddress
+                         + "  ·  /status 查询播放状态  /lyric 当前歌词  /play /pause /skip-next 控制")
+                      : "关闭状态。开启后本机开放一个 HTTP 接口，供第三方脚本/工具（如桌面歌词、遥控脚本）读取播放状态与控制播放，与洛雪音乐开放 API 同类"
                 color: cSub
                 font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap
-            }
-
-            Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
-
-            Text { Layout.fillWidth: true; text: "自定义音源"; color: cSub; font.pixelSize: 12 }
-            Repeater {
-                model: app.customSourceIds
-                delegate: RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-                    Text {
-                        Layout.fillWidth: true
-                        text: (index < app.customSourceNames.length ? app.customSourceNames[index] : modelData)
-                        color: cText
-                        font.pixelSize: 13
-                        elide: Text.ElideRight
-                    }
-                    Text { text: modelData; color: cSub; font.pixelSize: theme.fontXs }
-                    Rectangle {
-                        Layout.preferredWidth: Math.max(48, theme.touchMin)
-                        Layout.preferredHeight: theme.touchMin
-                        radius: 5
-                        color: cPrimarySoft
-                        Text { anchors.centerIn: parent; text: "删除"; color: cPrimary; font.pixelSize: theme.fontSm }
-                        MouseArea { anchors.fill: parent; onClicked: app.removeCustomSource(modelData) }
-                    }
-                }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                TextField {
-                    id: httpName
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: theme.touchMin
-                    placeholderText: "音源名称"
-                    color: cText
-                    font.pixelSize: 12
-                    leftPadding: 8
-                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
-                }
-                TextField {
-                    id: httpUrl
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: theme.touchMin
-                    placeholderText: "接口地址 BaseUrl"
-                    color: cText
-                    font.pixelSize: 12
-                    leftPadding: 8
-                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
-                }
-                Button {
-                    id: addHttpBtn
-                    text: "添加"
-                    Layout.preferredWidth: 56
-                    Layout.preferredHeight: theme.touchMin
-                    background: Rectangle { radius: 6; color: addHttpBtn.down ? cPrimaryPress : cPrimary }
-                    contentItem: Text { text: addHttpBtn.text; color: "#FFFFFF"; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    onClicked: {
-                        app.addCustomHttpSource(httpName.text, httpUrl.text)
-                        app.refreshCustomSources()
-                    }
-                }
-            }
-
-            Text { Layout.fillWidth: true; text: "本地音源目录（直接输入路径）"; color: cSub; font.pixelSize: 12 }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                TextField {
-                    id: localDirField
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: theme.touchMin
-                    placeholderText: "本地音乐目录"
-                    color: cText
-                    font.pixelSize: 12
-                    leftPadding: 8
-                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
-                }
-                Button {
-                    id: localDirBtn
-                    text: "保存"
-                    Layout.preferredWidth: 56
-                    Layout.preferredHeight: theme.touchMin
-                    background: Rectangle { radius: 6; color: localDirBtn.down ? cPrimaryPress : cPrimary }
-                    contentItem: Text { text: localDirBtn.text; color: "#FFFFFF"; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    onClicked: app.setCustomLocalDirectory(localDirField.text)
-                }
             }
 
             Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
@@ -279,7 +185,7 @@ Item {
             }
             Text {
                 Layout.fillWidth: true
-                text: "支持在线 JS 音源（洛雪 LX 协议）。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方。"
+                text: "内置六音 / Huibq / Fish / 洛雪LX / 长青 / 幻音 / 星海等在线音源（LX 脚本协议，首次启动自动导入）。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方；也可自行导入其它脚本地址。"
                 color: cSub
                 font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap
@@ -426,133 +332,9 @@ Item {
 
             Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
 
-            Text { Layout.fillWidth: true; text: "下载与网络"; color: cSub; font.pixelSize: 12 }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text { text: "下载目录"; color: cText; font.pixelSize: 12; Layout.preferredWidth: 60 }
-                TextField {
-                    id: downloadDirField
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: theme.touchMin
-                    color: cText
-                    font.pixelSize: 12
-                    leftPadding: 8
-                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
-                }
-                Button {
-                    id: downloadDirBtn
-                    text: "保存"
-                    Layout.preferredWidth: 52
-                    Layout.preferredHeight: theme.touchMin
-                    background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
-                    contentItem: Text { text: downloadDirBtn.text; color: cPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    onClicked: app.setSetting("downloadDir", downloadDirField.text)
-                }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text { text: "代理"; color: cText; font.pixelSize: 12; Layout.preferredWidth: 60 }
-                TextField {
-                    id: proxyField
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: theme.touchMin
-                    color: cText
-                    font.pixelSize: 12
-                    leftPadding: 8
-                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
-                }
-                Button {
-                    id: proxyBtn
-                    text: "保存"
-                    Layout.preferredWidth: 52
-                    Layout.preferredHeight: theme.touchMin
-                    background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
-                    contentItem: Text { text: proxyBtn.text; color: cPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    onClicked: app.setSetting("proxy", proxyField.text)
-                }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text { text: "超时"; color: cText; font.pixelSize: 12; Layout.preferredWidth: 60 }
-                TextField {
-                    id: timeoutField
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: theme.touchMin
-                    color: cText
-                    font.pixelSize: 12
-                    leftPadding: 8
-                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
-                }
-                Button {
-                    id: timeoutBtn
-                    text: "保存"
-                    Layout.preferredWidth: 52
-                    Layout.preferredHeight: theme.touchMin
-                    background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
-                    contentItem: Text { text: timeoutBtn.text; color: cPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    onClicked: {
-                        var t = parseInt(timeoutField.text)
-                        app.setSetting("timeout", isNaN(t) ? 30 : t)
-                    }
-                }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text { text: "账号 API"; color: cText; font.pixelSize: 12; Layout.preferredWidth: 60 }
-                TextField {
-                    id: accountApiField
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: theme.touchMin
-                    placeholderText: "http://127.0.0.1:9764"
-                    color: cText
-                    font.pixelSize: 12
-                    leftPadding: 8
-                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
-                }
-                Button {
-                    id: accountApiBtn
-                    text: "保存"
-                    Layout.preferredWidth: 52
-                    Layout.preferredHeight: theme.touchMin
-                    background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
-                    contentItem: Text { text: accountApiBtn.text; color: cPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    onClicked: app.setSetting("accountApiBase", accountApiField.text.trim())
-                }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text { text: "网易云IP"; color: cText; font.pixelSize: 12; Layout.preferredWidth: 60 }
-                TextField {
-                    id: realIpField
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: theme.touchMin
-                    placeholderText: "可选：出口 IP 被判异常时填国内住宅 IP"
-                    color: cText
-                    placeholderTextColor: cSub
-                    font.pixelSize: 12
-                    leftPadding: 8
-                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
-                }
-                Button {
-                    id: realIpBtn
-                    text: "保存"
-                    Layout.preferredWidth: 52
-                    Layout.preferredHeight: theme.touchMin
-                    background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
-                    contentItem: Text { text: realIpBtn.text; color: cPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignHCenter }
-                    onClicked: app.setSetting("neteaseRealIp", realIpField.text.trim())
-                }
-            }
             Text {
                 Layout.fillWidth: true
-                text: "登录全部在应用内完成：网易云 / QQ / 酷狗 / 咪咕支持内置二维码登录，网易云与咪咕另支持账号密码登录；"
-                      + "无内置二维码的平台需在「设置」里配置自建账号 API 服务（示例 src/tools/account_api_server.py）后同步歌单。"
-                      + "「网易云IP」仅在返回 460（出口 IP 异常）时按需填写，留空即可。"
+                text: "登录全部在应用内完成：网易云 / QQ / 酷狗 / 咪咕支持内置二维码登录，网易云与咪咕另支持账号密码登录。"
                 color: cSub
                 font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap
