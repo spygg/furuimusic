@@ -220,6 +220,8 @@ struct AppController::Impl {
     // 但不应误伤正在进行的歌曲搜索
     quint64 playlistGen = 0;
     bool discoveryLoading = false;
+    // 平台切换时作废过期的 discovery 请求，避免旧平台结果覆盖新平台
+    quint64 discoveryGen = 0;
     // 取链是异步的：用户连点两首歌时，慢的那首不能把当前播放替换掉
     quint64 resolveGen = 0;
 };
@@ -550,15 +552,21 @@ bool AppController::discoveryLoading() const { return d->discoveryLoading; }
 
 int AppController::playlistCount() const { return m_playlists->rowCount(); }
 
-void AppController::loadDiscovery()
+void AppController::loadDiscovery(const QString &sourceId)
 {
-    if (d->discoveryLoading) return;
     d->discoveryLoading = true;
     emit discoveryChanged();
-    setStatus(QStringLiteral("正在加载各平台公开榜单（无需登录）…"));
-    // sourceId 为空 = 全部平台；未配置 rank 端点的音源会立即回调空列表，不会卡住聚合
-    SourceManager::instance()->rank(QString(), 30,
-        [this](const QVector<Playlist> &list) {
+    setStatus(sourceId.isEmpty()
+                  ? QStringLiteral("正在加载各平台公开榜单（无需登录）…")
+                  : QStringLiteral("正在加载%1公开榜单（无需登录）…")
+                        .arg(SourceConfig::instance()->nameOf(sourceId)));
+    // 平台切换时作废过期请求：旧平台的后到结果不能覆盖新平台
+    const quint64 gen = ++d->discoveryGen;
+    // sourceId 为空 = 全部平台；指定平台只拉该平台默认榜单（未配置 rank 端点或接口
+    // 失效的音源会回退到配置里的静态 defaultBoards，保证未登录也有数据）
+    SourceManager::instance()->rank(sourceId, 30,
+        [this, sourceId, gen](const QVector<Playlist> &list) {
+            if (gen != d->discoveryGen) return;
             d->discoveryLoading = false;
             m_discovery->setPlaylists(list);
             setStatus(list.isEmpty()
@@ -734,6 +742,10 @@ void AppController::applyPlaylistFilter()
         list = filtered;
     }
     m_playlists->setPlaylists(list);
+    // 未登录 / 该平台无本地歌单时，回退展示其公开默认榜单（洛雪式：未登录也按平台给默认歌单）。
+    // 点开榜单走 rankDetail/playlistDetail 公共端点，不依赖账号。
+    if (list.isEmpty() && !d->playlistFilter.isEmpty())
+        loadRank(d->playlistFilter);
 }
 
 void AppController::refreshPlaylists()

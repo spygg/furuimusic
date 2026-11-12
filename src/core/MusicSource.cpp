@@ -231,11 +231,43 @@ void MusicSource::searchPlaylist(const QString &keyword, int limit, int offset,
 void MusicSource::rank(int limit, int offset, PlaylistsCallback cb)
 {
     const Endpoint ep = m_desc.endpoints.value(QStringLiteral("rank"));
+    // 汽水音乐：推荐歌单走 Luna 发现流（免登录），结构需专用展平解析
+    if (m_desc.driver == QLatin1String("qishui") && ep.valid())
+        return qishuiRank(limit, offset, cb);
+    // 没有 rank 端点（如汽水音乐）：直接回退静态默认榜单，未登录也展示
+    if (!ep.valid()) {
+        if (cb) cb(defaultBoards());
+        return;
+    }
     QVariantMap v = baseVars();
     v.insert(QStringLiteral("limit"), QString::number(limit));
     v.insert(QStringLiteral("offset"), QString::number(offset));
     v.insert(QStringLiteral("page"), QString::number(offset / qMax(1, limit) + 1));
-    requestPlaylists(ep, v, QStringLiteral("rank"), cb);
+    // 端点被反爬/失效（如咪咕老 remoting 返回 HTML 页）导致空结果时，回退默认榜单，
+    // 避免「切换平台刷新后一片空白」。defaultBoards 为空则维持空结果。
+    requestPlaylists(ep, v, QStringLiteral("rank"), [this, cb](const QVector<Playlist> &list) {
+        if (cb) cb(list.isEmpty() ? defaultBoards() : list);
+    });
+}
+
+QVector<Playlist> MusicSource::defaultBoards() const
+{
+    QVector<Playlist> out;
+    for (const QVariant &b : m_desc.defaultBoards) {
+        const QVariantMap m = b.toMap();
+        Playlist p;
+        p.source = m_desc.id;
+        p.type = QStringLiteral("rank");
+        p.sourceId = m.value(QStringLiteral("id")).toString();
+        p.title = m.value(QStringLiteral("title")).toString();
+        p.cover = Json::fillImageSize(m.value(QStringLiteral("cover")).toString());
+        p.count = m.value(QStringLiteral("count")).toInt();
+        if (p.sourceId.isEmpty()) p.sourceId = QString::number(qHash(p.title), 16);
+        p.uid = p.source + QLatin1Char(':') + p.sourceId;
+        if (p.title.isEmpty()) continue;
+        out << p;
+    }
+    return out;
 }
 
 void MusicSource::playlistDetail(const QString &id, int limit, int offset, SongsCallback cb)
@@ -574,6 +606,23 @@ inline QJsonValue qishuiUnwrapPlaylist(const QJsonValue &v)
     return p;
 }
 
+// 汽水封面字段兼容两种形态：
+//   - 字符串（多数歌单详情/搜索）；
+//   - {uri, urls:[prefix,...]} 对象（发现流 discover/mix 的 url_cover，需 prefix+uri 拼接）。
+inline QString qishuiCoverOf(const QJsonValue &p)
+{
+    QJsonValue cv = Json::valueAt(p, QStringLiteral("url_cover"));
+    if (cv.isString()) return cv.toString();
+    if (cv.isObject()) {
+        const QJsonObject o = cv.toObject();
+        const QString uri = o.value(QStringLiteral("uri")).toString();
+        const QJsonArray urls = o.value(QStringLiteral("urls")).toArray();
+        const QString prefix = urls.isEmpty() ? QString() : urls.at(0).toString();
+        if (!prefix.isEmpty() || !uri.isEmpty()) return prefix + uri;
+    }
+    return Json::stringAt(p, QStringLiteral("cover_url"));
+}
+
 inline Playlist qishuiPlaylistToPlaylist(const QJsonValue &p, const QString &source)
 {
     Playlist pl;
@@ -581,7 +630,7 @@ inline Playlist qishuiPlaylistToPlaylist(const QJsonValue &p, const QString &sou
     pl.type = QStringLiteral("search");
     pl.sourceId = Json::stringAt(p, QStringLiteral("id"));
     pl.title = Json::stringAt(p, QStringLiteral("title"));
-    pl.cover = Json::stringAt(p, QStringLiteral("cover_url"));
+    pl.cover = qishuiCoverOf(p);
     pl.owner = Json::stringAt(p, QStringLiteral("owner.nickname"));
     pl.count = Json::stringAt(p, QStringLiteral("count_tracks")).toInt();
     if (pl.sourceId.isEmpty()) pl.sourceId = QString::number(qHash(pl.title), 16);
@@ -660,6 +709,34 @@ void MusicSource::qishuiSearchPlaylists(const QString &keyword, int limit, int o
             }
         }
         if (cb) cb(out);
+    });
+}
+
+void MusicSource::qishuiRank(int limit, int offset, PlaylistsCallback cb)
+{
+    const Endpoint ep = m_desc.endpoints.value(QStringLiteral("rank"));
+    QVariantMap v = baseVars();
+    v.insert(QStringLiteral("limit"), QString::number(limit));
+    v.insert(QStringLiteral("offset"), QString::number(offset));
+    v.insert(QStringLiteral("page"), QString::number(offset / qMax(1, limit) + 1));
+    call(ep, v, [this, cb](const HttpClient::Reply &r) {
+        QVector<Playlist> out;
+        if (r.ok) {
+            const QJsonValue root = Json::rootOf(r.json);
+            // 发现流结构：inner_block[].resources[].entity.playlist
+            const QJsonArray blocks = Json::arrayAt(root, QStringLiteral("inner_block"));
+            for (const QJsonValue &b : blocks) {
+                const QJsonArray res = Json::arrayAt(b, QStringLiteral("resources"));
+                for (const QJsonValue &rsc : res) {
+                    const QJsonValue p = qishuiUnwrapPlaylist(rsc);
+                    if (!p.isNull() && !Json::stringAt(p, QStringLiteral("id")).isEmpty()
+                        && !Json::stringAt(p, QStringLiteral("title")).isEmpty())
+                        out << qishuiPlaylistToPlaylist(p, m_desc.id);
+                }
+            }
+        }
+        // 接口偶发失败/被限流时回退静态默认榜单，避免空白
+        if (cb) cb(out.isEmpty() ? defaultBoards() : out);
     });
 }
 

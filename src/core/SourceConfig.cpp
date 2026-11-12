@@ -128,6 +128,14 @@ static bool parseSources(const QByteArray &data, QVector<SourceDesc> *out, QStri
         const QVariantMap eps = m.value(QStringLiteral("endpoints")).toMap();
         for (auto it = eps.constBegin(); it != eps.constEnd(); ++it)
             s.endpoints.insert(it.key(), Endpoint::fromVariant(it.value()));
+        // 默认榜单：未登录也展示的公开榜单（参考洛雪 leaderboard.js 的静态 boardList）
+        const QVariantList dbs = m.value(QStringLiteral("defaultBoards")).toList();
+        for (const QVariant &b : dbs) {
+            const QVariantMap bm = b.toMap();
+            if (!bm.value(QStringLiteral("id")).toString().isEmpty()
+                && !bm.value(QStringLiteral("title")).toString().isEmpty())
+                s.defaultBoards.append(bm);
+        }
         if (searchPlaylistEndpoints.contains(s.id))
             s.endpoints.insert(QStringLiteral("searchPlaylist"),
                                Endpoint::fromVariant(searchPlaylistEndpoints.value(s.id)));

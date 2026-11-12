@@ -268,7 +268,52 @@
             }
           }
         }
-      }
+      },
+      "defaultBoards": [
+        {
+          "_note": "未登录也展示的默认榜单（参考洛雪 leaderboard.js）；实时 rank 接口失败时回退"
+        },
+        {
+          "title": "飙升榜",
+          "id": "19723756"
+        },
+        {
+          "title": "热歌榜",
+          "id": "3778678"
+        },
+        {
+          "title": "新歌榜",
+          "id": "3779629"
+        },
+        {
+          "title": "原创榜",
+          "id": "2884035"
+        },
+        {
+          "title": "古典榜",
+          "id": "71384707"
+        },
+        {
+          "title": "抖音榜",
+          "id": "2250011882"
+        },
+        {
+          "title": "韩语榜",
+          "id": "745956260"
+        },
+        {
+          "title": "电音榜",
+          "id": "1978921795"
+        },
+        {
+          "title": "电竞榜",
+          "id": "2006508653"
+        },
+        {
+          "title": "KTV唛榜",
+          "id": "21845217"
+        }
+      ]
     },
     {
       "id": "qq",
@@ -555,7 +600,56 @@
             }
           }
         }
-      }
+      },
+      "defaultBoards": [
+        {
+          "_note": "未登录也展示的默认榜单（参考洛雪 leaderboard.js）；实时 rank 接口失败时回退"
+        },
+        {
+          "title": "流行榜",
+          "id": "4"
+        },
+        {
+          "title": "热歌榜",
+          "id": "26"
+        },
+        {
+          "title": "网络榜",
+          "id": "28"
+        },
+        {
+          "title": "抖音榜",
+          "id": "60"
+        },
+        {
+          "title": "内地榜",
+          "id": "5"
+        },
+        {
+          "title": "香港榜",
+          "id": "59"
+        },
+        {
+          "title": "台湾榜",
+          "id": "61"
+        },
+        {
+          "title": "欧美榜",
+          "id": "3"
+        },
+        {
+          "title": "韩国榜",
+          "id": "16"
+        },
+        {
+          "title": "日本榜",
+          "id": "17"
+        },
+        {
+          "title": "YouTube榜",
+          "id": "128"
+        }
+      ]
     },
     {
       "id": "kugou",
@@ -855,7 +949,56 @@
             }
           }
         }
-      }
+      },
+      "defaultBoards": [
+        {
+          "_note": "未登录也展示的默认榜单（参考洛雪 leaderboard.js）；实时 rank 接口失败时回退"
+        },
+        {
+          "title": "TOP500",
+          "id": "8888"
+        },
+        {
+          "title": "网络榜",
+          "id": "23784"
+        },
+        {
+          "title": "飙升榜",
+          "id": "6666"
+        },
+        {
+          "title": "分享榜",
+          "id": "21101"
+        },
+        {
+          "title": "纯音乐榜",
+          "id": "33164"
+        },
+        {
+          "title": "古风榜",
+          "id": "33161"
+        },
+        {
+          "title": "粤语榜",
+          "id": "33165"
+        },
+        {
+          "title": "欧美榜",
+          "id": "33166"
+        },
+        {
+          "title": "电音榜",
+          "id": "33160"
+        },
+        {
+          "title": "DJ热歌榜",
+          "id": "24971"
+        },
+        {
+          "title": "华语新歌榜",
+          "id": "31308"
+        }
+      ]
     },
     {
       "id": "kuwo",
@@ -1007,7 +1150,56 @@
             }
           }
         }
-      }
+      },
+      "defaultBoards": [
+        {
+          "_note": "未登录也展示的默认榜单（参考洛雪 leaderboard.js）；实时 rank 接口失败时回退"
+        },
+        {
+          "title": "飙升榜",
+          "id": "93"
+        },
+        {
+          "title": "热歌榜",
+          "id": "16"
+        },
+        {
+          "title": "会员榜",
+          "id": "145"
+        },
+        {
+          "title": "抖音榜",
+          "id": "158"
+        },
+        {
+          "title": "趋势榜",
+          "id": "187"
+        },
+        {
+          "title": "怀旧榜",
+          "id": "26"
+        },
+        {
+          "title": "华语榜",
+          "id": "104"
+        },
+        {
+          "title": "粤语榜",
+          "id": "182"
+        },
+        {
+          "title": "欧美榜",
+          "id": "22"
+        },
+        {
+          "title": "韩语榜",
+          "id": "184"
+        },
+        {
+          "title": "日语榜",
+          "id": "183"
+        }
+      ]
     },
     {
       "id": "migu",
@@ -1044,18 +1236,6 @@
               "1",
               "true"
             ]
-          }
-        },
-        "rank": {
-          "method": "GET",
-          "_note": "2026-11 实测：m.music.migu.cn 的老 remoting 接口（rank_list / cms_list_tag）已全部返回反爬 HTML 页（1.7KB 的 doctype 页），不再吐 JSON，咪咕榜单因此暂为空；修好需要复刻新版签名，改为留空不影响其它平台聚合",
-          "path": "/migu/remoting/rank_list",
-          "root": "list",
-          "fields": {
-            "id": "id",
-            "title": "name",
-            "cover": "pic",
-            "count": "count"
           }
         },
         "playlistDetail": {
@@ -1117,6 +1297,27 @@
             "data.lyric",
             "lyric"
           ]
+        },
+        "rankDetail": {
+          "method": "GET",
+          "_note": "洛雪同款：咪咕榜单详情走 app.c.nf.migu.cn 的 querycontentbyId.do（老 remoting 接口已被反爬），columnId 即榜单 id；详情里歌曲 id 用 objectInfo.copyrightId，与 url 端点一致",
+          "path": "https://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/querycontentbyId.do",
+          "headers": {
+            "Referer": "https://app.c.nf.migu.cn/"
+          },
+          "params": {
+            "columnId": "{id}",
+            "needAll": "0"
+          },
+          "root": "columnInfo.contents",
+          "fields": {
+            "id": "objectInfo.copyrightId",
+            "title": "objectInfo.songName",
+            "artist": "objectInfo.artists[].name",
+            "album": "objectInfo.album",
+            "cover": "objectInfo.albumImgs[0].img",
+            "duration": "objectInfo.length"
+          }
         }
       },
       "login": {
@@ -1154,7 +1355,52 @@
             }
           }
         }
-      }
+      },
+      "defaultBoards": [
+        {
+          "_note": "老 /migu/remoting/rank_list 已被反爬（返回 HTML 页），改用洛雪同款静态榜单；点进去走 rankDetail 的 querycontentbyId.do"
+        },
+        {
+          "id": "27553319",
+          "title": "新歌榜"
+        },
+        {
+          "id": "27186466",
+          "title": "热歌榜"
+        },
+        {
+          "id": "27553408",
+          "title": "原创榜"
+        },
+        {
+          "id": "75959118",
+          "title": "音乐风向榜"
+        },
+        {
+          "id": "76557036",
+          "title": "彩铃分贝榜"
+        },
+        {
+          "id": "76557745",
+          "title": "会员臻爱榜"
+        },
+        {
+          "id": "23189800",
+          "title": "港台榜"
+        },
+        {
+          "id": "23189399",
+          "title": "内地榜"
+        },
+        {
+          "id": "19190036",
+          "title": "欧美榜"
+        },
+        {
+          "id": "83176390",
+          "title": "国风金曲榜"
+        }
+      ]
     },
     {
       "id": "qishui",
@@ -1252,6 +1498,25 @@
             "lrc.lyric",
             "data.lyric"
           ]
+        },
+        "rank": {
+          "_note": "汽水推荐/发现歌单：Luna 发现流 discover/mix，免登录（只需 Luna App UA）。结构 inner_block[].resources[].entity.playlist 由 MusicSource::qishuiRank 专用展平；封面 url_cover 为 {urls:[prefix],uri} 对象，qishuiCoverOf 负责 prefix+uri 拼接。",
+          "method": "POST",
+          "path": "https://beta-luna.douyin.com/luna/discover/mix",
+          "contentType": "json",
+          "headers": {
+            "User-Agent": "Luna/19.1.0 Android"
+          },
+          "jsonBody": {
+            "count": "{limit}"
+          },
+          "root": "inner_block",
+          "fields": {
+            "id": "resources[].entity.playlist.id",
+            "title": "resources[].entity.playlist.title",
+            "cover": "resources[].entity.playlist.url_cover",
+            "count": "resources[].entity.playlist.count_tracks"
+          }
         }
       },
       "login": {

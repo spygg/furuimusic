@@ -211,8 +211,9 @@ public:
     Q_INVOKABLE void setSearchType(const QString &type);   // song / songlist / album / singer
     Q_INVOKABLE void search(const QString &keyword, const QString &sourceId = QString());
     Q_INVOKABLE void loadRank(const QString &sourceId);
-    // 并发拉取所有已配置 rank 端点的平台公开榜单（无需登录），写入 discovery 模型
-    Q_INVOKABLE void loadDiscovery();
+    // 并发拉取平台公开榜单（无需登录）写入 discovery 模型；sourceId 为空=全部平台，
+    // 指定平台则只拉该平台的默认榜单（配合平台筛选：未登录也按平台给默认歌单）。
+    Q_INVOKABLE void loadDiscovery(const QString &sourceId = QString());
     // 打开 discovery 里的公开歌单：走公共 playlistDetail 端点，不触碰本地账号歌单
     Q_INVOKABLE void openDiscoveryPlaylist(const QString &playlistUid);
     Q_INVOKABLE int playlistCount() const;

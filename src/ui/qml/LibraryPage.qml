@@ -111,7 +111,7 @@ Item {
         else if (root.tabIndex === 2)
             app.loadHistoryBySource(sid)
         else if (root.tabIndex === 4)
-            app.loadDiscovery()
+            app.loadDiscovery(root.selectedSourceId())
         else if (root.tabIndex === 5)
             app.loadMvList(root.mvArea, false)
     }
@@ -145,7 +145,7 @@ Item {
     Component.onCompleted: {
         app.refreshPlaylists()
         // 公开榜单不依赖登录：先拉一次，未登录且本地没有歌单时默认直接展示这一页
-        app.loadDiscovery()
+        app.loadDiscovery(root.selectedSourceId())
         if (app.loggedAccountCount() === 0 && app.playlistCount() === 0)
             root.tabIndex = 4
     }
@@ -192,7 +192,7 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                         if (root.tabIndex === 4) {
-                            app.loadDiscovery()
+                            app.loadDiscovery(root.selectedSourceId())
                             root.hint = "正在刷新各平台公开榜单"
                         } else if (root.tabIndex === 5) {
                             app.loadMvList(root.mvArea, false)
@@ -225,7 +225,7 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                         if (root.tabIndex === 4) {
-                            app.loadDiscovery()
+                            app.loadDiscovery(root.selectedSourceId())
                             root.hint = "正在刷新各平台公开榜单"
                         } else if (root.tabIndex === 5) {
                             app.loadMvList(root.mvArea, false)

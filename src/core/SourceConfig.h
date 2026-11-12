@@ -68,6 +68,7 @@ struct SourceDesc {
     QString driver;               // 可选：平台特定解析驱动（如 "qishui" 展平双层嵌套响应）
     QVariantMap headers;
     QHash<QString, Endpoint> endpoints;   // search / rank / playlistDetail / url / lyric
+    QVariantList defaultBoards;           // 未登录也展示的默认榜单（洛雪式：按平台给默认歌单）
     LoginConfig login;
     UserApiConfig userApi;
     QVariantMap raw;

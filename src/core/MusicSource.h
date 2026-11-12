@@ -38,6 +38,9 @@ public:
     void search(const QString &keyword, int limit, int offset, SongsCallback cb);
     void searchPlaylist(const QString &keyword, int limit, int offset, PlaylistsCallback cb);
     void rank(int limit, int offset, PlaylistsCallback cb);
+    // 把配置里的静态默认榜单（defaultBoards）转成 Playlist 列表；无 rank 端点或
+    // rank 拉取失败/被反爬时回退用，保证未登录也能按平台展示默认歌单（洛雪式）。
+    QVector<Playlist> defaultBoards() const;
     void playlistDetail(const QString &id, int limit, int offset, SongsCallback cb);
     // 榜单详情：配置了 rankDetail 端点的平台走专属接口（如 QQ musicu GetDetail、
     // 酷狗 v3/rank/song），未配置的平台回退 playlistDetail（榜单 id 兼容歌单 id）。
@@ -78,6 +81,8 @@ private:
     void qishuiSearch(const QString &keyword, int limit, int offset, SongsCallback cb);
     void qishuiPlaylistDetail(const QString &id, int limit, int offset, SongsCallback cb);
     void qishuiSearchPlaylists(const QString &keyword, int limit, int offset, PlaylistsCallback cb);
+    // 汽水推荐/发现歌单：POST /luna/discover/mix，免登录，结构 inner_block[].resources[].entity.playlist
+    void qishuiRank(int limit, int offset, PlaylistsCallback cb);
 
     SourceDesc m_desc;
     Account m_session;
