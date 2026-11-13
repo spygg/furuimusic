@@ -17,6 +17,23 @@
 
 namespace Furui {
 
+namespace {
+
+// 打开一个歌单时要多少首。
+// - 只有声明了「trackIds + 批量详情」补全能力的平台（网易云）才一次要全量：它一个响应就
+//   给出完整 id 列表，代价只是多几次 song/detail 批量请求；
+// - 其余平台沿用 150 首：把 limit 提到上千后，不少网关会直接回 code:-1 / 0 首，
+//   反而比现在更差。
+int detailSongLimit(const Playlist &p, MusicSource *s)
+{
+    const int base = qMax(30, Settings::integer(QStringLiteral("pageSize"), 30) * 5);
+    if (!s || !s->supportsFullPlaylist()) return base;
+    const int cap = qBound(base, Settings::integer(QStringLiteral("playlistMaxSongs"), 1000), 5000);
+    return p.count > 0 ? qBound(base, p.count, cap) : cap;
+}
+
+} // namespace
+
 SourceManager *SourceManager::instance()
 {
     static SourceManager *m = new SourceManager();
@@ -208,9 +225,9 @@ void SourceManager::playlistDetail(const Playlist &playlist, SongsCallback cb)
     if (playlist.type == QLatin1String("user"))
         s->userPlaylistDetail(id, finish);
     else if (playlist.type == QLatin1String("rank"))
-        s->rankDetail(id, Settings::integer(QStringLiteral("pageSize"), 30) * 5, 0, finish);
+        s->rankDetail(id, detailSongLimit(playlist, s), 0, finish);
     else
-        s->playlistDetail(id, Settings::integer(QStringLiteral("pageSize"), 30) * 5, 0, finish);
+        s->playlistDetail(id, detailSongLimit(playlist, s), 0, finish);
 }
 
 void SourceManager::resolve(const Song &song, const QString &quality, PlayableCallback cb)

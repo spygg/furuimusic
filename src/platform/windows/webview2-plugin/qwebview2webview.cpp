@@ -191,6 +191,9 @@ void QWebView2WebViewPrivate::initialize(HWND hWnd)
                 // FuruiMusic: 把 CookieManager 交给 C 接口桥，主程序才能读到
                 // 网站写入的 HttpOnly Cookie（例如网易云的 MUSIC_U）。
                 FuruiRegisterCookieManager(m_cookieManager.Get());
+                // 同理把 controller 交出去：个别站点只认真实输入事件
+                FuruiRegisterWebViewController(m_webviewController.Get(),
+                                               (HWND)m_window->winId());
 
                 m_settings->init(m_webviewController.Get());
 

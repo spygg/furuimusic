@@ -59,6 +59,9 @@ public:
     void userPlaylists(PlaylistsCallback cb);
     void userFavorites(SongsCallback cb);
     void userPlaylistDetail(const QString &id, SongsCallback cb);
+    // 歌单/榜单详情端点是否声明了「全量 id + 批量详情」补全能力（网易云的 trackIds 方案）。
+    // 有这项能力的平台值得一次要全量曲目，没有的仍然只请求一页，避免被网关判为异常。
+    bool supportsFullPlaylist() const;
 
     // 登录流程复用同一套请求构造器
     void call(const Endpoint &ep, const QVariantMap &vars, ReplyCallback cb);
@@ -74,6 +77,14 @@ private:
     // 我们一次性要 150 得到 code:-1 / 0 首」。
     void requestSongsPaged(const Endpoint &ep, const QVariantMap &vars, int limit, int offset,
                            SongsCallback cb);
+    // 歌单详情专用：先按 root 解析出「预览曲目」，再看端点有没有配 fullIdsPath。
+    // 网易云（以及同构的 /api/v3/playlist/detail）只回前 10 首 tracks，完整顺序在
+    // trackIds 里，这里用它 + 批量 song/detail 补齐并还原歌单顺序。
+    void requestDetailSongs(const Endpoint &ep, const QVariantMap &vars, int limit, int offset,
+                            SongsCallback cb);
+    // 按 id 批量拉详情：分批请求 fillEp，最后按 ids 顺序输出（保持歌单顺序、丢掉下架曲目）
+    void fillSongsByIds(const Endpoint &fillEp, const QVariantMap &vars, const QStringList &ids,
+                        const QVector<Song> &preview, SongsCallback cb);
     void requestPlaylists(const Endpoint &ep, const QVariantMap &vars, const QString &type,
                           PlaylistsCallback cb);
     static bool isVipResponse(const QVariantMap &rule, const QJsonValue &root,

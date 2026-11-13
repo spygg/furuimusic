@@ -60,19 +60,47 @@
         },
         "playlistDetail": {
           "method": "GET",
-          "path": "/api/playlist/detail",
+          "path": "/api/v3/playlist/detail",
           "params": {
             "id": "{id}",
-            "limit": "{limit}",
-            "offset": "{offset}"
+            "n": "{limit}"
           },
-          "root": "result.tracks",
+          "root": "playlist.tracks",
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "artist": "ar[].name",
+            "album": "al.name",
+            "cover": "al.picUrl",
+            "duration": "dt",
+            "vip": "fee",
+            "vipValues": [
+              "1",
+              "4"
+            ],
+            "durationScale": 1
+          },
+          "extra": {
+            "fullIdsPath": "playlist.trackIds",
+            "fillEndpoint": "songDetail",
+            "fillBatch": 200,
+            "_note": "老的 /api/playlist/detail 已被降级成预览：普通歌单只回 10 首 tracks 且不带 id 列表，v3 才是完整数据（playlist.tracks 仍是 10 首预览，但 playlist.trackIds 给出全部 561 个 id）。extra.fullIdsPath 声明全量 id 列表，MusicSource 用 fillEndpoint 指的批量详情端点补齐并还原顺序。"
+          }
+        },
+        "songDetail": {
+          "method": "GET",
+          "path": "/api/song/detail",
+          "params": {
+            "ids": "[{ids}]"
+          },
+          "root": "songs",
           "fields": {
             "id": "id",
             "title": "name",
             "artist": "artists[].name",
             "album": "album.name",
             "cover": "album.picUrl",
+            "albumId": "album.id",
             "duration": "duration",
             "vip": "fee",
             "vipValues": [
@@ -80,7 +108,8 @@
               "4"
             ],
             "durationScale": 1
-          }
+          },
+          "_note": "批量歌曲详情：ids 为逗号分隔 id 串，配置里包成 [..] 数组。注意这个端点用 artists/album/duration 这套老字段（不是 v3 的 ar/al/dt）。fillBatch 控制单次批量条数（GET 版受 URL 长度限制）。"
         },
         "url": {
           "method": "GET",
@@ -249,7 +278,11 @@
             },
             "root": "playlist.tracks",
             "extra": {
-              "forwardMethod": "POST"
+              "forwardMethod": "POST",
+              "fullIdsPath": "playlist.trackIds",
+              "fillEndpoint": "songDetail",
+              "fillBatch": 200,
+              "_note": "同公共 playlistDetail：playlist.tracks 只是预览，完整顺序在 playlist.trackIds。UserApi 用它配合 songDetail 补齐歌单同步结果。"
             },
             "fields": {
               "id": "id",
@@ -266,6 +299,34 @@
               ],
               "durationScale": 1
             }
+          },
+          "songDetail": {
+            "method": "GET",
+            "path": "/api/song/detail",
+            "params": {
+              "ids": "[{ids}]"
+            },
+            "root": "songs",
+            "extra": {
+              "forwardMethod": "GET"
+            },
+            "fields": {
+              "id": "id",
+              "title": "name",
+              "artist": "artists[].name",
+              "album": "album.name",
+              "cover": "album.picUrl",
+              "albumId": "album.id",
+              "duration": "duration",
+              "vip": "fee",
+              "vipValues": [
+                "1",
+                "4",
+                "8"
+              ],
+              "durationScale": 1
+            },
+            "_note": "被 playlistSongs 的 extra.fillEndpoint 引用：按 trackIds 批量补全歌单曲目。字段是 /api/song/detail 的老结构（artists/album/duration），不是 v3 的 ar/al/dt。"
           }
         }
       },

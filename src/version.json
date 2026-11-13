@@ -1,7 +1,11 @@
 {
-  "version": "1.4.5",
-  "desc": "修复\n- Linux 桌面构建链接失败：undefined reference to breakpad_getcontext。根因为 project() 只启用 C/CXX 未启用 ASM 语言，CMake 把 breakpad_getcontext.S 当「无法确定语言」的文件排除出构建；已在 CMakeLists 顶层 enable_language(ASM)，.S 正常编译后符号补齐",
+  "version": "1.4.6",
+  "desc": "新增\n- 账号密码登录升级为内嵌各平台官网真实登录页（网易云/QQ/酷狗/酷我/咪咕/汽水）：在真实页面完成登录，滑块、短信等人机验证都能正常通过，登录成功后自动导入 Cookie 并同步歌单；登录页自动只显示登录部分\n- Windows 内置浏览器新增页面内真实鼠标点击能力（WebView2 输入管线），酷我这类只认真实输入的站点也能自动弹开登录框\n\n修复\n- 网易云普通歌单只显示 10 首左右：官方老接口已降级为预览模式，改用 v3 接口按完整曲目 ID 列表批量补全，500 首以上的大歌单也能全量加载\n\n优化\n- 歌单曲目数量上限按平台能力放开：支持全量补全的平台按歌单真实曲目数拉取（上限 1000），其余平台维持原上限",
   "history": [
+    {
+      "version": "1.4.5",
+      "desc": "修复\n- Linux 桌面构建链接失败：undefined reference to breakpad_getcontext。根因为 project() 只启用 C/CXX 未启用 ASM 语言，CMake 把 breakpad_getcontext.S 当「无法确定语言」的文件排除出构建；已在 CMakeLists 顶层 enable_language(ASM)，.S 正常编译后符号补齐"
+    },
     {
       "version": "1.4.4",
       "desc": "修复\n- Windows 一键构建脚本（build_windows.bat / build_android.bat / build_android_qt6.bat）因 UTF-8 中文注释被 cmd 按系统 GBK 解析，中文串被当成命令执行导致打包失败；已全部改为 ASCII 注释\n- Android 构建（CI 与本地）因 Breakpad 接入宏内的 return() 在 CMakeLists 顶层提前结束，导致 FuruiMusic_make_apk 目标缺失、无法生成 APK；已将宏改为函数并回传 FURUI_HAVE_BREAKPAD\n- CI 桌面构建因 install-qt-action 内置旧版 aqtinstall 无法解析 Qt 6.8.3 的 qtwebview 模块而 Install Qt 失败；改为先装 qtmultimedia 再单独追加 qtwebview"
@@ -36,9 +40,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.5/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.5/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.5/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.5/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.6/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.6/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.6/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.6/FuruiMusic-android-arm64-v8a.apk"
   }
 }

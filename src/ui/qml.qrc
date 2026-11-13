@@ -9,6 +9,7 @@
         <file alias="LibraryPage.qml">qml/LibraryPage.qml</file>
         <file alias="LoginPage.qml">qml/LoginPage.qml</file>
         <file alias="BrowserWindow.qml">qml/BrowserWindow.qml</file>
+        <file alias="WebLoginView.qml">qml/WebLoginView.qml</file>
         <file alias="CaptchaField.qml">qml/CaptchaField.qml</file>
         <file alias="PlayerPage.qml">qml/PlayerPage.qml</file>
         <file alias="MvPage.qml">qml/MvPage.qml</file>

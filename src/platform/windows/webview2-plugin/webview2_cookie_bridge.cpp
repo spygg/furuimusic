@@ -16,6 +16,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QString>
+#include <QtGlobal>
 #include <QTimer>
 
 #include <windows.h>
@@ -28,6 +29,12 @@ namespace {
 
 std::mutex g_mutex;
 Microsoft::WRL::ComPtr<ICoreWebView2CookieManager> g_manager;
+
+// 页面内「真实鼠标点击」用：部分站点（酷我）对 JS 合成事件完全不响应，
+// 只有浏览器输入管线产生的事件（isTrusted=true）才会走它自己的弹框逻辑。
+std::mutex g_controllerMutex;
+Microsoft::WRL::ComPtr<ICoreWebView2Controller> g_controller;
+HWND g_parentHwnd = nullptr;
 
 QString cookiesToString(ICoreWebView2CookieList *list)
 {
@@ -71,6 +78,102 @@ void FuruiRegisterCookieManager(ICoreWebView2CookieManager *manager)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_manager = manager;
+}
+
+void FuruiRegisterWebViewController(ICoreWebView2Controller *controller, HWND parent)
+{
+    std::lock_guard<std::mutex> lock(g_controllerMutex);
+    g_controller = controller;
+    g_parentHwnd = parent;
+}
+
+namespace {
+
+struct FindChildCtx {
+    HWND render = nullptr;   // Chrome_RenderWidgetHostHWND：真正接收输入的那个
+    HWND shell = nullptr;    // Chrome_WidgetWin_0：兜底
+};
+
+BOOL CALLBACK findRenderedChild(HWND hwnd, LPARAM lp)
+{
+    auto *ctx = reinterpret_cast<FindChildCtx *>(lp);
+    wchar_t cls[128] = {};
+    if (GetClassNameW(hwnd, cls, 128) > 0) {
+        if (wcsstr(cls, L"Chrome_RenderWidgetHost")) {
+            ctx->render = hwnd;
+            return FALSE;
+        }
+        if (!ctx->shell && wcsstr(cls, L"Chrome_WidgetWin"))
+            ctx->shell = hwnd;
+    }
+    return TRUE;
+}
+
+} // namespace
+
+// 在 WebView 内发一次「真实」左键点击（CSS 像素坐标，相对视口）。
+//
+// 为什么需要它：酷我首页的「登录 / 注册」对 dispatchEvent 合成的
+// mousedown/mouseup/click 完全不响应（document 能收到事件，站点逻辑不动作，
+// 也没有 JS 报错），只有浏览器自身输入管线产生的事件才会打开登录弹框。
+// 普通模式的 ICoreWebView2Controller 没有 SendMouseInput（那是组合模式才有的），
+// 所以改成往 WebView2 的子窗口投 WM_LBUTTONDOWN/UP——同样走浏览器输入管线。
+extern "C" __declspec(dllexport)
+int furui_webview2_click(double cssX, double cssY, double viewportWidth)
+{
+    Microsoft::WRL::ComPtr<ICoreWebView2Controller> controller;
+    HWND parent = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_controllerMutex);
+        controller = g_controller;
+        parent = g_parentHwnd;
+    }
+    if (!controller || !parent)
+        return -1;
+
+    FindChildCtx ctx;
+    EnumChildWindows(parent, findRenderedChild, reinterpret_cast<LPARAM>(&ctx));
+    // 优先投给渲染窗口；它才是 Chrome 的输入入口，投给外层 WidgetWin 不会
+    // 产生页面的 mousedown（实测 md 计数不变）
+    HWND target = ctx.render ? ctx.render : (ctx.shell ? ctx.shell : parent);
+
+    // CSS 像素 → 客户区像素的缩放不能按 DPI 猜：WebView2 的渲染缩放由
+    // 它自己的 rasterization scale 决定（本机实测 CSS 1055 宽落在 ~700 客户区像素上，
+    // 而 ICoreWebView2Controller 没有暴露 get_RasterizationScale）。
+    // 直接用「客户区宽 / 页面 innerWidth」反推，任何缩放比例都准。
+    double scale = 1.0;
+    RECT rc = {};
+    if (GetClientRect(target, &rc) && viewportWidth > 1.0 && rc.right > 0)
+        scale = static_cast<double>(rc.right) / viewportWidth;
+
+    const LONG px = static_cast<LONG>(cssX * scale + 0.5);
+    const LONG py = static_cast<LONG>(cssY * scale + 0.5);
+
+    controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    SetFocus(target);
+
+    // Chrome 在处理鼠标消息时会参考系统光标位置，先把光标挪到自己身上再投消息
+    POINT screenPt = {px, py};
+    if (ClientToScreen(target, &screenPt))
+        SetCursorPos(screenPt.x, screenPt.y);
+
+    const LPARAM pos = MAKELPARAM(px, py);
+    SendMessageW(target, WM_MOUSEMOVE, 0, pos);
+    SendMessageW(target, WM_LBUTTONDOWN, MK_LBUTTON, pos);
+    SendMessageW(target, WM_LBUTTONUP, 0, pos);
+
+    if (qEnvironmentVariableIsEmpty("FURUI_BROWSER_TRACE") == false) {
+        wchar_t cls[128] = {};
+        GetClassNameW(target, cls, 128);
+        std::fprintf(stderr,
+                     "[webview2] click parent=%p target=%p class=%ls client=%ldx%ld "
+                     "vw=%.0f scale=%.3f at=%ld,%ld same=%d\n",
+                     static_cast<void *>(parent), static_cast<void *>(target), cls,
+                     static_cast<long>(rc.right), static_cast<long>(rc.bottom),
+                     viewportWidth, scale, static_cast<long>(px), static_cast<long>(py),
+                     target == parent ? 1 : 0);
+    }
+    return 0;
 }
 
 extern "C" __declspec(dllexport)

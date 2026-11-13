@@ -670,9 +670,13 @@ void AppController::loadPlaylist(const QString &playlistUid)
     cancelPendingSearch();
     const quint64 gen = d->searchRequestId;
 
-    // 登录同步时已把用户歌单的歌曲写入本地库，优先直接展示
+    // 登录同步时已把用户歌单的歌曲写入本地库，缓存够多就直接展示。
+    // 注意旧版本的同步结果只有预览曲目（网易云歌单接口只回前 10 首），
+    // 这种「看着有缓存、其实缺了九成」的情况必须继续走网络补全，否则永远看不到完整歌单。
     const QVector<Song> cached = Library::instance()->playlistSongs(target.uid);
-    if (!cached.isEmpty()) {
+    const bool cacheComplete = !cached.isEmpty()
+        && (target.count > 0 ? cached.size() >= target.count : cached.size() >= 100);
+    if (cacheComplete) {
         m_results->setSongs(cached);
         setStatus(QStringLiteral("歌单「%1」共 %2 首（本地已同步）").arg(target.title).arg(cached.size()));
         emit searchFinished(cached.size(), QString());

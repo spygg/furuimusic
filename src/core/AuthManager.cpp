@@ -1847,13 +1847,38 @@ void AuthManager::loginByCookie(const QString &sourceId, const QString &rawCooki
         cookie += QStringLiteral("; __csrf=") + neteaseCsrfToken();
     }
 
+    // 酷狗网页登录的登录态主要装在 KuGoo=…&token=…&userid=… 这一个组合 Cookie 里，
+    // 而接口侧读的是独立的 token / userid。从组合串里拆出来补进 Cookie 头，
+    // 否则「网页登录成功」但后续接口仍按未登录处理。
+    if (sourceId == QLatin1String("kugou")
+        && cookieValue(cookie, {QStringLiteral("token")}).isEmpty()) {
+        const QString packed = cookieValue(cookie, {QStringLiteral("KuGoo")});
+        if (!packed.isEmpty()) {
+            QString kgToken, kgUser;
+            const QStringList parts = packed.split(QLatin1Char('&'), Qt::SkipEmptyParts);
+            for (const QString &part : parts) {
+                const int eq = part.indexOf(QLatin1Char('='));
+                if (eq <= 0) continue;
+                const QString k = part.left(eq).trimmed();
+                const QString v = part.mid(eq + 1).trimmed();
+                if (k == QLatin1String("token")) kgToken = v;
+                else if (k == QLatin1String("userid")) kgUser = v;
+            }
+            if (!kgToken.isEmpty()) {
+                cookie += QStringLiteral("; token=") + kgToken;
+                if (!kgUser.isEmpty())
+                    cookie += QStringLiteral("; userid=") + kgUser;
+            }
+        }
+    }
+
     // 保存登录态不依赖资料接口：即使 /account/get 被风控挡了，Cookie 仍然是有效的，
     // 先落盘、再异步补昵称/头像，避免用户白等一次请求。
     auto commit = [this, sourceId, cookie](const QString &uid, const QString &nick,
                                            const QString &avatar) {
         saveSession(sourceId, cookie, uid, nick, avatar,
-                    nick.isEmpty() ? QStringLiteral("浏览器登录态已导入")
-                                   : QStringLiteral("浏览器登录成功：") + nick);
+                    nick.isEmpty() ? QStringLiteral("网页登录成功，登录态已导入")
+                                   : QStringLiteral("网页登录成功：") + nick);
         syncUserLibrary(sourceId);
     };
 

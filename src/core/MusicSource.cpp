@@ -1,6 +1,7 @@
 #include "MusicSource.h"
 
 #include <QDateTime>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -207,11 +208,23 @@ void MusicSource::requestSongsPaged(const Endpoint &ep, const QVariantMap &vars,
     const int cap = m_desc.pageLimit > 0 ? m_desc.pageLimit : limit;
     if (cap >= limit || limit <= 0) { requestSongs(ep, vars, cb); return; }
 
+    // 放开 150 首上限后，分页平台（酷我单页 30）理论上要为一个大歌单跑几十次请求。
+    // 这里兜一个页数上限，宁可少几首也不能让界面卡在半张歌单上（可用 playlistMaxPages 调）。
+    const int maxPages = qBound(1, Settings::integer(QStringLiteral("playlistMaxPages"), 20), 200);
+
     auto acc = std::make_shared<QVector<Song>>();
+    auto pages = std::make_shared<int>(0);
     auto stepPtr = std::make_shared<std::function<void()>>();
-    *stepPtr = [this, ep, vars, limit, cap, offset, acc, stepPtr, cb]() {
+    *stepPtr = [this, ep, vars, limit, cap, offset, acc, pages, maxPages, stepPtr, cb]() {
         const int done = acc->size();
         if (done >= limit) { if (cb) cb(*acc); return; }
+        if (*pages >= maxPages) {
+            qWarning().noquote() << "[source]" << m_desc.id << "playlist paging stopped at"
+                                 << *pages << "pages," << acc->size() << "songs";
+            if (cb) cb(*acc);
+            return;
+        }
+        ++(*pages);
         const int take = qMin(cap, limit - done);
         QVariantMap v = vars;
         v.insert(QStringLiteral("limit"), QString::number(take));
@@ -225,6 +238,103 @@ void MusicSource::requestSongsPaged(const Endpoint &ep, const QVariantMap &vars,
         });
     };
     (*stepPtr)();
+}
+
+bool MusicSource::supportsFullPlaylist() const
+{
+    const Endpoint ep = m_desc.endpoints.value(QStringLiteral("playlistDetail"));
+    return !ep.extra.value(QStringLiteral("fullIdsPath")).toString().isEmpty()
+           && !ep.extra.value(QStringLiteral("fillEndpoint")).toString().isEmpty();
+}
+
+// trackIds 的元素是对象（{"id": 123, "v": 0, ...}），个别平台直接给数字串，两种都收。
+static QStringList trackIdsAt(const QJsonValue &root, const QString &path)
+{
+    QStringList out;
+    const QJsonArray arr = Json::arrayAt(root, path);
+    out.reserve(arr.size());
+    for (const QJsonValue &v : arr) {
+        const QString id = v.isObject() ? Json::stringAt(v, QStringLiteral("id")) : Json::str(v);
+        if (!id.isEmpty()) out << id;
+    }
+    return out;
+}
+
+void MusicSource::fillSongsByIds(const Endpoint &fillEp, const QVariantMap &vars,
+                                 const QStringList &ids, const QVector<Song> &preview,
+                                 SongsCallback cb)
+{
+    if (ids.isEmpty()) { if (cb) cb(preview); return; }
+    // 批量大小受 URL 长度限制（GET 版 ids 在 query 里，一条 id 约 10 字节）
+    const int batch = qBound(1, fillEp.extra.value(QStringLiteral("fillBatch"), 200).toInt(), 500);
+
+    auto want = std::make_shared<QStringList>(ids);
+    auto got = std::make_shared<QHash<QString, Song>>();
+    auto next = std::make_shared<int>(0);
+    auto step = std::make_shared<std::function<void()>>();
+    *step = [this, fillEp, vars, want, got, next, step, preview, cb, batch]() {
+        if (*next >= want->size()) {
+            QVector<Song> out;
+            out.reserve(want->size());
+            for (const QString &id : *want) {
+                const auto it = got->constFind(id);
+                if (it != got->constEnd()) out << it.value();
+            }
+            // 一条都没补到（接口变动/全部下架）时保留原本的预览结果，不要变成空歌单
+            if (out.isEmpty()) out = preview;
+            if (cb) cb(out);
+            return;
+        }
+        const QStringList slice = want->mid(*next, batch);
+        *next += slice.size();
+        QVariantMap v = vars;
+        v.insert(QStringLiteral("ids"), slice.join(QLatin1Char(',')));
+        requestSongs(fillEp, v, [got, step, slice](const QVector<Song> &songs) {
+            for (const Song &s : songs) got->insert(s.sourceId, s);
+            (*step)();
+        });
+    };
+    (*step)();
+}
+
+void MusicSource::requestDetailSongs(const Endpoint &ep, const QVariantMap &vars, int limit,
+                                     int offset, SongsCallback cb)
+{
+    const QString idsPath = ep.extra.value(QStringLiteral("fullIdsPath")).toString();
+    const QString fillName = ep.extra.value(QStringLiteral("fillEndpoint")).toString();
+    if (idsPath.isEmpty() || fillName.isEmpty())
+        return requestSongsPaged(ep, vars, limit, offset, cb);
+
+    QVariantMap v = vars;
+    v.insert(QStringLiteral("limit"), QString::number(limit));
+    v.insert(QStringLiteral("offset"), QString::number(offset));
+    v.insert(QStringLiteral("page"), QString::number(offset / qMax(1, limit) + 1));
+    call(ep, v, [this, ep, v, limit, idsPath, fillName, cb](const HttpClient::Reply &r) {
+        QVector<Song> preview;
+        QStringList ids;
+        if (r.ok) {
+            const QJsonValue root = Json::rootOf(r.json);
+            const QJsonArray arr = Json::arrayAt(root, ep.root);
+            for (const QJsonValue &x : arr) {
+                Song s = Json::mapSong(x, ep.fields, m_desc.id);
+                if (!s.title.isEmpty()) preview << s;
+            }
+            ids = trackIdsAt(root, idsPath);
+        } else {
+            qWarning().noquote() << "[source]" << m_desc.id << "detail request failed:" << r.error
+                                 << "status=" << r.status << ep.path;
+        }
+        // trackIds 不比预览多 = 这份歌单本来就短（或接口没给全量 id），照原样返回
+        if (ids.size() <= preview.size()) { if (cb) cb(preview); return; }
+        if (limit > 0 && ids.size() > limit) ids = ids.mid(0, limit);
+        const Endpoint fillEp = m_desc.endpoints.value(fillName);
+        if (!fillEp.valid()) {
+            qWarning().noquote() << "[source]" << m_desc.id << "fill endpoint missing:" << fillName;
+            if (cb) cb(preview);
+            return;
+        }
+        fillSongsByIds(fillEp, v, ids, preview, cb);
+    });
 }
 
 void MusicSource::requestPlaylists(const Endpoint &ep, const QVariantMap &vars,
@@ -323,7 +433,7 @@ void MusicSource::playlistDetail(const QString &id, int limit, int offset, Songs
     v.insert(QStringLiteral("limit"), QString::number(limit));
     v.insert(QStringLiteral("offset"), QString::number(offset));
     v.insert(QStringLiteral("page"), QString::number(offset / qMax(1, limit) + 1));
-    requestSongsPaged(ep, v, limit, offset, cb);
+    requestDetailSongs(ep, v, limit, offset, cb);
 }
 
 void MusicSource::rankDetail(const QString &id, int limit, int offset, SongsCallback cb)
@@ -336,7 +446,7 @@ void MusicSource::rankDetail(const QString &id, int limit, int offset, SongsCall
     v.insert(QStringLiteral("limit"), QString::number(limit));
     v.insert(QStringLiteral("offset"), QString::number(offset));
     v.insert(QStringLiteral("page"), QString::number(offset / qMax(1, limit) + 1));
-    requestSongsPaged(ep, v, limit, offset, cb);
+    requestDetailSongs(ep, v, limit, offset, cb);
 }
 
 bool MusicSource::isVipResponse(const QVariantMap &rule, const QJsonValue &root,
@@ -566,10 +676,13 @@ void MusicSource::userPlaylistDetail(const QString &id, SongsCallback cb)
 {
     Endpoint ep = m_desc.login.playlistDetail;
     if (!ep.valid()) ep = m_desc.endpoints.value(QStringLiteral("playlistDetail"));
+    // 自己的歌单同样会只回预览曲目（网易云的「我喜欢的音乐」也是普通歌单），
+    // 走和公共歌单一致的 trackIds 补全路径
+    const int limit = qBound(1, Settings::integer(QStringLiteral("playlistMaxSongs"), 1000), 5000);
     QVariantMap v = baseVars();
     v.insert(QStringLiteral("id"), id);
-    v.insert(QStringLiteral("limit"), QString::number(Settings::integer(QStringLiteral("pageSize"), 30) * 5));
-    requestSongs(ep, v, cb);
+    v.insert(QStringLiteral("limit"), QString::number(limit));
+    requestDetailSongs(ep, v, limit, 0, cb);
 }
 
 namespace {

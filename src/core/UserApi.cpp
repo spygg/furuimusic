@@ -1,6 +1,7 @@
 #include "core/QtCompat.h"
 #include "UserApi.h"
 
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -129,13 +130,34 @@ Endpoint neteaseContract(const QString &name)
                                {QStringLiteral("n"), QStringLiteral("{limit}")},
                                {QStringLiteral("s"), QStringLiteral("8")}};
         e.root = QStringLiteral("playlist.tracks");
-        e.extra = QVariantMap{{QStringLiteral("forwardMethod"), QStringLiteral("POST")}};
+        e.extra = QVariantMap{{QStringLiteral("forwardMethod"), QStringLiteral("POST")},
+                              {QStringLiteral("fullIdsPath"), QStringLiteral("playlist.trackIds")},
+                              {QStringLiteral("fillEndpoint"), QStringLiteral("songDetail")},
+                              {QStringLiteral("fillBatch"), 200}};
         e.fields = QVariantMap{{QStringLiteral("id"), QStringLiteral("id")},
                                {QStringLiteral("title"), QStringLiteral("name")},
                                {QStringLiteral("artist"), QStringLiteral("ar[].name")},
                                {QStringLiteral("album"), QStringLiteral("al.name")},
                                {QStringLiteral("cover"), QStringLiteral("al.picUrl")},
                                {QStringLiteral("duration"), QStringLiteral("dt")},
+                               {QStringLiteral("vip"), QStringLiteral("fee")},
+                               {QStringLiteral("vipValues"), QVariantList{1, 4, 8}},
+                               {QStringLiteral("durationScale"), 1}};
+    } else if (name == QLatin1String("songDetail")) {
+        // 批量歌曲详情：playlist.tracks 只有预览，完整曲目靠 trackIds + 这个端点补齐。
+        // 注意 /api/song/detail 用的是老字段（artists/album/duration），不是 v3 的 ar/al/dt。
+        e.method = QStringLiteral("GET");
+        e.path = QStringLiteral("/api/song/detail");
+        e.params = QVariantMap{{QStringLiteral("ids"), QStringLiteral("[{ids}]")}};
+        e.root = QStringLiteral("songs");
+        e.extra = QVariantMap{{QStringLiteral("forwardMethod"), QStringLiteral("GET")}};
+        e.fields = QVariantMap{{QStringLiteral("id"), QStringLiteral("id")},
+                               {QStringLiteral("title"), QStringLiteral("name")},
+                               {QStringLiteral("artist"), QStringLiteral("artists[].name")},
+                               {QStringLiteral("album"), QStringLiteral("album.name")},
+                               {QStringLiteral("cover"), QStringLiteral("album.picUrl")},
+                               {QStringLiteral("albumId"), QStringLiteral("album.id")},
+                               {QStringLiteral("duration"), QStringLiteral("duration")},
                                {QStringLiteral("vip"), QStringLiteral("fee")},
                                {QStringLiteral("vipValues"), QVariantList{1, 4, 8}},
                                {QStringLiteral("durationScale"), 1}};
@@ -569,6 +591,88 @@ QVector<Song> UserApi::parseSongs(const QString &sourceId, const QString &name,
     return out;
 }
 
+void UserApi::completePlaylistSongs(const QString &sourceId, const QString &cookie,
+                                    const QString &name, const HttpClient::Reply &r, int maxSongs,
+                                    const std::function<void(const QVector<Song> &)> &cb)
+{
+    const QVector<Song> preview = parseSongs(sourceId, name, r);
+    const Endpoint ep = endpoint(sourceId, name);
+    const QString idsPath = ep.extra.value(QStringLiteral("fullIdsPath")).toString();
+    const QString fillName = ep.extra.value(QStringLiteral("fillEndpoint")).toString();
+    // 没声明补全规则的端点（QQ/酷狗/咪咕…）直接回原结果
+    if (!r.ok) {
+        qWarning().noquote() << "[userapi]" << sourceId << name << "request failed:" << r.error
+                             << "status=" << r.status
+                             << QString::fromUtf8(r.body.left(200));
+        if (cb) cb(preview);
+        return;
+    }
+    if (idsPath.isEmpty() || fillName.isEmpty()) {
+        if (cb) cb(preview);
+        return;
+    }
+    if (preview.isEmpty())
+        qWarning().noquote() << "[userapi]" << sourceId << name << "preview empty, root="
+                             << ep.root << "body=" << QString::fromUtf8(r.body.left(300));
+
+    QString error;
+    const QJsonValue root = businessRoot(sourceId, name, r, &error);
+    QStringList ids;
+    const QJsonArray arr = Json::arrayAt(root, idsPath);
+    ids.reserve(arr.size());
+    for (const QJsonValue &v : arr) {
+        const QString id = v.isObject() ? Json::stringAt(v, QStringLiteral("id")) : Json::str(v);
+        if (!id.isEmpty()) ids << id;
+    }
+    // trackIds 不比预览多 = 这份歌单本来就短（或接口没给全量 id）
+    if (ids.size() <= preview.size()) {
+        if (cb) cb(preview);
+        return;
+    }
+    if (maxSongs > 0 && ids.size() > maxSongs) ids = ids.mid(0, maxSongs);
+
+    const Endpoint fillEp = endpoint(sourceId, fillName);
+    if (!fillEp.valid()) {
+        qWarning().noquote() << "[userapi]" << sourceId << "fill endpoint missing:" << fillName;
+        if (cb) cb(preview);
+        return;
+    }
+    const int batch = qBound(1, fillEp.extra.value(QStringLiteral("fillBatch"), 200).toInt(), 500);
+    const QVariantMap base = vars(sourceId, cookie);
+
+    auto want = std::make_shared<QStringList>(ids);
+    auto got = std::make_shared<QHash<QString, Song>>();
+    auto next = std::make_shared<int>(0);
+    auto step = std::make_shared<std::function<void()>>();
+    *step = [this, sourceId, fillName, base, want, got, next, step, preview, cb, batch]() {
+        if (*next >= want->size()) {
+            QVector<Song> out;
+            out.reserve(want->size());
+            for (const QString &id : *want) {
+                const auto it = got->constFind(id);
+                if (it != got->constEnd()) out << it.value();
+            }
+            if (out.isEmpty()) out = preview;
+            if (cb) cb(out);
+            return;
+        }
+        const QStringList slice = want->mid(*next, batch);
+        *next += slice.size();
+        QVariantMap v = base;
+        v.insert(QStringLiteral("ids"), slice.join(QLatin1Char(',')));
+        call(sourceId, fillName, v,
+             [this, sourceId, fillName, got, step, slice](const HttpClient::Reply &fr) {
+                 const QVector<Song> songs = parseSongs(sourceId, fillName, fr);
+                 if (songs.isEmpty())
+                     qWarning().noquote() << "[userapi]" << sourceId << "songDetail batch empty:"
+                                          << fr.error << fr.status;
+                 for (const Song &s : songs) got->insert(s.sourceId, s);
+                 (*step)();
+             });
+    };
+    (*step)();
+}
+
 void UserApi::verify(const QString &sourceId, const QString &cookie,
                      const std::function<void(const UserProfile &)> &cb)
 {
@@ -631,10 +735,11 @@ void UserApi::fetchPlaylistSongs(const QString &sourceId, const QString &cookie,
 {
     QVariantMap v = vars(sourceId, cookie);
     v.insert(QStringLiteral("id"), id);
+    // 单个歌单：按 playlistMaxSongs 上限补全（与公共歌单同一个设置）
+    const int maxSongs = qBound(1, Settings::integer(QStringLiteral("playlistMaxSongs"), 1000), 5000);
     call(sourceId, QStringLiteral("playlistSongs"), v,
-        [this, sourceId, cb](const HttpClient::Reply &r) {
-            const QVector<Song> songs = parseSongs(sourceId, QStringLiteral("playlistSongs"), r);
-            if (cb) cb(songs);
+        [this, sourceId, cookie, maxSongs, cb](const HttpClient::Reply &r) {
+            completePlaylistSongs(sourceId, cookie, QStringLiteral("playlistSongs"), r, maxSongs, cb);
         });
 }
 
@@ -733,14 +838,21 @@ void UserApi::fetchLibrary(const QString &sourceId, const QString &cookie,
                     };
                     for (const Task &t : tasks) {
                         call(sourceId, t.name, t.v,
-                            [this, sourceId, t, out, oneDone](const HttpClient::Reply &r) {
-                                const QVector<Song> songs = parseSongs(sourceId, t.name, r);
-                                if (t.favorites) out->favorites = songs;
-                                else {
-                                    if (songs.isEmpty()) ++out->failedPlaylists;
-                                    out->playlistSongs.append(qMakePair(t.uid, songs));
-                                }
-                                oneDone();
+                            [this, sourceId, v, t, out, oneDone](const HttpClient::Reply &r) {
+                                // 整库同步按「每个歌单」限流：一次拉十几个大歌单时不能无上限
+                                // 地翻 song/detail，否则同步会跑上几分钟。
+                                const int cap = qBound(1, Settings::integer(
+                                    QStringLiteral("syncPlaylistMaxSongs"), 500), 2000);
+                                const QString cookie = v.value(QStringLiteral("cookie")).toString();
+                                completePlaylistSongs(sourceId, cookie, t.name, r, cap,
+                                    [t, out, oneDone](const QVector<Song> &songs) {
+                                        if (t.favorites) out->favorites = songs;
+                                        else {
+                                            if (songs.isEmpty()) ++out->failedPlaylists;
+                                            out->playlistSongs.append(qMakePair(t.uid, songs));
+                                        }
+                                        oneDone();
+                                    });
                             });
                     }
                 });

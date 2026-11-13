@@ -43,6 +43,18 @@ Item {
     property int totalCount: 0
     property bool loggedNow: false
 
+    // 各平台官网的真实登录页是否可用（Windows 是随包部署的 WebView2 后端，
+    // Android 是系统 WebView；Qt5 兼容构建没有 QtWebView，退回本地表单）
+    readonly property bool webLoginAvailable: browser.available
+    // 官网登录页以整页覆盖层呈现：WebView 是原生子窗口，QML 的 clip 管不住它，
+    // 放进可滚动的卡片里会盖住卡片外的内容，所以只让它铺满账号页这一整块
+    property bool webLoginActive: false
+    // 本次选中平台是否已经自动弹过一次官网登录页，避免用户关掉后被反复打开
+    property string webLoginShownFor: ""
+    // 换平台的这一次 method 变更不算「用户点了密码 Tab」：进入账号页时先给
+    // 说明卡 + 按钮，别一进来就用网页盖住平台选择
+    property bool switchingSource: false
+
     function refreshCounts() {
         root.totalCount = app.accountTotal()
         root.loggedCount = app.loggedAccountCount()
@@ -91,7 +103,19 @@ Item {
         app.startQrLogin(root.selectedSource)
     }
 
-    onMethodChanged: root.ensureCaptcha()
+    onMethodChanged: {
+        root.ensureCaptcha()
+        // 用户主动点「密码」Tab 时直接打开该平台官网的真实登录页：本地表单提交会被
+        // 风控（网易云 8821 行为验证码、酷狗人机校验），只有官网页面过得了滑块/短信验证。
+        // 换平台引起的那次 method 变更不弹（root.switchingSource），先让用户看到说明卡。
+        if (!root.switchingSource && root.method === "password" && root.webLoginAvailable
+                && root.selectedSource.length > 0
+                && !root.webLoginActive
+                && root.webLoginShownFor !== root.selectedSource) {
+            root.webLoginShownFor = root.selectedSource
+            root.webLoginActive = true
+        }
+    }
 
     function updateMethods() {
         root.methods = root.selectedSource.length > 0 ? app.loginMethods(root.selectedSource) : []
@@ -112,8 +136,10 @@ Item {
         // 换平台回到该平台自己的默认方式（酷狗/咪咕=二维码，网易云=密码）。
         // 清空后 updateMethods() 会落到第一个方式；而登录结果回来时的
         // updateMethods() 不清空，用户当前选的 Tab 得以保留。
+        root.switchingSource = true
         root.method = ""
         root.updateMethods()
+        root.switchingSource = false
         root.refreshCounts()
         root.ensureCaptcha()
     }
@@ -138,8 +164,11 @@ Item {
             app.refreshAccounts()
             root.updateMethods()
             root.refreshCounts()
-            // 酷我登录成功后旧验证码已作废，顺手换一张，别让下次进来看到一张废码
-            if (ok) root.ensureCaptcha()
+            // 登录成功后收起官网登录页：WebView 是原生子窗口，留着会盖住结果提示
+            if (ok) {
+                root.webLoginActive = false
+                root.ensureCaptcha()
+            }
         }
         function onQrChanged() {
             // 只有本平台的扫码会话才能改这页的提示：后台给别的平台出码时，
@@ -824,7 +853,11 @@ Item {
                         }
                     }
 
-                    // ---- 密码 ----
+                    // ---- 密码 / 帐号登录 ----
+                    // 主路径是「平台官网的真实登录页」：自建表单在本地拼账号密码，服务端看到
+                    // 的是陌生设备，网易云回 8821、酷狗要人机校验，重试只会加重风控。官网页面
+                    // 本身能过滑块/短信验证，所以这里把官网登录页嵌进来，登录态由平台原生
+                    // CookieManager 读回后自动导入。本地表单只留给拿不到 WebView 的构建。
                     ColumnLayout {
                         Layout.fillWidth: true
                         visible: root.hasPassword
@@ -832,6 +865,67 @@ Item {
 
                         ColumnLayout {
                             Layout.fillWidth: true
+                            visible: root.webLoginAvailable
+                            spacing: 10
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.selectedSource.length > 0
+                                      ? app.sourceName(root.selectedSource) + " · 官网登录页"
+                                      : "官网登录页"
+                                color: cText
+                                font.pixelSize: 13
+                                font.bold: true
+                                wrapMode: Text.Wrap
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: "账号密码、短信验证码、滑块验证都在平台官网自己的页面里完成，"
+                                      + "和用浏览器登录完全一样。检测到登录态后会自动导入并同步歌单，"
+                                      + "不需要手动复制 Cookie。"
+                                color: cSub
+                                font.pixelSize: theme.fontXs
+                                lineHeight: 1.45
+                                wrapMode: Text.Wrap
+                            }
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: theme.touchMin
+                                radius: height / 2
+                                gradient: Gradient {
+                                    GradientStop { position: 0.0; color: theme.heroStart }
+                                    GradientStop { position: 1.0; color: theme.heroEnd }
+                                }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: root.webLoginShownFor === root.selectedSource
+                                          && root.webLoginActive ? "正在官网登录页登录…" : "打开官网登录页"
+                                    color: "#FFFFFF"
+                                    font.pixelSize: 13
+                                    font.bold: true
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.webLoginActive = true
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.selectedSource === "netease"
+                                      ? "网易云的 8821 是账号级风控（要求行为验证码），只有官网页面能过这一步。"
+                                      : "登录态通过平台原生 CookieManager 读回，HttpOnly 的 Cookie 也拿得到。"
+                                color: cSub
+                                font.pixelSize: theme.fontXs
+                                lineHeight: 1.4
+                                wrapMode: Text.Wrap
+                            }
+                        }
+
+                        // ---- 本地表单（拿不到内置 WebView 时兜底）----
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            visible: !root.webLoginAvailable
                             spacing: 6
                             Text {
                                 text: root.selectedSource === "migu" ? "手机号 / 邮箱 / 用户名"
@@ -867,6 +961,7 @@ Item {
 
                         ColumnLayout {
                             Layout.fillWidth: true
+                            visible: !root.webLoginAvailable
                             spacing: 6
                             Text {
                                 text: "登录密码"
@@ -898,7 +993,7 @@ Item {
                         CaptchaField {
                             id: pwdCaptcha
                             Layout.fillWidth: true
-                            visible: root.selectedSource === "kuwo"
+                            visible: root.selectedSource === "kuwo" && !root.webLoginAvailable
                             sourceId: root.selectedSource
                             imagePath: app.captchaImagePath
                         }
@@ -906,6 +1001,7 @@ Item {
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: theme.touchMin
+                            visible: !root.webLoginAvailable
                             radius: height / 2
                             gradient: Gradient {
                                 GradientStop { position: 0.0; color: theme.heroStart }
@@ -928,6 +1024,7 @@ Item {
 
                         Text {
                             Layout.fillWidth: true
+                            visible: !root.webLoginAvailable
                             text: root.selectedSource === "migu"
                                   ? "密码在本地用服务端下发的 RSA 公钥加密后提交，不会以明文离开本机。"
                                   : (root.selectedSource === "kuwo"
@@ -948,7 +1045,7 @@ Item {
                         // 登录态由平台原生 CookieManager 读回来；外部浏览器手动粘贴作兜底。
                         ColumnLayout {
                             Layout.fillWidth: true
-                            visible: root.selectedSource === "netease"
+                            visible: root.selectedSource === "netease" && !root.webLoginAvailable
                             spacing: 8
 
                             Rectangle {
@@ -1322,6 +1419,32 @@ Item {
                 wrapMode: Text.Wrap
                 bottomPadding: 8
             }
+        }
+    }
+
+    // 平台官网的真实登录页（整页覆盖，铺满账号页）
+    //
+    // 为什么不在卡片里内嵌：WebView 是原生子窗口（Windows WebView2 / Android 系统
+    // WebView），QML 的 clip 管不住它，放进下面那个可滚动 Flickable 里会盖住卡片外
+    // 的内容；而 active=false 时 Loader 会销毁它，原生窗口才会真正消失——只置
+    // visible=false 会留下一个残留在最上层的空窗口。
+    //
+    // 用 source 给 URL（而不是 sourceComponent 里直接写类型）：WebLoginView.qml 里
+    // import 了 QtWebView，Qt5 兼容构建没有这个模块，写成类型会在加载 LoginPage
+    // 时就解析失败；给 URL 则是「用到才加载」，跟 Main.qml 里的 BrowserWindow 一致。
+    Loader {
+        id: webLoginLoader
+        anchors.fill: parent
+        z: 900
+        active: root.webLoginActive && root.webLoginAvailable && root.visible
+        source: active ? "qrc:/qml/WebLoginView.qml" : ""
+        onLoaded: {
+            item.sourceId = Qt.binding(function () { return root.selectedSource })
+            item.sourceName = Qt.binding(function () {
+                return root.selectedSource.length > 0 ? app.sourceName(root.selectedSource) : ""
+            })
+            item.closed.connect(function () { root.webLoginActive = false })
+            item.imported.connect(function () { root.webLoginActive = false })
         }
     }
 

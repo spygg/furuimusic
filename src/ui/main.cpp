@@ -1,5 +1,6 @@
 // 福瑞音乐 - 桌面与移动共用的 QML 入口
 #include "core/QtCompat.h"
+#include <QElapsedTimer>
 #include <QFile>
 #include <QGuiApplication>
 #include <QIcon>
@@ -19,9 +20,12 @@
 #include "../core/AuthManager.h"
 #include "../core/BrowserController.h"
 #include "../core/HttpClient.h"
+#include "../core/Library.h"
 #include "../core/Logger.h"
 #include "../core/Settings.h"
+#include "../core/SourceManager.h"
 #include "../core/UpdateChecker.h"
+#include "../core/UserApi.h"
 #include "../core/Version.h"
 #include "GlyphImageProvider.h"
 #include "PlatformAdapter.h"
@@ -146,8 +150,87 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    // FURUI_PLAYLIST_PROBE=<source>:<id>[#count]：
+    //   <source>:user:<id> 走「账号 API 读用户歌单」那条链路（linuxapi 转发），其余走公共歌单端点。
+    // 启动后拉一次曲目，打印总数与首尾几首后退出。用来无人值守核对
+    // trackIds + 批量 song/detail 的补全结果（正常启动不生效）。
+    const QString probe = qEnvironmentVariable("FURUI_PLAYLIST_PROBE");
+    if (!probe.isEmpty()) {
+        QTimer::singleShot(400, &engine, [probe] {
+            const QString spec = probe.section(QLatin1Char('#'), 0, 0);
+            const int count = probe.section(QLatin1Char('#'), 1).toInt();
+            QString sourceId = spec.section(QLatin1Char(':'), 0, 0);
+            QString id = spec.section(QLatin1Char(':'), 1, 1);
+            const bool viaUserApi = (id == QLatin1String("user"));
+            if (viaUserApi) id = spec.section(QLatin1Char(':'), 2, 2);
+
+            auto started = std::make_shared<QElapsedTimer>();
+            started->start();
+            auto report = [started](const QVector<Furui::Song> &songs) {
+                fprintf(stdout, "[probe] %d songs in %lld ms\n", songs.size(),
+                        static_cast<long long>(started->elapsed()));
+                for (int i = 0; i < songs.size(); ++i) {
+                    if (i >= 3 && i < songs.size() - 2) { i = songs.size() - 3; continue; }
+                    const Furui::Song &s = songs.at(i);
+                    fprintf(stdout, "[probe] #%d %s - %s (%s, %lldms)\n", i + 1,
+                            s.title.toUtf8().constData(), s.artist.toUtf8().constData(),
+                            s.sourceId.toUtf8().constData(),
+                            static_cast<long long>(s.duration));
+                }
+                fflush(stdout);
+                QCoreApplication::quit();
+            };
+            if (viaUserApi) {
+                QString cookie;
+                for (const Furui::Account &a : Furui::Library::instance()->accounts())
+                    if (a.source == sourceId) { cookie = a.cookie; break; }
+                Furui::UserApi::instance()->fetchPlaylistSongs(sourceId, cookie, id, report);
+                return;
+            }
+            Furui::Playlist pl;
+            pl.source = sourceId;
+            pl.sourceId = id;
+            pl.type = QStringLiteral("playlist");
+            pl.uid = sourceId + QLatin1Char(':') + id;
+            pl.count = count;
+            Furui::SourceManager::instance()->playlistDetail(pl, report);
+        });
+    }
+
     if (engine.rootObjects().isEmpty())
         return -1;
+
+    // FURUI_LOGIN_WEB=<sourceId>：启动后直接进「账号 → 密码/帐号登录」，也就是该平台官网
+    // 的真实登录页（内置 WebView），用于无人值守核对官网登录页能不能正常渲染。
+    // 和 FURUI_BROWSER_URL 一样只是自检钩子，正常启动不生效。
+    const QString loginWeb = qEnvironmentVariable("FURUI_LOGIN_WEB");
+    if (!loginWeb.isEmpty()) {
+        QTimer::singleShot(700, &engine, [&engine, loginWeb] {
+            auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0));
+            if (!window || !window->contentItem())
+                return;
+            std::function<void(QQuickItem *)> walk = [&walk, loginWeb](QQuickItem *it) {
+                // 2 = 账号页；平台与登录方式在 LoginPage 上，两者不在同一层，所以整棵树都扫
+                if (it->property("pageIndex").isValid())
+                    it->setProperty("pageIndex", 2);
+                if (it->property("selectedSource").isValid())
+                    it->setProperty("selectedSource", loginWeb);
+                if (it->property("method").isValid() && it->property("methods").isValid()) {
+                    const QStringList ms = it->property("methods").toStringList();
+                    it->setProperty("method", ms.contains(QStringLiteral("password"))
+                                               ? QStringLiteral("password") : ms.value(0));
+                    // 密码 Tab 会自动弹官网登录页；这里再显式确认一次，
+                    // 免得平台默认方式是扫码时钩子截到的是二维码区
+                    if (it->property("webLoginActive").isValid())
+                        it->setProperty("webLoginActive", true);
+                }
+                for (QQuickItem *c : it->childItems())
+                    walk(c);
+            };
+            for (QQuickItem *child : window->contentItem()->childItems())
+                walk(child);
+        });
+    }
 
     // 启动后延迟检查更新（多镜像拉 src/version.json），结果走全局 Toast；
     // 截图自检模式跳过，避免弹窗与网络等待干扰无人值守抓图

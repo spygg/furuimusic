@@ -170,6 +170,7 @@ set(UI_FILES
     ui/qml/LibraryPage.qml
     ui/qml/LoginPage.qml
     ui/qml/BrowserWindow.qml
+    ui/qml/WebLoginView.qml
     ui/qml/CaptchaField.qml
     ui/qml/MvPage.qml
     ui/qml/MvMedia5.qml

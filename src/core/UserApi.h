@@ -91,6 +91,12 @@ private:
                              const HttpClient::Reply &r) const;
     QJsonValue businessRoot(const QString &sourceId, const QString &name,
                             const HttpClient::Reply &r, QString *error) const;
+    // 歌单接口只回预览曲目时（网易云 playlist.tracks 实测 10 首），用端点配置的
+    // fullIdsPath（playlist.trackIds）+ fillEndpoint（songDetail）按 id 批量补齐，
+    // 输出顺序与歌单一致。maxSongs <= 0 表示不限制。
+    void completePlaylistSongs(const QString &sourceId, const QString &cookie,
+                               const QString &name, const HttpClient::Reply &r, int maxSongs,
+                               const std::function<void(const QVector<Song> &)> &cb);
 };
 
 } // namespace Furui
