@@ -1,12 +1,15 @@
 @echo off
 rem FuruiMusic desktop build (incremental, never cleans build output)
 rem
-rem 主交付 = Qt 6.11.1 mingw_64 + CMake。Qt 6 的 QtMultimedia 走官方 FFmpeg
-rem 插件（ffmpegmediaplugin.dll + avcodec-61.dll 等），MV 在应用内解码 MP4/H.264。
-rem Qt 5.15 桌面只有 DirectShow，放不了 MP4：兼容构建会先跑
-rem build_ffmpeg_desktop.bat 自编译 FFmpeg 静态库，链接 C++ 自解码后端
-rem（FfmpegVideoPlayer），这样 Qt5 也能在应用内播 MV，且跨平台。
-rem Qt 5 qmake 输出到独立目录，最终分发产物按版本落到 bin_qt6 / bin_qt5，互不覆盖。
+rem Primary deliverable = Qt 6.11.1 mingw_64 + CMake. Qt 6 QtMultimedia uses the
+rem official FFmpeg plugin (ffmpegmediaplugin.dll + avcodec-61.dll etc.); MV decodes
+rem MP4/H.264 in-app.
+rem Qt 5.15 desktop only has DirectShow, which cannot play MP4: the compatibility
+rem build (FURUI_BUILD_QT5=1) first runs build_ffmpeg_desktop.bat to self-build an
+rem FFmpeg static lib and link the C++ FfmpegVideoPlayer backend, so Qt5 can also
+rem play MV in-app and cross-platform.
+rem Qt 5 qmake outputs to a separate dir; final distributables land in bin_qt6 /
+rem bin_qt5 per version, never overwriting each other.
 setlocal
 set "ROOT=%~dp0..\.."
 set "SRC=%ROOT%\src"
@@ -20,7 +23,7 @@ set "PATH=%QT6_DIR%\bin;%MINGW6_DIR%\bin;%CMAKE_DIR%;%NINJA_DIR%;%PATH%"
 
 if not exist "%ROOT%\bin_qt6" mkdir "%ROOT%\bin_qt6"
 
-rem ---------- 主构建：Qt 6 + CMake/Ninja ----------
+rem ---------- primary build: Qt 6 + CMake/Ninja ----------
 echo [cmake] configuring FuruiMusic (Qt 6 / FFmpeg multimedia backend)
 cmake -S "%SRC%" -B "%ROOT%\build\desktop-qt6" -G Ninja ^
     -DCMAKE_BUILD_TYPE=Release ^
@@ -30,15 +33,16 @@ cmake -S "%SRC%" -B "%ROOT%\build\desktop-qt6" -G Ninja ^
 cmake --build "%ROOT%\build\desktop-qt6" --target FuruiMusic -j %NUMBER_OF_PROCESSORS% || goto :fail
 copy /y "%ROOT%\build\desktop-qt6\FuruiMusic.exe" "%ROOT%\bin_qt6\" >nul || goto :fail
 
-rem windeployqt: --qmldir is REQUIRED. Without it QtQuick/Controls/Layouts/Window QML
-rem plugins are NOT deployed and the app fails to load qrc:/qml/Main.qml.
-rem Qt 6 版本会一并部署 plugins/multimedia/ffmpegmediaplugin.dll 与 avcodec-61.dll
-rem 等 FFmpeg 运行库（MV 解码就靠它们），不再需要手工拷 OpenSSL 1.1。
+rem windeployqt: --qmldir is REQUIRED. Without it QtQuick/Controls/Layouts/Window
+rem QML plugins are NOT deployed and the app fails to load qrc:/qml/Main.qml.
+rem Qt 6 also deploys plugins/multimedia/ffmpegmediaplugin.dll and avcodec-61.dll
+rem etc. (MV decode depends on them); no need to copy OpenSSL 1.1 by hand anymore.
 windeployqt --no-translations --qmldir "%SRC%\ui\qml" "%ROOT%\bin_qt6\FuruiMusic.exe" || goto :fail
 echo [deploy] Qt 6 QML + multimedia (FFmpeg) plugins deployed into bin_qt6
 
-rem MinGW 版 Qt 不带 QtWebView 后端插件；CMake POST_BUILD 已把它和 WebView2Loader.dll
-rem 放进 build\desktop-qt6，随 exe 一起拷到分发目录，内置浏览器才可用。
+rem MinGW Qt ships no QtWebView backend plugin; the CMake POST_BUILD step already
+rem placed it and WebView2Loader.dll into build\desktop-qt6, copied next to the exe
+rem so the in-app browser works.
 if exist "%ROOT%\build\desktop-qt6\plugins\webview\qtwebview_webview2.dll" (
     if not exist "%ROOT%\bin_qt6\plugins\webview" mkdir "%ROOT%\bin_qt6\plugins\webview"
     copy /y "%ROOT%\build\desktop-qt6\plugins\webview\qtwebview_webview2.dll" "%ROOT%\bin_qt6\plugins\webview\" >nul || goto :fail
@@ -46,7 +50,7 @@ if exist "%ROOT%\build\desktop-qt6\plugins\webview\qtwebview_webview2.dll" (
     echo [deploy] QtWebView WebView2 backend + loader deployed into bin_qt6
 )
 
-rem ---------- 可选：Qt 5.15 兼容构建（自编译 FFmpeg 播放后端）----------
+rem ---------- optional: Qt 5.15 compatibility build (self-built FFmpeg backend) ----------
 if not "%FURUI_BUILD_QT5%"=="1" goto :skip_qt5
 set "FURUI_MINGW_BIN=%MINGW5_DIR%\bin"
 echo [ffmpeg] building Qt5 FFmpeg playback backend (incremental)
@@ -60,11 +64,13 @@ echo [make] building Qt 5 compatibility binary
 mingw32-make -f Makefile release -j%NUMBER_OF_PROCESSORS% || goto :fail
 if not exist "%ROOT%\bin_qt5" mkdir "%ROOT%\bin_qt5"
 copy /y "%ROOT%\build\desktop-qt5\FuruiMusic.exe" "%ROOT%\bin_qt5\" >nul || goto :fail
-rem Qt 5 的 windeployqt 会带 Qt5Core/Qt5Quick/Qt5QuickControls2 等 DLL、qwindows
-rem 与 QML 模块；FFmpeg 是静态链接进 exe 的，运行时不需要额外带 FFmpeg DLL。
+rem Qt 5 windeployqt brings Qt5Core/Qt5Quick/Qt5QuickControls2 DLLs, qwindows and
+rem QML modules; FFmpeg is statically linked into the exe, so no extra FFmpeg DLL
+rem is needed at runtime.
 windeployqt --no-translations --qmldir "%SRC%\ui\qml" "%ROOT%\bin_qt5\FuruiMusic.exe" || goto :fail
-rem Qt 5.15.2 的 Windows 二进制依赖 OpenSSL 1.1，Qt 安装包不自带：不拷这两个 DLL
-rem 时所有 HTTPS 请求报 "TLS initialization failed"（音源全挂的样子）。
+rem Qt 5.15.2 Windows binaries depend on OpenSSL 1.1, which the Qt installer does
+rem not bundle: without these two DLLs every HTTPS request fails with
+rem "TLS initialization failed" (all music sources appear dead).
 if exist "%SRC%\thirdparty\openssl1.1\libssl-1_1-x64.dll" (
     xcopy /y /q "%SRC%\thirdparty\openssl1.1\*.dll" "%ROOT%\bin_qt5\" >nul || goto :fail
     echo [qt5] OpenSSL 1.1 runtime copied into bin_qt5

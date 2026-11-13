@@ -2,9 +2,10 @@
 rem FuruiMusic Android APK - Qt 5.15.2 android kit + qmake (arm64-v8a)
 rem Gradle dependencies may need a network connection on first build.
 setlocal
-rem 禁止 MSYS/Git-Bash 把 Windows 路径 G:\ 转成 /G/，否则 qmake 生成的 INSTALL_ROOT
-rem 与 qinstall 目标路径会变成 MSYS 风格，导致 .so 复制静默失败、最终 androiddeployqt
-rem 报 "Cannot find application binary"。纯 cmd 下此变量无副作用。
+rem Prevent MSYS/Git-Bash from rewriting Windows paths like G:\ into /G/, which would
+rem make qmake's INSTALL_ROOT and qinstall target paths MSYS-style and silently fail
+rem the .so copy, finally making androiddeployqt report "Cannot find application
+rem binary". This env var is a no-op under plain cmd.
 set "MSYS_NO_PATHCONV=1"
 set "ROOT=%~dp0..\.."
 set "SRC=%ROOT%\src"
@@ -25,9 +26,10 @@ echo [make] compiling native library
 mingw32-make -f Makefile -j%NUMBER_OF_PROCESSORS% || goto :fail
 set "ANDROID_BUILD=%ROOT%\build\android_qt5\android-build"
 echo [install] copy native lib into android-build (explicit Windows path)
-rem 不走 Makefile 的 `make apk`：其 apk_install_target 里 INSTALL_ROOT 被写死成 MSYS
-rem 风格 /G/...，qinstall 无法解析导致复制静默失败。这里直接用 Windows 绝对路径调用
-rem qinstall，确保 libFuruiMusic_arm64-v8a.so 落到 android-build/libs/arm64-v8a/。
+rem Do NOT use Makefile's `make apk`: its apk_install_target hardcodes INSTALL_ROOT as
+rem MSYS-style /G/..., which qinstall cannot resolve and silently fails the copy. Here
+rem we call qinstall with an explicit Windows absolute path so
+rem libFuruiMusic_arm64-v8a.so lands in android-build/libs/arm64-v8a/.
 "%QT_ANDROID%\bin\qmake.exe" -install qinstall -exe "%ROOT%\bin\libFuruiMusic_arm64-v8a.so" "%ANDROID_BUILD%\libs\arm64-v8a\libFuruiMusic_arm64-v8a.so" || goto :fail
 echo [androiddeployqt] packaging APK
 "%QT_ANDROID%\bin\androiddeployqt.exe" --input "%ROOT%\build\android_qt5\android-FuruiMusic-deployment-settings.json" --output "%ANDROID_BUILD%" --apk "%ANDROID_BUILD%\FuruiMusic.apk" || goto :fail

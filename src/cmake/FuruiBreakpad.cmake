@@ -19,8 +19,11 @@
 
 option(FURUI_BREAKPAD "启用 Google Breakpad 崩溃转储" ON)
 
-macro(furui_configure_breakpad)
-    set(FURUI_HAVE_BREAKPAD OFF)
+# 注意：必须是 function 而非 macro。macro 内的 return() 会在「顶层调用处」
+# 直接终止整个 CMakeLists.txt（Android/macOS 分支会 return），导致 FuruiMusic
+# 目标与 _make_apk 永不生成。function 的 return() 只结束自身，安全。
+function(furui_configure_breakpad)
+    set(FURUI_HAVE_BREAKPAD OFF PARENT_SCOPE)
     if(NOT FURUI_BREAKPAD)
         message(STATUS "[breakpad] 已通过 FURUI_BREAKPAD=OFF 关闭")
         return()
@@ -95,6 +98,6 @@ macro(furui_configure_breakpad)
             target_link_libraries(FuruiBreakpad PUBLIC Threads::Threads)
         endif()
     endif()
-    set(FURUI_HAVE_BREAKPAD ON)
+    set(FURUI_HAVE_BREAKPAD ON PARENT_SCOPE)
     message(STATUS "[breakpad] 已接入崩溃转储（${QT}::Core + 平台 client，落点见 main.cpp）")
-endmacro()
+endfunction()

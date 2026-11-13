@@ -58,7 +58,7 @@ jobs:
             # 注意 MinGW 工具已从 tools_mingw（只到 810）拆到独立工具名 tools_mingw1310，
             # 旧写法会报 "package 'qt.tools.win64_mingw1310' was not found"
             tools: 'tools_mingw1310,qt.tools.win64_mingw1310'
-            modules: 'qtmultimedia,qtwebview'
+            modules: 'qtmultimedia'
             artifact: FuruiMusic-windows-x64.zip
           # Linux (x86_64)
           - name: Linux (x86_64)
@@ -71,7 +71,7 @@ jobs:
             # 旧 id 会报 "packages ['qt_base', 'qtmultimedia'] were not found"
             arch: linux_gcc_64
             tools: ''
-            modules: 'qtmultimedia,qtwebview'
+            modules: 'qtmultimedia'
             artifact: FuruiMusic-linux-x86_64.AppImage
           # Qt 5.15.2 的旧 macdeployqt 在新 Xcode 下解析 otool 失败，故 macOS 用 Qt 6.8.3；
           # CMake 在 Qt 6 下自动切到 C++17（见 src/CMakeLists.txt）
@@ -84,7 +84,7 @@ jobs:
             arch: clang_64
             tools: ''
             # Qt 6 把 Multimedia 拆成独立模块，基础包不含 Qt6Multimedia
-            modules: 'qtmultimedia,qtwebview'
+            modules: 'qtmultimedia'
             artifact: FuruiMusic-macos-x86_64.zip
     steps:
       - name: Checkout
@@ -100,6 +100,20 @@ jobs:
           tools: ${{ matrix.config.tools }}
           modules: ${{ matrix.config.modules }}
           cache: false
+
+      # install-qt-action@v4 自带的 aqtinstall 版本对 6.8.3 的 qtwebview addon 解析失败
+      # （dry-run 验证：用最新 aqtinstall 可正常解析并定位 .7z 下载地址）。故这里只用
+      # install-qt-action 装它稳过的 qtmultimedia，再用最新 aqtinstall 单独追加 qtwebview
+      # 到同一 Qt 目录，保证发布包保留应用内浏览器能力。
+      # 注意：必须追加到 install-qt-action 的默认目录 ${{ runner.temp }}/Qt（其 QT_ROOT_DIR
+      # 即该目录下的 6.8.3/<arch>），否则 CMake 找不到模块。
+      - name: Append Qt WebView module
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade aqtinstall
+          python -m aqt install-qt ${{ matrix.config.host }} desktop 6.8.3 ${{ matrix.config.arch }} \
+            -m qtwebview -O "${{ runner.temp }}/Qt"
 
       # Qt 5.15.2 的官方 Linux 二进制依赖这些系统库；linuxdeployqt 解析 ldd 时也需要它们
       - name: Install Linux runtime deps

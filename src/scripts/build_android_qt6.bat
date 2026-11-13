@@ -1,6 +1,7 @@
 @echo off
 rem FuruiMusic Android APK - Qt 6.11.1 + CMake (arm64-v8a, NDK 27, JDK 17)
-rem 最终签名 APK 落在仓库根的 bin_android/，与桌面版 bin_qt6 / bin_qt5 分开。
+rem The final signed APK lands in bin_android/ at the repo root, separate from the
+rem desktop bin_qt6 / bin_qt5.
 setlocal
 set "ROOT=%~dp0..\.."
 set "SRC=%ROOT%\src"
@@ -27,8 +28,9 @@ cmake -S "%SRC%" -B "%ROOT%\build\android_qt6" -G Ninja ^
     -DANDROID_NDK_ROOT="%ANDROID_NDK_ROOT%" || goto :fail
 echo [cmake] building APK
 cmake --build "%ROOT%\build\android_qt6" --target FuruiMusic_make_apk -j %NUMBER_OF_PROCESSORS% || goto :fail
-rem gradle 守护进程会继承构建管道的 stdout 句柄，导致外部 `| tail` 等不到 EOF
-rem 表现为"构建卡死"（APK 其实已产出）。构建完立即 --stop 释放句柄。
+rem The gradle daemon inherits the build pipe's stdout handle, so an external
+rem `| tail` never sees EOF and looks "stuck" (the APK is actually produced).
+rem Stop the daemon right after the build to release the handle.
 echo [gradle] stopping daemon to release pipe handles
 pushd "%ROOT%\build\android_qt6\android-build" && (call gradlew.bat --stop >nul 2>&1 & popd)
 echo.
@@ -37,7 +39,7 @@ set "BT=%ANDROID_SDK_ROOT%\build-tools\35.0.0"
 if not exist "%BT%\apksigner.bat" set "BT=%ANDROID_SDK_ROOT%\build-tools\37.0.0"
 set "KS=%USERPROFILE%\.android\debug.keystore"
 if exist "%KS%" goto :haveKS
-echo [sign] 生成临时 debug keystore
+echo [sign] generating temporary debug keystore
 if not exist "%ROOT%\build\android_qt6" mkdir "%ROOT%\build\android_qt6"
 keytool -genkeypair -v -keystore "%ROOT%\build\android_qt6\furui-debug.keystore" -alias furui -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=FuruiMusic Debug, OU=Local, O=Furui, C=CN" >nul || goto :fail
 set "KS=%ROOT%\build\android_qt6\furui-debug.keystore"
@@ -50,7 +52,7 @@ set "UNSIGNED=%ROOT%\build\android_qt6\android-build\build\outputs\apk\release\a
 set "ALIGNED=%ROOT%\build\android_qt6\android-build\FuruiMusic-aligned.apk"
 set "OUT=%ROOT%\bin_android\FuruiMusic-android-arm64-v8a.apk"
 if not exist "%UNSIGNED%" (
-    echo [error] 未找到 Qt 产出的未签名 release APK: %UNSIGNED%
+    echo [error] Qt-produced unsigned release APK not found: %UNSIGNED%
     goto :fail
 )
 if not exist "%ROOT%\bin_android" mkdir "%ROOT%\bin_android"
