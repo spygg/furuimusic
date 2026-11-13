@@ -7,6 +7,7 @@
 #include <QQuickWindow>
 #include <QScreen>
 #include <QTimer>
+#include <cmath> // std::hypot：Qt 5.15 没有 qHypot（Qt 6 才加）
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QInputDevice>
 #else
@@ -45,7 +46,7 @@ bool PlatformAdapter::isTablet() const
     if (phys.width() <= 0 || phys.height() <= 0)
         return false;
     // 手机普遍 < 7 英寸，平板 >= 7 英寸（含车机矮宽屏 1920x720 这类 > 7 英寸的仍走桌面壳）。
-    const qreal diagIn = qHypot(phys.width(), phys.height()) / 25.4;
+    const qreal diagIn = std::hypot(phys.width(), phys.height()) / 25.4;
     return diagIn >= 7.0;
 }
 
@@ -193,7 +194,7 @@ bool PlatformAdapter::touchPrimary() const
             return true;
     }
 #else
-    const QList<QTouchDevice *> devices = QTouchDevice::devices();
+    const QList<const QTouchDevice *> devices = QTouchDevice::devices();
     for (const QTouchDevice *dev : devices) {
         if (dev && dev->type() == QTouchDevice::TouchScreen)
             return true;

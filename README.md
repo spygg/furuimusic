@@ -72,7 +72,7 @@ MV 按 AlgerMusicPlayer 的 `MvPlayer.vue` + `views/mv/index.vue` 组织：
 - 第三方库：QuickJS 2024-01-13 与 qrcodegen 已以源码形式内嵌在 `src/core/3rd/`，无需额外安装。
 - **Qt 6 视频解码不需要单独编译 FFmpeg**：QtMultimedia 自带官方后端（Windows 为 `ffmpegmediaplugin.dll` + `avcodec-61.dll` 等，Android 为 `libavcodec.so` 等），`windeployqt` / `androiddeployqt` 会随包部署。**Qt 5 桌面**要走「自编译 FFmpeg 后端」小节，产物静态链接进 exe，运行时不额外带 DLL。两种构建共用 `src/thirdparty/ffmpeg/FFmpeg-n6.1.2` 源码（仅 Qt5 用），互不干扰；这份 FFmpeg n6.1.2 源码已随仓库入库（约 8.2k 文件 / 93 MB），clone 后 CMake 就能直接自动编译，不必另外下载。仓库只收录播放链路用的 n6.1.2，QtRemoteDesktop 编码链遗留的 n3.4.8 / oneVPL / nv-codec-headers / amf-sdk / install 由 `.gitignore` 排除。
 - FFmpeg 播放后端编译需要 Git Bash（Windows 提供 `sh`/`nasm`）、对应 Qt 的 MinGW 或系统 gcc/clang；Windows 用系统 SChannel、macOS 用 SecureTransport 提供 TLS，Linux 需要 OpenSSL 开发包（`libssl-dev`），都不需要额外运行时库。
-- Qt 6 Windows 用 Schannel / 自带的 OpenSSL 3，无需再手工塞 OpenSSL 1.1 DLL；仓库 `src/packaging/windows/openssl/` 仅供 Qt 5 兼容构建使用。
+- Qt 6 Windows 用 Schannel / 自带的 OpenSSL 3，无需再手工塞 OpenSSL 1.1 DLL；`src/thirdparty/openssl1.1/` 里的 OpenSSL 1.1 运行库只给 Qt 5 兼容构建用，由 `src/cmake/FuruiOpenssl.cmake`（CMake）或 `FuruiMusic.pro` 的 win32 段（qmake）自动拷到 exe 旁，不用手工处理。
 
 ## 构建
 
@@ -281,6 +281,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 └── src/                               # 工程根（全部源码、资源、构建入口）
     ├── CMakeLists.txt                 # 主构建（FuruiCore / FuruiMusic）
     ├── cmake/FuruiFfmpeg.cmake        # Qt5 FFmpeg 自动编译 / ABI 分目录 / 探测
+    ├── cmake/FuruiOpenssl.cmake       # Qt5 Windows 的 OpenSSL 1.1 运行库部署
     ├── FuruiMusic.pro                 # qmake 构建（桌面与 Qt5 Android）
     ├── config/sources.json            # 平台音源配置与契约（搜索/取链/登录/账号 API）
     ├── core/                          # C++ 后端：音源、聚合、账号、播放、曲库、在线音源宿主
@@ -289,7 +290,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
     ├── ui/                            # QML 前端、主题、平台适配、main.cpp
     ├── desktop/                       # 迁移期 Widgets 旧前端（默认不构建）
     ├── android/  android_qt6/         # Android 打包资源（manifest、res、OpenSSL）
-    ├── packaging/windows/openssl/     # Windows Release 所需 OpenSSL 1.1 DLL 与许可证
+    ├── thirdparty/openssl1.1/         # Qt5 Windows 运行所需的 OpenSSL 1.1 DLL 与许可证
     ├── scripts/                       # 各平台构建脚本（含 build_ffmpeg_desktop.*）
     ├── tools/                         # 账号 API / 自定义音源示例服务
     └── docs/                          # 架构/迁移/研究文档与截图

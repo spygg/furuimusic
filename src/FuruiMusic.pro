@@ -186,4 +186,21 @@ android {
 # CMake 走 app.rc.in（绝对路径），这里是 qmake 用的相对路径版本。
 win32 {
     RC_FILE = $$PWD/ui/icons/app.rc
+
+    # Qt 5.15.2 的 Windows 二进制基于 OpenSSL 1.1（不是 3.x），Qt 安装包不带这套 DLL，
+    # 缺了它 QtNetwork 的所有 HTTPS 请求报 "TLS initialization failed"。运行库随仓库
+    # 放在 src/thirdparty/openssl1.1/，链接后拷到目标目录；CMake 构建由
+    # cmake/FuruiOpenssl.cmake 做同一件事（Qt 6 用 Schannel，不需要）。
+    FURUI_OPENSSL_LIBS = $$PWD/thirdparty/openssl1.1
+    contains(QT_ARCH, x86_64) {
+        # 不用 foreach：Qt 5 的 qmake 不认（会报 'foreach' is not a recognized test function）
+        exists($$FURUI_OPENSSL_LIBS/libssl-1_1-x64.dll) {
+            QMAKE_POST_LINK += $$QMAKE_COPY $$shell_path($$FURUI_OPENSSL_LIBS/libssl-1_1-x64.dll) $$shell_path($$DESTDIR) $$escape_expand(\n\t)
+        }
+        exists($$FURUI_OPENSSL_LIBS/libcrypto-1_1-x64.dll) {
+            QMAKE_POST_LINK += $$QMAKE_COPY $$shell_path($$FURUI_OPENSSL_LIBS/libcrypto-1_1-x64.dll) $$shell_path($$DESTDIR) $$escape_expand(\n\t)
+        }
+    } else {
+        message("32-bit build: src/thirdparty/openssl1.1 only ships x64 OpenSSL runtime, skipping copy")
+    }
 }

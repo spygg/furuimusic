@@ -16,8 +16,9 @@
 /bin_android/
 *.exe
 *.dll
-# 例外：Release 包要带上的 OpenSSL 1.1 运行库（见 src/packaging/windows/openssl/README.txt）
-!src/packaging/windows/openssl/*.dll
+# 例外：Qt 5 Windows 运行必需的 OpenSSL 1.1 运行库
+#（见 src/thirdparty/openssl1.1/README.txt，Qt 6 用 Schannel 不需要）
+!src/thirdparty/openssl1.1/*.dll
 *.so
 # 例外：Android Qt 6 APK 打包必需的 OpenSSL 3 运行库（共约 4.6M，缺了 APK 的 HTTPS 全部失效）
 !src/android_qt6/libs/arm64-v8a/libssl_3.so

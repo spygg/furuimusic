@@ -54,6 +54,12 @@ endif()
 # 错误，Qt 5 仍可构建，只是 MV 退回 DirectShow 降级说明。
 include(cmake/FuruiFfmpeg.cmake)
 
+# ---- Windows Qt 5 的 OpenSSL 1.1 运行库 --------------------------------
+# Qt 5.15.2 的 Windows 二进制依赖 OpenSSL 1.1，Qt 安装包又不带这两个 DLL，
+# 缺了它所有 HTTPS 请求报 "TLS initialization failed"。运行库随仓库放在
+# src/thirdparty/openssl1.1/，Qt 5 构建后自动拷到 exe 旁（Qt 6 不需要）。
+include(cmake/FuruiOpenssl.cmake)
+
 # sources.json 内容变化时让 AUTORCC 重新生成 qrc_config.cpp
 set_source_files_properties(core/config.qrc PROPERTIES
     AUTORCC_DEPENDENCIES "${CMAKE_CURRENT_SOURCE_DIR}/config/sources.json")
@@ -196,12 +202,16 @@ else()
     if(WIN32)
         configure_file(ui/icons/app.rc.in ${CMAKE_CURRENT_BINARY_DIR}/app.rc @ONLY)
         target_sources(FuruiMusic PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/app.rc)
+        furui_deploy_openssl_runtime(FuruiMusic)
     endif()
 
     if(FURUI_BUILD_LEGACY_WIDGETS)
         add_executable(FuruiMusicWidgets WIN32 MACOSX_BUNDLE ${LEGACY_WIDGETS_FILES})
         target_link_libraries(FuruiMusicWidgets PRIVATE FuruiCore ${QT}::Widgets)
         set_target_properties(FuruiMusicWidgets PROPERTIES OUTPUT_NAME "FuruiMusicWidgets")
+        if(WIN32)
+            furui_deploy_openssl_runtime(FuruiMusicWidgets)
+        endif()
     endif()
 endif()
 

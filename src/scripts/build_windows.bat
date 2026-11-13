@@ -54,6 +54,14 @@ copy /y "%ROOT%\build\desktop-qt5\FuruiMusic.exe" "%ROOT%\bin_qt5\" >nul || goto
 rem Qt 5 的 windeployqt 会带 Qt5Core/Qt5Quick/Qt5QuickControls2 等 DLL、qwindows
 rem 与 QML 模块；FFmpeg 是静态链接进 exe 的，运行时不需要额外带 FFmpeg DLL。
 windeployqt --no-translations --qmldir "%SRC%\ui\qml" "%ROOT%\bin_qt5\FuruiMusic.exe" || goto :fail
+rem Qt 5.15.2 的 Windows 二进制依赖 OpenSSL 1.1，Qt 安装包不自带：不拷这两个 DLL
+rem 时所有 HTTPS 请求报 "TLS initialization failed"（音源全挂的样子）。
+if exist "%SRC%\thirdparty\openssl1.1\libssl-1_1-x64.dll" (
+    xcopy /y /q "%SRC%\thirdparty\openssl1.1\*.dll" "%ROOT%\bin_qt5\" >nul || goto :fail
+    echo [qt5] OpenSSL 1.1 runtime copied into bin_qt5
+) else (
+    echo [qt5] WARNING: src\thirdparty\openssl1.1 has no OpenSSL 1.1 DLL - HTTPS will fail
+)
 echo [qt5] binary + Qt 5 runtime in bin_qt5 (self-built FFmpeg backend: in-app MV enabled)
 :skip_qt5
 
