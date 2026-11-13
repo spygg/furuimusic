@@ -81,6 +81,13 @@ include(cmake/FuruiFfmpeg.cmake)
 # src/thirdparty/openssl1.1/，Qt 5 构建后自动拷到 exe 旁（Qt 6 不需要）。
 include(cmake/FuruiOpenssl.cmake)
 
+# ---- Google Breakpad 崩溃转储 ------------------------------------------
+# 产出 FuruiBreakpad 静态库（Windows/Linux x86_64 平台 client + crashhandler.cpp），
+# 并定义 FURUI_HAVE_BREAKPAD。Android/macOS 与其它 Linux 架构自动跳过，
+# 源码缺失时 WARNING 后跳过，不阻断构建。详见 cmake/FuruiBreakpad.cmake。
+include(cmake/FuruiBreakpad.cmake)
+furui_configure_breakpad()
+
 # sources.json / version.json 内容变化时让 AUTORCC 重新生成 qrc_config.cpp
 set_source_files_properties(core/config.qrc PROPERTIES
     AUTORCC_DEPENDENCIES "${CMAKE_CURRENT_SOURCE_DIR}/config/sources.json;${CMAKE_CURRENT_SOURCE_DIR}/version.json")
@@ -251,6 +258,14 @@ if(FURUI_HAVE_FFMPEG)
     if(Threads_FOUND)
         target_link_libraries(FuruiMusic PRIVATE Threads::Threads)
     endif()
+endif()
+
+if(FURUI_HAVE_BREAKPAD)
+    target_compile_definitions(FuruiMusic PRIVATE FURUI_HAVE_BREAKPAD=1)
+    # 显式把 breakpad 根目录加进 include 路径，保证 main.cpp 能
+    # #include "thirdparty/breakpad/crashhandler.h"（与 core/QtCompat.h 同一规则）
+    target_include_directories(FuruiMusic PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/breakpad")
+    target_link_libraries(FuruiMusic PRIVATE FuruiBreakpad)
 endif()
 
 set_target_properties(FuruiCore PROPERTIES POSITION_INDEPENDENT_CODE ON)

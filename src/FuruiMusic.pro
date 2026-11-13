@@ -206,3 +206,22 @@ win32 {
         message("32-bit build: src/thirdparty/openssl1.1 only ships x64 OpenSSL runtime, skipping copy")
     }
 }
+
+# Google Breakpad 崩溃转储：复用 breakpad.pri 编译平台 client + crashhandler.cpp。
+# Android 上 CrashHandler 自行门控为 no-op，且其 linux client 汇编（breakpad_getcontext.S）
+# 对 Android 工具链不友好，故显式排除；macOS 无 client 源码同样排除。
+# 接入后 main.cpp 在 FURUI_HAVE_BREAKPAD 宏下安装 handler，崩溃写出 minidump 到
+# <应用数据目录>/crashes（CMake 构建由 cmake/FuruiBreakpad.cmake 做同样的事）。
+# 注意：breakpad 源码体积约 30M，按约定不入库——新克隆的仓库这里自动跳过
+# （必须用 exists() 守卫，qmake 对缺失的 include() 只告警不中断，DEFINES 若无条件
+# 置位会让 main.cpp 的 #include "thirdparty/breakpad/crashhandler.h" 直接编译失败），
+# 与 CMake 侧「源码缺失 WARNING 后跳过」的行为对齐。
+exists($$PWD/thirdparty/breakpad/breakpad.pri) {
+    !android:!macx {
+        include($$PWD/thirdparty/breakpad/breakpad.pri)
+        DEFINES += FURUI_HAVE_BREAKPAD
+        win32: LIBS += -ldbghelp -lversion
+    }
+} else {
+    message("breakpad sources not found - crash dump reporting disabled")
+}

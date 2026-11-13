@@ -32,6 +32,11 @@
 #ifdef FURUI_HAVE_FFMPEG
 #include "FfmpegVideoPlayer.h"
 #endif
+#ifdef FURUI_HAVE_BREAKPAD
+#include "thirdparty/breakpad/crashhandler.h"
+#include "core/Settings.h"
+#include <QDir>
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -42,6 +47,18 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("福瑞音乐"));
     QGuiApplication::setOrganizationName(QStringLiteral("Furui"));
+
+#ifdef FURUI_HAVE_BREAKPAD
+    // 崩溃转储 handler 越早装越好：拦截未捕获异常 / 信号，写出 minidump 到
+    // <数据目录>/crashes。reportCrashesToSystem 保持默认 false，即不弹系统错误
+    // 报告框，由我们的转储接管。Android/macOS 不编译此段（FURUI_HAVE_BREAKPAD 未定义）。
+    const QString crashDir = []() -> QString {
+        const QString dir = Furui::Settings::dataDir() + QStringLiteral("/crashes");
+        QDir().mkpath(dir);
+        Breakpad::CrashHandler::instance()->Init(dir);
+        return dir;
+    }();
+#endif
 
 #ifdef FURUI_HAVE_WEBVIEW
     // 自编译 / 随包部署的 QtWebView 后端放在 <exe>/plugins/webview/，
@@ -691,6 +708,26 @@ int main(int argc, char *argv[])
                                ? qEnvironmentVariableIntValue("FURUI_PWD_DIAG_MS") : 20000,
                            &engine, [] { QCoreApplication::quit(); });
     }
+
+#ifdef FURUI_HAVE_BREAKPAD
+    // 启动后检查上次遗留的崩溃转储：有就提示文件位置，方便用户提交给开发者符号化分析。
+    // 自检 / 截图模式跳过，避免弹窗干扰无人值守流程。
+    if (qEnvironmentVariableIsEmpty("FURUI_CAPTURE")) {
+        QTimer::singleShot(1500, &engine, [crashDir, &engine] {
+            QDir d(crashDir);
+            const QStringList dumps = d.entryList(QStringList() << QStringLiteral("*.dmp"),
+                                                 QDir::Files, QDir::Time);
+            if (dumps.isEmpty())
+                return;
+            const QString latest = crashDir + QLatin1Char('/') + dumps.first();
+            if (auto *a = engine.rootContext()->contextProperty(QStringLiteral("app")).value<QObject *>())
+                QMetaObject::invokeMethod(a, "notify",
+                    Q_ARG(QString, QStringLiteral("检测到 %1 个崩溃转储文件，存放于：%2\n（minidump 需配合 dump_syms 符号化后分析，可提交给开发者）")
+                        .arg(dumps.size()).arg(latest)),
+                    Q_ARG(QString, QStringLiteral("warning")));
+        });
+    }
+#endif
 
     return app.exec();
 }
