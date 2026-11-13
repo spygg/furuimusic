@@ -5,4 +5,4 @@
 //     Android versionName/versionCode、macOS bundle 版本、CI Release 名自动跟随
 //   - src/version.json 与 publish/version.json（更新检查清单）由
 //     python tools/release.py x.y.z 一并改好，desc 字段发版时人工填写
-#define FURUI_APP_VERSION "1.4.4"
+#define FURUI_APP_VERSION "1.4.5"
