@@ -63,6 +63,12 @@ Item {
     readonly property var tabIcons: ["music", "play", "user", "settings"]
     readonly property var tabLabels: ["曲库", "播放", "账号", "设置"]
 
+    // 竖排导航（平板横屏 / 手机横屏）：这些形态高度本来就紧张（手机横屏逻辑高度
+    // 只剩 270dp 上下），底部标签栏再吃掉 56dp 就没什么内容区了，把导航挪到左侧
+    // 换回高度。竖屏仍用底部标签栏（拇指可达、且高度充裕）。
+    readonly property bool sideNav: root.width >= 400 && root.width > root.height * 1.12
+    readonly property int navRailWidth: 76
+
     Rectangle {
         anchors.fill: parent
         color: cBg
@@ -70,12 +76,19 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
+        // 竖排导航模式下把内容列右移，给左侧导航条让位（不用 RowLayout 嵌套，
+        // 页面栈/迷你条/标签栏的层级保持不变）
+        anchors.leftMargin: root.sideNav ? root.navRailWidth : 0
+        // 横屏矮窗口里各页的最小高度之和可能超过可用高度，撑破后会顶掉底部迷你条。
+        // 这里允许压缩并裁剪，页面有自己的滚动区，不会丢内容
+        clip: true
         spacing: 0
 
         StackLayout {
             id: pageStack
             Layout.fillWidth: true
             Layout.fillHeight: true
+            Layout.minimumHeight: 0
             // index 4 是外壳级 MV 覆盖层，不属于页面栈；钳到 0..3 避免越界
             currentIndex: Math.min(root.pageIndex, 3)
             onCurrentIndexChanged: {
@@ -106,7 +119,8 @@ Item {
         // 迷你播放条：贴底浮动胶囊（Alger 风格：圆角、左右留白、圆形封面），位于页面与底部标签栏之间
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 64
+            // 横屏用竖排导航时高度更金贵，胶囊压到 58
+            Layout.preferredHeight: root.sideNav ? 58 : 64
             Layout.leftMargin: 12
             Layout.rightMargin: 12
             Layout.topMargin: 4
@@ -253,10 +267,11 @@ Item {
             }
         }
 
-        // 底部标签栏
+        // 底部标签栏（横屏改用左侧竖排导航，这里整条隐藏，省下 56dp 高度）
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 56
+            visible: !root.sideNav
             color: cCard
             Rectangle {
                 anchors.left: parent.left
@@ -302,6 +317,82 @@ Item {
                             anchors.fill: parent
                             onClicked: root.pageIndex = index
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // 左侧竖排导航（平板横屏 / 手机横屏）：图标在上、文字在下，选中态用主色 + 淡底胶囊。
+    // 层级低于队列面板与 MV 覆盖层，弹层照旧盖满全屏。
+    Rectangle {
+        id: navRail
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: root.sideNav ? root.navRailWidth : 0
+        visible: root.sideNav
+        color: cCard
+        clip: true
+
+        Rectangle {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: 1
+            color: cLine
+        }
+
+        Column {
+            id: railColumn
+            anchors.top: parent.top
+            anchors.topMargin: 8
+            anchors.horizontalCenter: parent.horizontalCenter
+            spacing: 4
+
+            Repeater {
+                model: root.tabLabels.length
+                delegate: Item {
+                    width: root.navRailWidth - 12
+                    // 矮屏（手机横屏）按可用高度逐项收紧，保证 4 项都落在可见区内
+                    height: Math.max(46, Math.min(64,
+                        (root.height - 24) / root.tabLabels.length - 4))
+                    readonly property bool checked: root.pageIndex === index
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 14
+                        color: checked ? cPrimarySoft
+                               : railMa.containsMouse
+                                 ? (theme.dark ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(0, 0, 0, 0.05))
+                                 : "transparent"
+                        Behavior on color { ColorAnimation { duration: 140 } }
+                    }
+
+                    Column {
+                        anchors.centerIn: parent
+                        spacing: 1
+                        GlyphIcon {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            name: root.tabIcons[index]
+                            size: checked ? 21 : 19
+                            color: checked ? cPrimary : cSub
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: root.tabLabels[index]
+                            color: checked ? cPrimary : cSub
+                            font.pixelSize: theme.fontXs
+                            font.bold: checked
+                        }
+                    }
+
+                    MouseArea {
+                        id: railMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.pageIndex = index
                     }
                 }
             }

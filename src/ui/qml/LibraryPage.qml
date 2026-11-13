@@ -14,6 +14,10 @@ Item {
     readonly property real pageTop: shortViewport ? 12 : (root.width < 700 ? 16 : 28)
     readonly property real pageGap: shortViewport ? 8 : 14
     readonly property real pageBottom: shortViewport ? 8 : 12
+    // 页头两行（搜索行 + 我的歌单/刷新歌单 胶囊行）默认各 48dp，合计近百：
+    // 平板横屏/车机矮屏的逻辑高度常常只有 270~450dp，光页头就吃掉一半，
+    // 矮窗口里把它们压到 40dp，把高度让给内容区
+    readonly property int headerRowH: root.shortViewport ? 40 : theme.touchMin
 
     readonly property bool isDark: theme.dark
     readonly property color cBg: theme.bg
@@ -128,7 +132,10 @@ Item {
 
     Connections {
         target: app
-        function onPlaylistsLoaded() { root.hint = "歌单列表已刷新" }
+        // 歌单刷新成功不再往页尾写提示：这条文案每次进页面都会闪一次，
+        // 属于成功路径的噪音；失败/同步结果仍然提示
+        function onPlaylistsLoaded() { }
+
         function onSyncFinished(sourceId, ok, message) {
             root.hint = (ok ? "同步完成：" : "同步失败：") + message
         }
@@ -173,7 +180,7 @@ Item {
             Rectangle {
                 visible: !parent.compact
                 implicitWidth: refreshText.implicitWidth + 32
-                implicitHeight: theme.touchMin
+                implicitHeight: root.headerRowH
                 radius: height / 2
                 color: refreshMa.containsMouse ? Qt.darker(cPrimary, 1.15) : cPrimary
                 Text {
@@ -208,8 +215,8 @@ Item {
             // 刷新（窄屏图标版）
             Rectangle {
                 visible: parent.compact
-                implicitWidth: theme.touchMin
-                implicitHeight: theme.touchMin
+                implicitWidth: root.headerRowH
+                implicitHeight: root.headerRowH
                 radius: height / 2
                 color: refreshIconMa.containsMouse ? Qt.darker(cPrimary, 1.15) : cPrimary
                 GlyphIcon {
@@ -245,7 +252,7 @@ Item {
             Rectangle {
                 visible: !parent.compact
                 implicitWidth: syncText.implicitWidth + 32
-                implicitHeight: theme.touchMin
+                implicitHeight: root.headerRowH
                 radius: height / 2
                 color: syncMa.containsMouse ? root.cChipHover : root.cChip
                 Text {
@@ -267,8 +274,8 @@ Item {
             // 同步（窄屏图标版）
             Rectangle {
                 visible: parent.compact
-                implicitWidth: theme.touchMin
-                implicitHeight: theme.touchMin
+                implicitWidth: root.headerRowH
+                implicitHeight: root.headerRowH
                 radius: height / 2
                 color: syncIconMa.containsMouse ? root.cChipHover : root.cChip
                 GlyphIcon {
@@ -292,8 +299,8 @@ Item {
             // 网格/列表切换：圆形图标按钮（MV 页固定网格，不展示这个开关）
             Rectangle {
                 visible: root.tabIndex !== 5
-                implicitWidth: theme.touchMin
-                implicitHeight: theme.touchMin
+                implicitWidth: root.headerRowH
+                implicitHeight: root.headerRowH
                 radius: height / 2
                 color: gridMa.containsMouse ? root.cChipHover : root.cChip
                 GlyphIcon {
@@ -316,7 +323,7 @@ Item {
     // 搜索行：音乐库自己的搜索框（原独立搜索页并入这里）
     RowLayout {
         Layout.fillWidth: true
-        Layout.preferredHeight: theme.touchMin
+        Layout.preferredHeight: root.headerRowH
         spacing: 8
 
         // 玻璃胶囊搜索框 + 清除键
@@ -327,7 +334,7 @@ Item {
             Layout.preferredWidth: 300
             Layout.minimumWidth: 120
             Layout.maximumWidth: 520
-            Layout.preferredHeight: theme.touchMin
+            Layout.preferredHeight: root.headerRowH
             radius: height / 2
             color: keyword.activeFocus ? (root.isDark ? Qt.rgba(1, 1, 1, 0.10)
                                                        : Qt.rgba(0, 0, 0, 0.03))
@@ -413,8 +420,8 @@ Item {
         // 搜索框左侧的放大镜和键盘回车都能发起搜索
         Rectangle {
             visible: root.width >= 780
-            Layout.preferredWidth: theme.touchMin
-            Layout.preferredHeight: theme.touchMin
+            Layout.preferredWidth: root.headerRowH
+            Layout.preferredHeight: root.headerRowH
             radius: height / 2
             color: searchMa.pressed ? Qt.darker(cPrimary, 1.1)
                    : searchMa.containsMouse ? Qt.darker(cPrimary, 1.15) : cPrimary
@@ -445,7 +452,7 @@ Item {
     // 行高必须 ≥ 按钮的触控尺寸：这里 clip: true，行高不够会把按钮裁掉
     Item {
         Layout.fillWidth: true
-        Layout.preferredHeight: theme.touchMin
+        Layout.preferredHeight: root.headerRowH
         clip: true
 
             // 平台筛选收成一枚图标按钮：点开弹出「全部平台 + 各平台」，
@@ -453,8 +460,8 @@ Item {
             Rectangle {
                 id: platformBtn
                 z: 2
-                width: theme.touchMin
-                height: theme.touchMin
+                width: root.headerRowH
+                height: root.headerRowH
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
                 radius: height / 2
@@ -555,7 +562,7 @@ Item {
                         delegate: Rectangle {
                             property bool active: root.tabIndex === index
                             width: tabText.implicitWidth + 24
-                            height: theme.touchMin
+                            height: root.headerRowH
                             radius: height / 2
                             color: active ? cPrimary
                                   : tabMa.containsMouse ? root.cChipHover : root.cChip
