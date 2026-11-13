@@ -17,7 +17,17 @@
 #   tools/     账号 API / 自定义音源示例服务
 #   docs/      架构与调研文档
 cmake_minimum_required(VERSION 3.16)
-project(FuruiMusic VERSION 1.4.3 LANGUAGES C CXX)
+# 版本号的唯一人工来源是 core/Version.h（qmake 构建也直接读它，见发版脚本
+# tools/release.py）。这里读出宏值注入 project(... VERSION ...)，Android 的
+# versionName/versionCode、macOS bundle 版本与 CI Release 命名全部自动跟随，
+# CMakeLists 不再单独维护版本号。
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/core/Version.h" _furui_version_h)
+string(REGEX MATCH "#define FURUI_APP_VERSION \"([0-9]+\\.[0-9]+\\.[0-9]+)\""
+       _furui_version_match "${_furui_version_h}")
+if(NOT _furui_version_match)
+    message(FATAL_ERROR "无法从 core/Version.h 解析 FURUI_APP_VERSION（应由 tools/release.py 维护该宏）")
+endif()
+project(FuruiMusic VERSION "${CMAKE_MATCH_1}" LANGUAGES C CXX)
 
 option(FURUI_BUILD_LEGACY_WIDGETS "构建迁移期 Widgets 旧前端" OFF)
 
