@@ -84,6 +84,13 @@ Item {
             app.refreshCaptcha(root.selectedSource)
     }
 
+    // 二维码区本身就是「获取 / 刷新」按钮：不再单放一颗「获取二维码」按钮。
+    // 已登录态不允许点，避免刚拿到登录态又把它作废。
+    function requestQr() {
+        if (root.selectedSource.length === 0 || root.qrPhase === "done") return
+        app.startQrLogin(root.selectedSource)
+    }
+
     onMethodChanged: root.ensureCaptcha()
 
     function updateMethods() {
@@ -616,7 +623,7 @@ Item {
                                 }
                                 Text {
                                     anchors.horizontalCenter: parent.horizontalCenter
-                                    text: root.qrPhase === "loading" ? "正在生成…" : "点击「获取二维码」"
+                                    text: root.qrPhase === "loading" ? "正在生成…" : "点击获取二维码"
                                     color: theme.mutedText
                                     font.pixelSize: 11
                                 }
@@ -673,11 +680,21 @@ Item {
                                         anchors.horizontalCenter: parent.horizontalCenter
                                         visible: root.qrPhase !== "error"
                                         text: qrOverlay.done ? "登录态已保存在本机"
-                                              : (root.qrPhase === "scanned" ? "请在手机上确认登录" : "请重新获取")
+                                              : (root.qrPhase === "scanned" ? "请在手机上确认登录" : "点击二维码重新获取")
                                         color: qrOverlay.done ? cSub : Qt.rgba(1, 1, 1, 0.72)
                                         font.pixelSize: theme.fontXs
                                     }
                                 }
+                            }
+
+                            // 整个码面就是「获取 / 刷新二维码」的点击区，覆盖在遮罩之上：
+                            // 出码前、等待扫码、已过期、失败态都可以直接点一下重来。
+                            MouseArea {
+                                anchors.fill: parent
+                                z: 10
+                                cursorShape: Qt.PointingHandCursor
+                                enabled: root.selectedSource.length > 0 && root.qrPhase !== "done"
+                                onClicked: root.requestQr()
                             }
                         }
 
@@ -732,6 +749,18 @@ Item {
                                 wrapMode: Text.Wrap
                             }
 
+                            // 取代原来的「获取二维码 / 重新获取」按钮：码面本身就是入口
+                            Text {
+                                Layout.fillWidth: true
+                                visible: root.qrPhase !== "done"
+                                text: root.qrPhase === "idle" || root.qrPhase === "loading"
+                                      ? "点击左侧二维码区域即可获取"
+                                      : "点击左侧二维码可随时重新获取（旧码立即作废）"
+                                color: theme.mutedText
+                                font.pixelSize: theme.fontXs
+                                wrapMode: Text.Wrap
+                            }
+
                             // 网易云的扫码是账号级风控的重点对象：把 8821 的含义直接说清，
                             // 并给一键切密码的入口，避免用户反复重试反而加重风控
                             Text {
@@ -745,33 +774,12 @@ Item {
                                 wrapMode: Text.Wrap
                             }
 
-                            // 用 Flow 而不是 RowLayout：窄屏下第三个按钮会自动换行，
+                            // 用 Flow 而不是 RowLayout：窄屏下按钮会自动换行，
                             // 不会把右列撑宽、挤坏二维码
                             Flow {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: implicitHeight
                                 spacing: 8
-                                // 主按钮：品牌渐变
-                                Rectangle {
-                                    width: 112
-                                    height: theme.touchMin
-                                    radius: height / 2
-                                    gradient: Gradient {
-                                        GradientStop { position: 0.0; color: theme.heroStart }
-                                        GradientStop { position: 1.0; color: theme.heroEnd }
-                                    }
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: root.qrPhase === "idle" ? "获取二维码" : "重新获取"
-                                        color: "#FFFFFF"
-                                        font.pixelSize: 12
-                                        font.bold: true
-                                    }
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        onClicked: app.startQrLogin(root.selectedSource)
-                                    }
-                                }
                                 Rectangle {
                                     width: 72
                                     height: theme.touchMin

@@ -70,6 +70,21 @@ static QString neteaseDeviceId()
     return did;
 }
 
+// weapi 的 csrf_token 是「双提交」校验：body 里的 csrf_token 必须和 Cookie 里的
+// __csrf 一致。浏览器登录后 Cookie 里一定有 __csrf，而应用内直连没有，历史上
+// 一直传空串 —— 假账号会先被 502 挡掉所以测不出来，真实账号却可能被判成畸形请求。
+// 这里自己生成一个稳定的随机值，Cookie 与 body 用同一个（与官方 API 实现一致）。
+static QString neteaseCsrfToken()
+{
+    QString csrf = Settings::string(QStringLiteral("neteaseCsrf"));
+    if (!csrf.isEmpty()) return csrf;
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < 32; ++i)
+        csrf.append(QChar(hex[QRandomGenerator::global()->bounded(16)]));
+    Settings::set(QStringLiteral("neteaseCsrf"), csrf);
+    return csrf;
+}
+
 // Qt 的网络错误串带完整请求 URL（含签名参数），直接贴到界面上既难看又多余，
 // 只保留 " - " 之后的服务端回复部分。
 static QString shortNetworkError(const QString &error)
@@ -1267,6 +1282,8 @@ QString AuthManager::neteaseCookieHeader() const
     // 参考 NeteaseCloudMusicApi 的 processCookieObject：缺少 deviceId/os/appver/channel
     // 时，出码能成功，但手机上一确认就会被判异常环境（8821）。
     QMap<QString, QString> c = m_neeCookies;
+    if (!c.contains(QStringLiteral("__csrf")))
+        c.insert(QStringLiteral("__csrf"), neteaseCsrfToken());
     if (!c.contains(QStringLiteral("deviceId"))) c.insert(QStringLiteral("deviceId"), neteaseDeviceId());
     if (!c.contains(QStringLiteral("os"))) c.insert(QStringLiteral("os"), QStringLiteral("pc"));
     if (!c.contains(QStringLiteral("appver")))
@@ -1348,7 +1365,8 @@ void AuthManager::neteaseBootstrap(std::function<void(bool)> done)
 
     QJsonObject payload;
     payload.insert(QStringLiteral("username"), username);
-    payload.insert(QStringLiteral("csrf_token"), QString());
+    payload.insert(QStringLiteral("csrf_token"),
+                   m_neeCookies.value(QStringLiteral("__csrf"), neteaseCsrfToken()));
     weapiPost(QStringLiteral("/weapi/register/anonimous"), payload, neteaseCookieHeader(),
         [this](const HttpClient::Reply &r) {
             const QJsonValue root = Json::rootOf(r.json);
@@ -1690,13 +1708,21 @@ void AuthManager::loginByPassword(const QString &sourceId, const QString &accoun
 
     const QString md5 = QCryptographicHash::hash(password.toUtf8(), QCryptographicHash::Md5).toHex();
     const bool isEmail = acc.contains(QLatin1Char('@'));
+    // 浏览器会在提交前把手机号规范化；应用内直连若原样把「+86 138 0013 8000」
+    // 发给服务端，就只会拿到 502「账号或密码错误」，看起来像密码错了。
+    QString phone = acc;
+    if (!isEmail) {
+        phone.remove(QRegularExpression(QStringLiteral("[\\s\\-()]")));
+        if (phone.startsWith(QLatin1String("+86"))) phone = phone.mid(3);
+        else if (phone.startsWith(QLatin1String("86")) && phone.size() > 11) phone = phone.mid(2);
+    }
 
     // 与 AlgerMusicPlayer 内置的 netease-cloud-music-api-alger 的 login_cellphone 逐参数对齐：
     //   URL  : POST /weapi/w/login/cellphone（注意是 w/ 前缀；老的 /weapi/login/cellphone 用同一
     //          个密码会一直回 502「账号或密码错误」，这就是「密码登录也失败」的直接原因）
     //   body : type=1 / https=true / phone / countrycode=86 / password=md5 / remember=true
-    //   Cookie: 设备指纹 + 匿名令牌 MUSIC_A（先 register/anonimous 拿）
-    neteaseBootstrap([this, sourceId, acc, md5, isEmail](bool bootOk) {
+    //   Cookie: 设备指纹 + 匿名令牌 MUSIC_A + __csrf（与 body 的 csrf_token 一致）
+    neteaseBootstrap([this, sourceId, acc, phone, md5, isEmail](bool bootOk) {
         if (!bootOk) {
             const QString msg = QStringLiteral("获取匿名设备令牌失败（网络异常），请稍后重试");
             emit loginStateChanged(sourceId, false, msg);
@@ -1712,12 +1738,14 @@ void AuthManager::loginByPassword(const QString &sourceId, const QString &accoun
         } else {
             payload.insert(QStringLiteral("type"), QStringLiteral("1"));
             payload.insert(QStringLiteral("https"), QStringLiteral("true"));
-            payload.insert(QStringLiteral("phone"), acc);
+            payload.insert(QStringLiteral("phone"), phone);
             payload.insert(QStringLiteral("countrycode"), QStringLiteral("86"));
             payload.insert(QStringLiteral("remember"), QStringLiteral("true"));
         }
         payload.insert(QStringLiteral("password"), md5);
-        payload.insert(QStringLiteral("csrf_token"), QString());
+        // 双提交：与 neteaseCookieHeader() 里的 __csrf 保持同一个值
+        payload.insert(QStringLiteral("csrf_token"),
+                       m_neeCookies.value(QStringLiteral("__csrf"), neteaseCsrfToken()));
 
         // 主端点不通（个别账号/灰度环境仍走老路径）时自动回退一次，别让用户只看到一个 502
         auto send = std::make_shared<std::function<void(const QString &)>>();

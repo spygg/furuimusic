@@ -383,6 +383,12 @@ QImage GlyphImageProvider::render(const QString &name, const QColor &color, int 
         rect(0.72, 0.24, 0.20, 0.16, true);
         rect(0.72, 0.60, 0.20, 0.16, true);
         line(0.82, 0.40, 0.82, 0.60);
+    } else if (name == QLatin1String("history")) {
+        // 播放历史：表盘 + 时针/分针。用矢量绘制，避免「◷」这类时钟符号
+        // 在部分系统字体里缺字形，空状态显示成方框/乱码。
+        circle(0.52, 0.54, 0.32, false);
+        line(0.52, 0.54, 0.52, 0.35);
+        line(0.52, 0.54, 0.68, 0.61);
     } else {
         // 未知图标：画一个音符，界面不会出现空白
         circle(0.36, 0.72, 0.12, true);

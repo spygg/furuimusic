@@ -898,7 +898,7 @@ Item {
                     EmptyState {
                         anchors.centerIn: parent
                         visible: favoriteList.count === 0
-                        glyph: "♥"
+                        iconName: "heart"
                         title: "还没有收藏"
                         hint: "搜索歌曲后点行尾的心形按钮即可收藏"
                     }
@@ -937,7 +937,7 @@ Item {
                     EmptyState {
                         anchors.centerIn: parent
                         visible: historyList.count === 0
-                        glyph: "◷"
+                        iconName: "history"
                         title: "还没有播放记录"
                         hint: "播放过的歌曲会在这里按平台聚合"
                     }

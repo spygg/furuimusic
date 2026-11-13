@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QUrlQuery>
 
+#include <cstdio>
 #include <memory>
 
 #include "JsonMapper.h"
@@ -117,20 +118,39 @@ void HttpClient::request(const QString &method, const QUrl &url, const QVariantM
         if (cb) cb(r);
     };
 
+    // FURUI_HTTP_TRACE=1：把每个请求的发出/结束/超时打到 stderr，用于定位
+    // 「请求发出去了但一直不回包」这类问题（默认完全不输出）。
+    const bool trace = qEnvironmentVariableIsSet("FURUI_HTTP_TRACE");
+    auto clock = std::make_shared<QElapsedTimer>();
+    clock->start();
+    if (trace)
+        std::fprintf(stderr, "[http] -> %s %s body=%lld headers=%d\n",
+                     qPrintable(m), qPrintable(url.toString()),
+                     (long long)body.size(), headers.size());
+
     QPointer<QNetworkReply> guard(reply);
     if (timeoutMs < 0) timeoutMs = Settings::integer(QStringLiteral("timeout"), 12) * 1000;
-    QTimer::singleShot(timeoutMs, this, [guard, finish]() {
+    QTimer::singleShot(timeoutMs, this, [guard, finish, trace, clock]() {
         if (!guard) return;
-        guard->abort();
+        if (trace)
+            std::fprintf(stderr, "[http] !! timeout elapsed=%lldms\n",
+                         (long long)clock->elapsed());
+        // 先投递结果再 abort：abort() 可能同步触发 finished，若先 abort，
+        // 回调会带 "Operation canceled" 抢先占住 done，真正的「请求超时」被吞掉。
         Reply r;
         r.error = QStringLiteral("请求超时");
         finish(r);
+        guard->abort();
     });
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply, finish]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, finish, trace, clock]() {
         Reply r;
         r.status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         r.body = reply->readAll();
+        if (trace)
+            std::fprintf(stderr, "[http] <- elapsed=%lldms status=%d error=%d %s body=%lld\n",
+                         (long long)clock->elapsed(), r.status, int(reply->error()),
+                         qPrintable(reply->errorString()), (long long)r.body.size());
         // FURUI_PERF=1：把 GUI 线程上的解析耗时打出来。要不要挪去线程池取决于这条数据，
         // 不靠猜——几十 KB 的搜索结果解析不到 1ms，为它引入跨线程回调生命周期风险不值。
         QElapsedTimer parseClock;
