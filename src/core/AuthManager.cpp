@@ -1479,6 +1479,9 @@ void AuthManager::generateQrImage(const QString &content, const QString &sourceI
         qr = new QrCode(QrCode::encodeText(content.toUtf8().constData(), QrCode::Ecc::MEDIUM));
     } catch (const std::exception &) {
         delete qr;
+        // 清掉上一张成功的图：saveQrDataUrl 用 m_qrImagePath 是否为空判定本次
+        // 成败，不清的话失败仍返回 true，登录流程会误以为出码成功
+        m_qrImagePath.clear();
         m_qrStatus = QStringLiteral("二维码生成失败：内容过长，请点击刷新重试");
         m_qrHint = QStringLiteral("生成失败，点击二维码区域刷新");
         emit toast(m_qrStatus);

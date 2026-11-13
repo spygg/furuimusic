@@ -17,7 +17,7 @@
 #   tools/     账号 API / 自定义音源示例服务
 #   docs/      架构与调研文档
 cmake_minimum_required(VERSION 3.16)
-project(FuruiMusic VERSION 1.4.1 LANGUAGES C CXX)
+project(FuruiMusic VERSION 1.4.2 LANGUAGES C CXX)
 
 option(FURUI_BUILD_LEGACY_WIDGETS "构建迁移期 Widgets 旧前端" OFF)
 
