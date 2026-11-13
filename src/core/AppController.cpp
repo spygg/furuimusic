@@ -1136,6 +1136,8 @@ void AppController::cancelQrLogin() { AuthManager::instance()->cancelQrLogin(); 
 void AppController::loginByPassword(const QString &sourceId, const QString &account,
                                     const QString &password, const QString &captcha)
 { AuthManager::instance()->loginByPassword(sourceId, account, password, captcha); }
+void AppController::loginByCookie(const QString &sourceId, const QString &cookie)
+{ AuthManager::instance()->loginByCookie(sourceId, cookie); }
 void AppController::sendPhoneCode(const QString &sourceId, const QString &phone, const QString &captcha)
 { AuthManager::instance()->sendPhoneCode(sourceId, phone, captcha); }
 void AppController::refreshCaptcha(const QString &sourceId)

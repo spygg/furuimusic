@@ -1,4 +1,6 @@
-// 福瑞音乐 - 在线检测更新（参照洛雪音乐 publish/version.json 机制）
+// 福瑞音乐 - 在线检测更新（参照洛雪音乐 version.json 机制）
+// 清单的唯一事实来源是 src/version.json；publish/version.json 只是为已发布的老客户端
+// 保留的兼容副本，由 CI 校验两者内容一致（见 .github/workflows/release.yml）。
 #include "UpdateChecker.h"
 
 #include "AppController.h"
@@ -9,6 +11,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QIODevice>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -27,15 +30,21 @@ namespace Furui {
 
 namespace {
 
-// 多镜像依次尝试：GitHub raw 直连失败时退回 jsDelivr CDN（与洛雪 update.js 的镜像链同思路）
+// 多镜像依次尝试：先拉 src/version.json（清单主路径），四个 CDN 全失败时再退回
+// publish/version.json 兼容副本。顺序上把 GitHub raw + 三个 jsDelivr 节点放在同一路径内，
+// 避免老仓库分支还没同步 src/version.json 时新版客户端直接判定「无更新信息」。
 QStringList versionMirrors()
 {
-    return QStringList{
-        QStringLiteral("https://raw.githubusercontent.com/spygg/furuimusic/main/publish/version.json"),
-        QStringLiteral("https://cdn.jsdelivr.net/gh/spygg/furuimusic@main/publish/version.json"),
-        QStringLiteral("https://fastly.jsdelivr.net/gh/spygg/furuimusic@main/publish/version.json"),
-        QStringLiteral("https://gcore.jsdelivr.net/gh/spygg/furuimusic@main/publish/version.json"),
-    };
+    static const char *const paths[] = {"src/version.json", "publish/version.json"};
+    QStringList mirrors;
+    for (const char *path : paths) {
+        const QString p = QString::fromLatin1(path);
+        mirrors << QStringLiteral("https://raw.githubusercontent.com/spygg/furuimusic/main/") + p
+                << QStringLiteral("https://cdn.jsdelivr.net/gh/spygg/furuimusic@main/") + p
+                << QStringLiteral("https://fastly.jsdelivr.net/gh/spygg/furuimusic@main/") + p
+                << QStringLiteral("https://gcore.jsdelivr.net/gh/spygg/furuimusic@main/") + p;
+    }
+    return mirrors;
 }
 
 // CI（.github/workflows/release.yml）上传到 Release 的产物命名，下载直链按它拼
@@ -144,10 +153,43 @@ void UpdateChecker::checkForUpdates()
     fetchMirror(0);
 }
 
+bool UpdateChecker::applyManifest(const QJsonObject &obj)
+{
+    const QString remote = obj.value(QLatin1String("version")).toString();
+    if (remote.isEmpty())
+        return false;
+    m_checking = false;
+    m_remoteVersion = remote;
+    m_changelog = obj.value(QLatin1String("desc")).toString();
+    m_history.clear();
+    const QJsonArray hist = obj.value(QLatin1String("history")).toArray();
+    for (const QJsonValue &v : hist) {
+        const QJsonObject e = v.toObject();
+        QVariantMap entry;
+        entry.insert(QStringLiteral("version"), e.value(QLatin1String("version")).toString());
+        entry.insert(QStringLiteral("desc"), e.value(QLatin1String("desc")).toString());
+        m_history.append(entry);
+    }
+    m_downloads.clear();
+    const QJsonObject dl = obj.value(QLatin1String("downloads")).toObject();
+    for (auto it = dl.constBegin(); it != dl.constEnd(); ++it)
+        m_downloads.insert(it.key(), it.value().toString());
+    const bool hasUpdate = compareVersion(localVersion(), remote) < 0;
+    emit stateChanged();
+    emit checkFinished(hasUpdate, hasUpdate ? QString() : QStringLiteral("已是最新版本"));
+    return true;
+}
+
 void UpdateChecker::fetchMirror(int index)
 {
     const QStringList mirrors = versionMirrors();
     if (index >= mirrors.size()) {
+        // 远端全不可达：用编译进 qrc 的 src/version.json 兜底。本地清单与版本号同源，
+        // 结果必然是「已是最新版本」，比把离线误报成「无法获取更新信息」更如实。
+        QFile f(QStringLiteral(":/config/version.json"));
+        if (f.open(QIODevice::ReadOnly)
+            && applyManifest(QJsonDocument::fromJson(f.readAll()).object()))
+            return;
         m_checking = false;
         emit stateChanged();
         emit checkFinished(false, QStringLiteral("无法获取更新信息（网络不可达或全部镜像失败）"));
@@ -156,32 +198,11 @@ void UpdateChecker::fetchMirror(int index)
     HttpClient::instance()->request(QStringLiteral("GET"), QUrl(mirrors.at(index)), QVariantMap(),
                                     QByteArray(),
                                     [this, index](const HttpClient::Reply &r) {
-        const QJsonObject obj = r.json.object();
-        const QString remote = obj.value(QLatin1String("version")).toString();
-        if (!r.ok || remote.isEmpty()) {
+        if (!r.ok || r.json.object().value(QLatin1String("version")).toString().isEmpty()) {
             fetchMirror(index + 1);
             return;
         }
-        m_checking = false;
-        m_remoteVersion = remote;
-        m_changelog = obj.value(QLatin1String("desc")).toString();
-        m_history.clear();
-        const QJsonArray hist = obj.value(QLatin1String("history")).toArray();
-        for (const QJsonValue &v : hist) {
-            const QJsonObject e = v.toObject();
-            QVariantMap entry;
-            entry.insert(QStringLiteral("version"), e.value(QLatin1String("version")).toString());
-            entry.insert(QStringLiteral("desc"), e.value(QLatin1String("desc")).toString());
-            m_history.append(entry);
-        }
-        m_downloads.clear();
-        const QJsonObject dl = obj.value(QLatin1String("downloads")).toObject();
-        for (auto it = dl.constBegin(); it != dl.constEnd(); ++it)
-            m_downloads.insert(it.key(), it.value().toString());
-        const bool hasUpdate = compareVersion(localVersion(), remote) < 0;
-        emit stateChanged();
-        emit checkFinished(hasUpdate,
-                           hasUpdate ? QString() : QStringLiteral("已是最新版本"));
+        applyManifest(r.json.object());
     });
 }
 

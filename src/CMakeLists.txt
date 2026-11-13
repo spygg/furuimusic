@@ -2,8 +2,20 @@
 # 主构建：CMake。目标组织：
 #   FuruiCore     核心 C++ 静态库（桌面 / 移动共用）
 #   FuruiMusic    统一 QML 前端（Windows / macOS / Linux / Android）
-#   FuruiMusicWidgets  迁移期保留的 Widgets 旧前端（默认不构建）
+#   FuruiMusicWidgets  弃用中的 Widgets 旧前端（默认不构建）
 # Qt 5 Android 的 APK 打包仍使用 qmake（见 FuruiMusic.pro）。
+#
+# src/ 目录职责（构建所需的一切都在本目录内）：
+#   core/      业务后端：音源、账号、播放、曲库、开放 API、HTTP
+#   ui/        QML 前端 + UI 侧 C++ 适配（含 main.cpp、图标、qml.qrc）
+#   config/    声明式配置（sources.json、version.json 也在 src 根）
+#   platform/  各平台打包资源：android-qt5/（qmake）、android-qt6/（CMake）
+#   legacy/    已弃用、默认不编译的代码：widgets/（老 Widgets 前端）
+#   thirdparty/随仓库分发的第三方源码/运行库（ffmpeg、openssl1.1）
+#   cmake/     CMake 辅助模块（FFmpeg 自动编译、OpenSSL 运行库部署）
+#   scripts/   各平台构建脚本
+#   tools/     账号 API / 自定义音源示例服务
+#   docs/      架构与调研文档
 cmake_minimum_required(VERSION 3.16)
 project(FuruiMusic VERSION 1.4.0 LANGUAGES C CXX)
 
@@ -60,9 +72,9 @@ include(cmake/FuruiFfmpeg.cmake)
 # src/thirdparty/openssl1.1/，Qt 5 构建后自动拷到 exe 旁（Qt 6 不需要）。
 include(cmake/FuruiOpenssl.cmake)
 
-# sources.json 内容变化时让 AUTORCC 重新生成 qrc_config.cpp
+# sources.json / version.json 内容变化时让 AUTORCC 重新生成 qrc_config.cpp
 set_source_files_properties(core/config.qrc PROPERTIES
-    AUTORCC_DEPENDENCIES "${CMAKE_CURRENT_SOURCE_DIR}/config/sources.json")
+    AUTORCC_DEPENDENCIES "${CMAKE_CURRENT_SOURCE_DIR}/config/sources.json;${CMAKE_CURRENT_SOURCE_DIR}/version.json")
 
 set(CORE_FILES
     core/QtCompat.h
@@ -135,13 +147,13 @@ set(UI_FILES
 )
 
 set(LEGACY_WIDGETS_FILES
-    desktop/main_desktop.cpp
-    desktop/MainWindow.h desktop/MainWindow.cpp
-    desktop/Theme.h desktop/Theme.cpp desktop/ThemeStyle.cpp
-    desktop/PlayerWidgets.h desktop/PlayerWidgets.cpp
-    desktop/LoginDialog.h desktop/LoginDialog.cpp
-    desktop/SettingsDialog.h desktop/SettingsDialog.cpp
-    desktop/LyricsWindow.h desktop/LyricsWindow.cpp
+    legacy/widgets/main_desktop.cpp
+    legacy/widgets/MainWindow.h legacy/widgets/MainWindow.cpp
+    legacy/widgets/Theme.h legacy/widgets/Theme.cpp legacy/widgets/ThemeStyle.cpp
+    legacy/widgets/PlayerWidgets.h legacy/widgets/PlayerWidgets.cpp
+    legacy/widgets/LoginDialog.h legacy/widgets/LoginDialog.cpp
+    legacy/widgets/SettingsDialog.h legacy/widgets/SettingsDialog.cpp
+    legacy/widgets/LyricsWindow.h legacy/widgets/LyricsWindow.cpp
 )
 
 add_library(FuruiCore STATIC ${CORE_FILES})
@@ -159,7 +171,7 @@ if(ANDROID)
     math(EXPR FURUI_ANDROID_VERSION_CODE
          "${PROJECT_VERSION_MAJOR} * 10000 + ${PROJECT_VERSION_MINOR} * 100 + ${PROJECT_VERSION_PATCH}")
     set_target_properties(FuruiMusic PROPERTIES
-        QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android_qt6"
+        QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6"
         QT_ANDROID_VERSION_NAME "${PROJECT_VERSION}"
         QT_ANDROID_VERSION_CODE ${FURUI_ANDROID_VERSION_CODE}
         QT_ANDROID_MIN_SDK_VERSION 23
@@ -169,8 +181,8 @@ if(ANDROID)
     # libssl_3.so / libcrypto_3.so。缺失时 QSslSocket::supportsSsl() 为 false，
     # 所有 HTTPS 音源和在线脚本都会取链失败，因此把预编译库随 APK 一起打包。
     set(FURUI_ANDROID_OPENSSL_LIBS
-        "${CMAKE_CURRENT_SOURCE_DIR}/android_qt6/libs/${ANDROID_ABI}/libssl_3.so"
-        "${CMAKE_CURRENT_SOURCE_DIR}/android_qt6/libs/${ANDROID_ABI}/libcrypto_3.so")
+        "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6/libs/${ANDROID_ABI}/libssl_3.so"
+        "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6/libs/${ANDROID_ABI}/libcrypto_3.so")
     foreach(_ssl_lib IN LISTS FURUI_ANDROID_OPENSSL_LIBS)
         if(EXISTS "${_ssl_lib}")
             set_property(TARGET FuruiMusic APPEND PROPERTY

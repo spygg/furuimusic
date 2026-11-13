@@ -103,7 +103,7 @@ int main(int argc, char *argv[])
     if (engine.rootObjects().isEmpty())
         return -1;
 
-    // 启动后延迟检查更新（多镜像拉 publish/version.json），结果走全局 Toast；
+    // 启动后延迟检查更新（多镜像拉 src/version.json），结果走全局 Toast；
     // 截图自检模式跳过，避免弹窗与网络等待干扰无人值守抓图
     if (qEnvironmentVariableIsEmpty("FURUI_CAPTURE")) {
         QTimer::singleShot(5000, &engine, [] {

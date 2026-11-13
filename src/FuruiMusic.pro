@@ -96,21 +96,21 @@ CONFIG(legacy_widgets) {
     QT += widgets
     TARGET = FuruiMusicWidgets
     SOURCES += \
-        desktop/main_desktop.cpp \
-        desktop/MainWindow.cpp \
-        desktop/Theme.cpp \
-        desktop/ThemeStyle.cpp \
-        desktop/PlayerWidgets.cpp \
-        desktop/LoginDialog.cpp \
-        desktop/SettingsDialog.cpp \
-        desktop/LyricsWindow.cpp
+        legacy/widgets/main_desktop.cpp \
+        legacy/widgets/MainWindow.cpp \
+        legacy/widgets/Theme.cpp \
+        legacy/widgets/ThemeStyle.cpp \
+        legacy/widgets/PlayerWidgets.cpp \
+        legacy/widgets/LoginDialog.cpp \
+        legacy/widgets/SettingsDialog.cpp \
+        legacy/widgets/LyricsWindow.cpp
     HEADERS += \
-        desktop/MainWindow.h \
-        desktop/Theme.h \
-        desktop/PlayerWidgets.h \
-        desktop/LoginDialog.h \
-        desktop/SettingsDialog.h \
-        desktop/LyricsWindow.h
+        legacy/widgets/MainWindow.h \
+        legacy/widgets/Theme.h \
+        legacy/widgets/PlayerWidgets.h \
+        legacy/widgets/LoginDialog.h \
+        legacy/widgets/SettingsDialog.h \
+        legacy/widgets/LyricsWindow.h
 } else {
     # 统一 QML 前端：桌面与 Android 共用同一入口和资源
     TARGET = FuruiMusic
@@ -172,7 +172,7 @@ CONFIG(legacy_widgets) {
 }
 
 android {
-    ANDROID_PACKAGE_SOURCE_DIR = $$PWD/android
+    ANDROID_PACKAGE_SOURCE_DIR = $$PWD/platform/android-qt5
     ANDROID_MIN_SDK_VERSION = 21
     ANDROID_TARGET_SDK_VERSION = 30
     ANDROID_ABIS = arm64-v8a

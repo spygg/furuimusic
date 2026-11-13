@@ -287,6 +287,7 @@ public:
     Q_INVOKABLE void cancelQrLogin();
     Q_INVOKABLE void loginByPassword(const QString &sourceId, const QString &account,
                                      const QString &password, const QString &captcha = QString());
+    Q_INVOKABLE void loginByCookie(const QString &sourceId, const QString &cookie);
     Q_INVOKABLE void sendPhoneCode(const QString &sourceId, const QString &phone,
                                    const QString &captcha = QString());
     Q_INVOKABLE void refreshCaptcha(const QString &sourceId);

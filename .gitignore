@@ -21,8 +21,8 @@
 !src/thirdparty/openssl1.1/*.dll
 *.so
 # 例外：Android Qt 6 APK 打包必需的 OpenSSL 3 运行库（共约 4.6M，缺了 APK 的 HTTPS 全部失效）
-!src/android_qt6/libs/arm64-v8a/libssl_3.so
-!src/android_qt6/libs/arm64-v8a/libcrypto_3.so
+!src/platform/android-qt6/libs/arm64-v8a/libssl_3.so
+!src/platform/android-qt6/libs/arm64-v8a/libcrypto_3.so
 *.dylib
 *.a
 *.lib

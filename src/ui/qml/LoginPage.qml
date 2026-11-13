@@ -131,6 +131,9 @@ Item {
         target: app
         function onLoginStateChanged(sourceId, ok, message) {
             root.hint = (ok ? "登录成功：" : "登录失败：") + message
+            // 8821 / 行为验证码是服务端风控，重试只会更糟；直接指到下面的浏览器登录入口
+            if (!ok && (message.indexOf("8821") >= 0 || message.indexOf("行为验证码") >= 0))
+                root.hint += "\n不要用密码反复重试：请拉到本卡片下方，用「打开官网登录」后导入 Cookie。"
             root.hintError = !ok
             app.refreshAccounts()
             root.updateMethods()
@@ -938,6 +941,98 @@ Item {
                             font.pixelSize: theme.fontXs
                             lineHeight: 1.4
                             wrapMode: Text.Wrap
+                        }
+
+                        // 网易云的 8821 是账号级风控：服务端要求行为验证码（滑块），
+                        // 本工程没链 WebEngine，应用内做不了这一步；但浏览器里能正常登录。
+                        // 所以给一条确定可用的退路：官网登录 → 复制 Cookie → 粘回来。
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            visible: root.selectedSource === "netease"
+                            spacing: 8
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 1
+                                color: cLine
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: "密码登录提示「行为验证码 / 8821」时，请用浏览器登录"
+                                color: cText
+                                font.pixelSize: 12
+                                font.bold: true
+                                wrapMode: Text.Wrap
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: "这是网易云对第三方客户端的账号级风控，换协议或重试都绕不过。"
+                                      + "在官网登录成功后，按 F12 → Network → 任一请求的 Request Headers，"
+                                      + "复制整行 Cookie 或它的值（必须含 MUSIC_U=…）粘到下面即可。"
+                                      + "带不带「Cookie: 」前缀都能识别。"
+                                color: cSub
+                                font.pixelSize: theme.fontXs
+                                lineHeight: 1.4
+                                wrapMode: Text.Wrap
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Rectangle {
+                                    Layout.preferredWidth: 116
+                                    Layout.preferredHeight: theme.touchMin
+                                    radius: height / 2
+                                    color: Qt.rgba(cPrimary.r, cPrimary.g, cPrimary.b, 0.10)
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "打开官网登录"
+                                        color: cPrimary
+                                        font.pixelSize: 12
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: app.openExternal("https://music.163.com/")
+                                    }
+                                }
+                                TextField {
+                                    id: browserCookieField
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: theme.touchMin
+                                    placeholderText: "粘贴登录后的 Cookie（含 MUSIC_U=…）"
+                                    color: cText
+                                    placeholderTextColor: theme.mutedText
+                                    font.pixelSize: 12
+                                    leftPadding: 12
+                                    background: Rectangle {
+                                        color: cField
+                                        radius: 11
+                                        border.width: 1
+                                        border.color: browserCookieField.activeFocus ? cPrimary : cLine
+                                    }
+                                    onAccepted: app.loginByCookie(root.selectedSource, text)
+                                }
+                            }
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: theme.touchMin
+                                radius: height / 2
+                                color: "transparent"
+                                border.width: 1
+                                border.color: cLine
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "导入浏览器登录态并同步"
+                                    color: cSub
+                                    font.pixelSize: 12
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: app.loginByCookie(root.selectedSource,
+                                                                 browserCookieField.text)
+                                }
+                            }
                         }
                     }
 

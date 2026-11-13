@@ -25,7 +25,7 @@
 | 曲库 | 收藏、播放历史、搜索历史、下载、按平台筛选歌单/收藏/历史；**发现榜单**页并发拉取各平台公开榜单（网易 `/api/toplist`、酷我 `wapi.kuwo.cn/api/www/bang`），未登录也能浏览榜单与曲目，参考 AlgerMusicPlayer 的 toplist / personalized 组织方式 |
 | MV 播放 | 曲库内「MV」Tab（全部/内地/港台/欧美/日本/韩国，16:9 封面网格 + 播放量角标 + 滚动续页），点封面进沉浸式播放器：进度拖动、音量/静音、单曲循环、全屏、上一个/下一个、单击暂停、双击 ±10s、控制条自动隐藏。视频解码：Qt 6 用 QtMultimedia 官方 FFmpeg 后端；Qt 5 用自编译 FFmpeg（`FfmpegVideoPlayer`），未编译该后端时才退回 DirectShow 并如实提示 |
 | 主题与窗口 | 深色 / 浅色 / 跟随系统（Windows 注册表、macOS `defaults`、Linux `gsettings`，Android 回退浅色）；无边框窗口 + 自绘标题栏 + 边缘缩放 |
-| 在线检测更新 | 设置页「检查更新」+ 启动延迟自动检查（参照洛雪音乐 `publish/version.json` 机制，多镜像容错）；有新版本时弹层展示更新说明，用户同意后**应用内直接下载**对应平台的 GitHub Release 产物（不跳转网页），Android 下载完成经 FileProvider 自动拉起系统安装器，桌面端打开安装包所在文件夹 |
+| 在线检测更新 | 设置页「检查更新」+ 启动延迟自动检查（参照洛雪音乐 `src/version.json` 清单机制，多镜像容错）；有新版本时弹层展示更新说明，用户同意后**应用内直接下载**对应平台的 GitHub Release 产物（不跳转网页），Android 下载完成经 FileProvider 自动拉起系统安装器，桌面端打开安装包所在文件夹 |
 | 本地 OpenAPI | 可选的本地 HTTP 服务开关，便于外部控制播放 |
 | 手机适配 | 窄屏布局（`MainMobile.qml`）、竖屏截图见 `src/docs/screenshots/` |
 
@@ -197,7 +197,14 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
       （`https://interface.music.163.com/eapi/…`，AES-128-ECB，密钥 `e82ckenh8dichen8`），
       `type=3`（不是旧文档里的 1）；eapi 不通时整条链路退回明文 `/api`。二维码内容只有
       `https://music.163.com/login?codekey=<unikey>`，不自造 chainId
-    - 若仍被 `8821` 拒绝（服务端账号级风控），界面会自动切到密码页并说明原因，不必反复重试
+    - **8821 行为验证码（实测结论，2026-11-13）**：用真实账号分别测邮箱与手机号密码登录，两者都返回 `8821 需要行为验证码`；这不是密码错、不是
+      weapi 加密或网络问题，而是网易云对第三方客户端的**账号级风控**。浏览器能登录是因为
+      它能完成滑块，MinGW 版 Qt 没有 WebEngine，应用内无法完成这一步，重试只会加重风控。
+      因此密码/扫码卡片底部提供**浏览器登录态导入**：「打开官网登录」→ F12 复制含
+      `MUSIC_U` 的 Cookie → 粘贴 → `AuthManager::loginByCookie()` 校验并落盘，再
+      `/weapi/w/nuser/account/get` 补昵称头像并 `syncUserLibrary()`。Cookie 允许带
+      `Cookie: ` 前缀，缺 `__csrf` 时自动补本地稳定令牌
+    - 若仍被 `8821` 拒绝，界面会说明原因并引导到上面的导入入口，不必反复重试
   - QQ 音乐、酷狗：原生扫码
   - 咪咕：扫码 / 手机号·邮箱·用户名 + 密码。扫码与官方门户同一套接口
     （`GET /api/qrcWeb/qrcLogin?sourceid=208003` 出码 → `GET /api/qrcWeb/qrcquery?qrc_sessionid=…`
@@ -232,10 +239,10 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 
 - **内置平台接口是示例模板**：`src/config/sources.json` 里的搜索/取链端点可按需替换；部分平台的取链依赖登录态或已失效，失败时界面会给出如实原因，而不是静默跳过。
 - **在线音源现状**：详见下节「在线音源实测（2026-11-09）」；本次 5 个公开源都只声明 `musicUrl`、没有 `search`，所以不会贡献搜索结果。
-- **扫码登录**：网易云默认走密码，扫码若被账号级风控（8821）拒绝会自动切到密码页；QQ / 酷狗 / 咪咕 / 酷我（微信）扫码为内置原生链路；汽水扫码为内置官方 passport 直连链路（出码后用抖音 App 扫一扫）。
+- **扫码登录**：网易云默认走密码，扫码若被账号级风控（8821）拒绝会自动切到密码页；若密码也遇到 8821，请走该页底部的「浏览器登录态导入」（见上节）；QQ / 酷狗 / 咪咕 / 酷我（微信）扫码为内置原生链路；汽水扫码为内置官方 passport 直连链路（出码后用抖音 App 扫一扫）。
 - **宿主能力边界**：在线脚本运行时的 `crypto.aesEncrypt`、`crypto.rsaEncrypt`、`utils.zlib` 为显式桩（本次 5 个公开源未使用），用到时会明确报“宿主未实现该能力”。
 - **未实机验证**：Linux、macOS 仅有构建配置/脚本；Android 已完成 Qt 6 编译、签名与界面真机运行，图标/二维码修复待用户复测；Windows 为唯一完整实机验证的桌面平台。
-- **旧 Widgets 前端**：`src/desktop/` 为迁移期保留，默认不编译、不再新增功能。
+- **旧 Widgets 前端**：`src/legacy/widgets/` 为迁移期保留，默认不编译、不再新增功能。
 - 仓库不包含 `bin_qt5/` / `bin_qt6/` / `bin_android/`（运行库、OpenSSL DLL、签名 APK，全部本地构建产物）与 `reference/`（本地研究用的洛雪源码副本），所以 `src/docs/multi-platform-music-research.md` 中指向 `reference/...` 的路径在远端不可访问。
 
 ## 在线音源实测（2026-11-09）
@@ -278,22 +285,33 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 ├── build*/                            # 本机增量构建目录（不入库）
 ├── build_output/                      # FFmpeg 静态库等本机产物（不入库）
 ├── reference/                         # 本地研究用参考源码（不入库）
-└── src/                               # 工程根（全部源码、资源、构建入口）
+└── src/                               # 工程根（全部源码、资源、配置、构建入口）
     ├── CMakeLists.txt                 # 主构建（FuruiCore / FuruiMusic）
-    ├── cmake/FuruiFfmpeg.cmake        # Qt5 FFmpeg 自动编译 / ABI 分目录 / 探测
-    ├── cmake/FuruiOpenssl.cmake       # Qt5 Windows 的 OpenSSL 1.1 运行库部署
-    ├── FuruiMusic.pro                 # qmake 构建（桌面与 Qt5 Android）
+    ├── FuruiMusic.pro                 # qmake 构建（桌面与 Qt5 Android 兼容链路）
+    ├── version.json                   # 在线更新清单（唯一事实来源）
+    ├── cmake/                         # FuruiFfmpeg / FuruiOpenssl 等构建期模块
+    │   ├── FuruiFfmpeg.cmake          # Qt5 FFmpeg 自动编译 / ABI 分目录 / 探测
+    │   └── FuruiOpenssl.cmake         # Qt5 Windows 的 OpenSSL 1.1 运行库部署
     ├── config/sources.json            # 平台音源配置与契约（搜索/取链/登录/账号 API）
     ├── core/                          # C++ 后端：音源、聚合、账号、播放、曲库、在线音源宿主
     │   └── 3rd/                       # QuickJS、qrcodegen（源码内嵌）
-    ├── thirdparty/ffmpeg/FFmpeg-n6.1.2/  # 入库的 FFmpeg 源码（Qt5 播放后端）
-    ├── ui/                            # QML 前端、主题、平台适配、main.cpp
-    ├── desktop/                       # 迁移期 Widgets 旧前端（默认不构建）
-    ├── android/  android_qt6/         # Android 打包资源（manifest、res、OpenSSL）
-    ├── thirdparty/openssl1.1/         # Qt5 Windows 运行所需的 OpenSSL 1.1 DLL 与许可证
+    ├── ui/                            # 当前唯一前端：QML 页面、主题、平台适配、main.cpp
+    ├── platform/                      # 各平台打包资源，按 Qt 版本分目录
+    │   ├── android-qt5/               # qmake / Qt5 Android（manifest、gradle、res）
+    │   └── android-qt6/               # CMake / Qt6 Android（manifest、res、OpenSSL 3 .so）
+    ├── legacy/widgets/                # 已退役的 Widgets 旧前端（默认不构建）
+    ├── thirdparty/                    # 入库的第三方源码与运行库
+    │   ├── openssl1.1/                # Qt5 Windows 所需 OpenSSL 1.1 DLL 与许可证
+    │   └── ffmpeg/FFmpeg-n6.1.2/      # Qt5 播放后端用的 FFmpeg 源码
     ├── scripts/                       # 各平台构建脚本（含 build_ffmpeg_desktop.*）
     ├── tools/                         # 账号 API / 自定义音源示例服务
     └── docs/                          # 架构/迁移/研究文档与截图
+
+目录命名约定：`core/` 纯 C++ 后端、`ui/` 在用的 QML 前端、`config/` 声明式配置、
+`platform/` 只放平台打包资源、`legacy/` 只放已退役代码、`thirdparty/` 只放外部代码/运行库、
+`cmake/` `scripts/` `tools/` `docs/` 分别是构建模块、构建脚本、辅助工具与文档。
+`version.json` 与所有运行期需要的资源都收在 `src/` 内，仓库根的 `publish/version.json`
+只是给已发布老客户端用的兼容副本（CI 会校验两者一致）。
 ```
 
 ## CI / Release 工作流
@@ -311,21 +329,23 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 - 构建命令与上面的「构建」一节一致。Windows job 实际执行的是
   `cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++`，
   再 `cmake --build build --parallel`；Linux、macOS 只是把 `-G Ninja` 与编译器指定去掉（runner 默认生成器即可）。
-- Android 侧复用 `src/scripts/build_android.sh`（CMake + `FuruiMusic_make_apk`），CI 用 Qt 6.8.3 + NDK 26.1 覆盖脚本默认的 6.11.1 + NDK 27。Qt 6 的 CMake 流程只产出未签名 APK，签名身份由 CI 现场用 `keytool` 生成的公开 debug keystore 提供，不往仓库放二进制；`src/android_qt6/libs/arm64-v8a/` 的两个 OpenSSL 3 `.so` 已在 `.gitignore` 中加例外，保证 APK 里 HTTPS 可用。
+- Android 侧复用 `src/scripts/build_android.sh`（CMake + `FuruiMusic_make_apk`），CI 用 Qt 6.8.3 + NDK 26.1 覆盖脚本默认的 6.11.1 + NDK 27。Qt 6 的 CMake 流程只产出未签名 APK，签名身份由 CI 现场用 `keytool` 生成的公开 debug keystore 提供，不往仓库放二进制；`src/platform/android-qt6/libs/arm64-v8a/` 的两个 OpenSSL 3 `.so` 已在 `.gitignore` 中加例外，保证 APK 里 HTTPS 可用。
 - **Qt 在线仓库元数据适配（2026-11-12）**：Qt 6.8+ 的 Android kit 移到了 `all_os/android/` 且旧树清空、linux x86_64 架构 id 由 `gcc_64` 改名 `linux_gcc_64`、MinGW 13.1 工具拆到独立名 `tools_mingw1310`——aqtinstall 3.3.0（install-qt-action 默认）尚不支持，CI 三条腿首跑全挂在 Install Qt。修法：Android kit 改用 `src/scripts/install_qt_mirror.sh` 直读 `all_os/android` 的 Updates.xml 逐包下载（sha1 校验 + 7z 解包，bash 版参照 QtRemoteDesktop 的 install_qt_mirror.ps1），另两处改用新 id。
 - **Android job 尚未实机跑通**（本机无 Android CI 环境），建议先手动 `workflow_dispatch` 验证流水线再打 tag；`release` job 把 `build-android` 列为发布门槛，避免发布「只有桌面包、没有安装包」的半成品。
 - 未纳入 Release：Windows XP（Qt 5.7 加载不了 QML 2.15）、MSVC 组合（本工程未验证）、Inno Setup 安装包（仓库没有 `installer/` 脚本）。
 - 验证状态：Windows 的构建/部署命令、Android 的 CMake → APK → 签名链路均已在本机跑通；Linux、macOS、Android 三个 CI job 仍属按配置推断，需要实际推一次 tag 才能确认。
 - 工作流不会把构建日志推送到分支；失败时请查看 Actions 日志。
 
-## 在线更新（publish/version.json）
+## 在线更新（src/version.json）
 
-参照洛雪音乐的版本清单机制：仓库根目录的 [`publish/version.json`](publish/version.json) 是「最新版是什么、有什么更新、去哪下载」的唯一事实来源，应用（`src/core/UpdateChecker`）启动 5 秒后自动检查，设置页也可手动检查。
+参照洛雪音乐的版本清单机制：[`src/version.json`](src/version.json) 是「最新版是什么、有什么更新、去哪下载」的唯一事实来源，应用（`src/core/UpdateChecker`）启动 5 秒后自动检查，设置页也可手动检查。
 
-- **拉取镜像链**（依次容错）：`raw.githubusercontent.com` → `cdn.jsdelivr.net` → `fastly.jsdelivr.net` → `gcore.jsdelivr.net`，全部走 `https`。
-- **清单字段**：`version`（最新版本号，与 `src/core/Version.h` 的 `FURUI_APP_VERSION` 及 `src/CMakeLists.txt` 的 `project(... VERSION ...)` 三处同步）、`desc`（本次更新说明）、`history`（历史版本列表，弹层一并展示）、`downloads`（各平台下载直键，可选；缺省时按 CI 产物命名拼 `https://github.com/spygg/furuimusic/releases/download/v<version>/<产物名>`）。
+- **拉取镜像链**（依次容错）：先按 `src/version.json` 走 `raw.githubusercontent.com` → `cdn.jsdelivr.net` → `fastly.jsdelivr.net` → `gcore.jsdelivr.net`；四个全失败才回退同一组镜像的 `publish/version.json`。全部走 `https`。
+- **兼容副本**：`publish/version.json` 只服务于已经发出去、还硬编码旧路径的老客户端，不是发版时该改的文件；`.github/workflows/release.yml` 的 `manifest` job 用 `cmp` 校验两份清单逐字节一致，不一致直接卡住 Release。
+- **离线兜底**：`src/core/config.qrc` 把 `src/version.json` 编译进 `:/config/version.json`；8 个远端地址全失败时用本地清单如实回「已是最新版本」，而不是把断网误报成「无法获取更新信息」。
+- **清单字段**：`version`（最新版本号，与 `src/core/Version.h` 的 `FURUI_APP_VERSION` 及 `src/CMakeLists.txt` 的 `project(... VERSION ...)` 三处同步）、`desc`（本次更新说明）、`history`（历史版本列表，弹层一并展示）、`downloads`（各平台下载直链，可选；缺省时按 CI 产物命名拼 `https://github.com/spygg/furuimusic/releases/download/v<version>/<产物名>`）。
 - **下载与安装**：用户在弹层点「下载更新」后，`HttpClient::download` 流式写入本地并上报进度（0-100）；Android 存到 AppData（`files-path` 已被 Qt 的 FileProvider 覆盖），完成后经 `androidx FileProvider` + `ACTION_VIEW` 拉起系统安装器（AndroidManifest 已声明 `REQUEST_INSTALL_PACKAGES`）；桌面端下载到用户下载目录，完成后打开安装包所在文件夹（Windows 产物是 zip，解压覆盖安装）。
-- **发版流程**：改 `Version.h` + CMake `project(VERSION)` + `publish/version.json` → 推 tag（`v*`）→ CI 自动构建并发布 Release → 老版本应用即可收到更新提示。
+- **发版流程**：改 `Version.h` + CMake `project(VERSION)` + `src/version.json`（同步 `publish/version.json`）→ 推 tag（`v*`）→ CI 校验清单 → 自动构建并发布 Release → 老版本应用即可收到更新提示。
 
 ## 许可证
 

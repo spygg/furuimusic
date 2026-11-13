@@ -1190,7 +1190,7 @@ QString neeLoginError(const QString &code, const QString &serverMessage)
     else if (code == QLatin1String("501")) hint = QStringLiteral("账号不存在");
     else if (code == QLatin1String("509")) hint = QStringLiteral("密码错误次数超限，账号被临时锁定；请等 30~60 分钟，不要再连续重试");
     else if (code == QLatin1String("460")) hint = QStringLiteral("当前出口 IP 被判异常（机房/海外）；可在设置里填一个国内住宅 IP，或更换网络后重试");
-    else if (code == QLatin1String("8821")) hint = QStringLiteral("服务端要求行为验证码：第三方客户端登录被账号级风控拦截");
+    else if (code == QLatin1String("8821")) hint = QStringLiteral("网易云要求行为验证码：第三方客户端的密码/扫码登录被账号级风控拦截，请在浏览器登录官网后导入 Cookie（应用内无法完成滑块验证）");
     else if (code == QLatin1String("8816")) hint = QStringLiteral("账号存在风险，需先在手机客户端登录一次解除二次验证");
     else if (code == QLatin1String("8822")) hint = QStringLiteral("登录凭据被拒绝");
     else if (code == QLatin1String("8000")) hint = QStringLiteral("请求过于频繁，请稍后再试");
@@ -1200,9 +1200,9 @@ QString neeLoginError(const QString &code, const QString &serverMessage)
     QString out = QStringLiteral("登录失败（%1）：%2").arg(code, hint);
     if (!serverMessage.isEmpty() && serverMessage != hint)
         out += QStringLiteral(" ｜ 服务端：") + serverMessage;
-    if (code == QLatin1String("460") || code == QLatin1String("8821")
-        || code == QLatin1String("8816") || code == QLatin1String("8000"))
-        out += QStringLiteral("。建议改用二维码或密码方式重试");
+    if (code == QLatin1String("460") || code == QLatin1String("8816")
+        || code == QLatin1String("8000"))
+        out += QStringLiteral("。建议改用二维码或稍后重试");
     return out;
 }
 
@@ -1790,6 +1790,77 @@ void AuthManager::loginByPassword(const QString &sourceId, const QString &accoun
         };
         (*send)(endpoint);
     });
+}
+
+// ---- 浏览器登录态导入 ---------------------------------------------------
+// 2026-11 用真实账号实测：网易云对第三方客户端的 weapi 密码登录一律回 8821
+// 「需要行为验证码验证」，换端点/UA/Cookie/加密都绕不过（浏览器里能完成滑块验证，
+// 应用内没有 WebEngine 就做不了）。所以给一条确定能走的退路：用户在本机浏览器
+// 登录官网后，把 Cookie（至少含 MUSIC_U）粘回来，由应用保存登录态并同步歌单。
+void AuthManager::loginByCookie(const QString &sourceId, const QString &rawCookie)
+{
+    // 浏览器开发者工具既能「Copy value」也能「Copy as cURL / 复制整行」，
+    // 后者会带 "Cookie: " 前缀；不剥掉的话 onlyCookiePairs 会因为键名含空格
+    // 把第一对（往往正是 MUSIC_U）丢掉。
+    QString raw = rawCookie.trimmed();
+    if (raw.startsWith(QLatin1String("Cookie:"), Qt::CaseInsensitive))
+        raw = raw.mid(7).trimmed();
+    QString cookie = onlyCookiePairs(raw);
+    if (cookie.isEmpty()) {
+        const QString msg = QStringLiteral("Cookie 不能为空：请从浏览器开发者工具复制完整 Cookie");
+        emit loginStateChanged(sourceId, false, msg);
+        emit toast(msg);
+        return;
+    }
+    if (sourceId == QLatin1String("netease")
+        && cookieValue(cookie, {QStringLiteral("MUSIC_U")}).isEmpty()) {
+        const QString msg = QStringLiteral("Cookie 里没有 MUSIC_U，这不是登录后的 Cookie；"
+                                           "请在官网登录成功后再复制");
+        emit loginStateChanged(sourceId, false, msg);
+        emit toast(msg);
+        return;
+    }
+
+    // 浏览器 Cookie 里通常自带 __csrf；从 document.cookie 复制时可能被 HttpOnly 挡掉。
+    // 后续 weapi 请求要用它做 csrf_token 双提交，缺了会静默失败，这里补一个稳定的本地令牌。
+    if (sourceId == QLatin1String("netease")
+        && cookieValue(cookie, {QStringLiteral("__csrf")}).isEmpty()) {
+        cookie += QStringLiteral("; __csrf=") + neteaseCsrfToken();
+    }
+
+    // 保存登录态不依赖资料接口：即使 /account/get 被风控挡了，Cookie 仍然是有效的，
+    // 先落盘、再异步补昵称/头像，避免用户白等一次请求。
+    auto commit = [this, sourceId, cookie](const QString &uid, const QString &nick,
+                                           const QString &avatar) {
+        saveSession(sourceId, cookie, uid, nick, avatar,
+                    nick.isEmpty() ? QStringLiteral("浏览器登录态已导入")
+                                   : QStringLiteral("浏览器登录成功：") + nick);
+        syncUserLibrary(sourceId);
+    };
+
+    if (sourceId != QLatin1String("netease")) {
+        commit(QString(), QString(), QString());
+        return;
+    }
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("csrf_token"),
+                   cookieValue(cookie, {QStringLiteral("__csrf")}));
+    weapiPost(QStringLiteral("/weapi/w/nuser/account/get"), payload, cookie,
+        [this, sourceId, cookie, commit](const HttpClient::Reply &r) {
+            QString uid, nick, avatar;
+            if (r.ok) {
+                const QJsonValue root = Json::rootOf(r.json);
+                const QJsonValue profile = root.toObject().value(QStringLiteral("profile"));
+                uid = Json::firstString(profile, {QStringLiteral("userId"), QStringLiteral("id")});
+                nick = Json::firstString(profile, {QStringLiteral("nickname")});
+                avatar = Json::firstString(profile, {QStringLiteral("avatarUrl")});
+                if (uid.isEmpty()) uid = Json::firstString(root, {QStringLiteral("userId"),
+                                                                  QStringLiteral("id")});
+                if (nick.isEmpty()) nick = Json::firstString(root, {QStringLiteral("nickname")});
+            }
+            commit(uid, nick, avatar);
+        });
 }
 
 // ---- 咪咕：passport.migu.cn 的网页端同款密码登录 ----

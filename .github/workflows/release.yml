@@ -17,6 +17,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 版本清单唯一事实来源是 src/version.json；publish/version.json 只是给已发布老客户端
+  # 用的兼容副本（UpdateChecker 会先拉 src、失败才回退 publish）。两者必须逐字节一致，
+  # 否则发版后新旧客户端会看到不同的「最新版本」。
+  manifest:
+    name: Verify version manifest
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Compare src/version.json with publish/version.json
+        run: |
+          test -f src/version.json || { echo "missing src/version.json"; exit 1; }
+          test -f publish/version.json || { echo "missing publish/version.json compatibility copy"; exit 1; }
+          cmp -s src/version.json publish/version.json || {
+            echo "::error::publish/version.json is out of sync with src/version.json";
+            diff -u publish/version.json src/version.json || true;
+            exit 1;
+          }
+          echo "version manifest in sync"
+
   build:
     name: ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
@@ -347,14 +367,15 @@ jobs:
   # 由这一个 job 一次性上传（参考 .github参考/workflows/release.yml 的 release 结构）。
   release:
     name: Publish release
-    needs: [build, build-android]
+    needs: [build, build-android, manifest]
     # always() + !cancelled() 让矩阵跑完再判定；Android 是发布门槛——
     # 否则 release 页面会出现「有桌面包却没有安装包」的半成品。
     if: >-
       always() && !cancelled() &&
       startsWith(github.ref, 'refs/tags/') &&
       needs.build.result == 'success' &&
-      needs['build-android'].result == 'success'
+      needs['build-android'].result == 'success' &&
+      needs.manifest.result == 'success'
     runs-on: ubuntu-22.04
     steps:
       - name: Download artifacts

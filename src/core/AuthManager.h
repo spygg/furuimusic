@@ -29,6 +29,9 @@ public:
     // captcha：酷我等需要图形验证码的平台才用得上，其它平台传空即可
     void loginByPassword(const QString &sourceId, const QString &account, const QString &password,
                          const QString &captcha = QString());
+    // 浏览器登录态导入：网易云的密码/扫码被 8821 行为验证码风控挡住时，
+    // 用户在浏览器里完成验证后把 Cookie（含 MUSIC_U）粘回来即可登录。
+    void loginByCookie(const QString &sourceId, const QString &cookie);
     void sendPhoneCode(const QString &sourceId, const QString &phone, const QString &captcha = QString());
     void loginByPhone(const QString &sourceId, const QString &phone, const QString &code);
     // 酷我：图形验证码（wapi.kuwo.cn 门户同款 /api/common/captcha/getcode）

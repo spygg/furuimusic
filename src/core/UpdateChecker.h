@@ -1,12 +1,13 @@
 #pragma once
-// 福瑞音乐 - 在线检测更新（参照洛雪音乐 publish/version.json 机制）
+// 福瑞音乐 - 在线检测更新（参照洛雪音乐 version.json 机制）
 // 流程：
-//   1) 从多个镜像依次拉取仓库根目录 publish/version.json（GitHub raw -> jsDelivr CDN）；
+//   1) 从多个镜像依次拉取 src/version.json（失败才回退 publish/version.json 兼容副本）；
 //   2) 与本地版本号比较，有新版本时通知 QML（设置页弹层 + 全局 Toast）；
 //   3) 用户同意后从 GitHub Releases 直接下载当前平台的安装包
 //      （Windows: FuruiMusic-windows-x64.zip / Android: FuruiMusic-android-arm64-v8a.apk），
 //      不跳转外部网页；
 //   4) 下载完成后 Android 拉起系统安装器（FileProvider），桌面打开安装包所在文件夹。
+#include <QJsonObject>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -61,6 +62,7 @@ signals:
 
 private:
     void fetchMirror(int index);
+    bool applyManifest(const QJsonObject &obj);
     QString downloadUrlFor(const QString &version) const;
     QString targetPath() const;
 

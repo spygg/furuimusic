@@ -2,6 +2,20 @@
 
 > 目标：把「桌面 Qt Widgets + Android Qt Quick」两套界面收敛为一套 QML 界面，后端统一使用现有 `src/core` 的 Qt C++；最终支持 Windows / macOS / Linux / Android。
 > 本文只描述与架构改造直接相关的内容，不改动业务逻辑。
+>
+> **⚠️ 本文是 2026-11-07 的历史方案与验收记录，正文里的目录名是迁移前的旧布局。**
+> 2026-11-13 已按「按职责分层」重新划分 `src/`，当前路径对照：
+>
+> | 本文旧路径 | 当前路径 |
+> | --- | --- |
+> | `src/desktop/*` | `src/legacy/widgets/*`（已退役的 Qt Widgets 前端） |
+> | `src/mobile/qml/*` | `src/ui/qml/*` |
+> | `src/android/*` | `src/platform/android-qt5/*` |
+> | `src/android_qt6/*` | `src/platform/android-qt6/*` |
+> | `src/packaging/windows/openssl/*` | `src/thirdparty/openssl1.1/*` |
+> | `publish/version.json` | `src/version.json`（`publish/` 只留兼容副本） |
+>
+> 现行目录约定见 `README.md` 的「目录结构」一节；本文件的阶段划分、验证结论仍保留作历史依据。
 
 ## 一、现状勘察
 
