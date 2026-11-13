@@ -75,6 +75,33 @@ static QString cacheSuffixFor(const QUrl &url)
     return known.contains(suffix) ? suffix : QStringLiteral("mp3");
 }
 
+// 缓存内容校验：防盗链过期时 CDN 常回 200 + HTML/JSON 错误页，仅凭 size>0
+// 无法区分，会把错误页当音频永久缓存（清缓存前这首歌都播不出来）。
+// 策略：识别常见音频魔数；命中已知「坏内容」特征直接拒绝；其余 exotic
+// 格式按疑似音频放行，避免误杀。
+static bool cacheFileLooksLikeAudio(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    const QByteArray head = f.read(16);
+    f.close();
+    if (head.size() < 4) return false;
+    const unsigned char b0 = static_cast<unsigned char>(head.at(0));
+    const unsigned char b1 = static_cast<unsigned char>(head.at(1));
+    if (head.startsWith("ID3")) return true;                       // MP3 (ID3v2)
+    if (b0 == 0xFF && (b1 & 0xE0) == 0xE0) return true;            // MP3/AAC 帧同步 (ADTS/ADIF 前导)
+    if (head.startsWith("fLaC") || head.startsWith("OggS") ||
+        head.startsWith("RIFF") || head.startsWith("MAC "))        // FLAC / OGG / WAV / APE
+        return true;
+    if (head.mid(4, 4) == "ftyp") return true;                     // MP4 / M4A
+    // 明确的坏内容：HTML 错误页 / JSON 报错 / 文本 403 页
+    if (head.startsWith("<") || head.startsWith("{") ||
+        head.startsWith("%PDF") || head.startsWith("GIF8") ||
+        head.startsWith("\x89PNG"))
+        return false;
+    return true;
+}
+
 PlayerController *PlayerController::instance()
 {
     static PlayerController *p = new PlayerController();
@@ -221,8 +248,12 @@ void PlayerController::fetchWithHeaders()
         for (int i = 20; i < cached.size(); ++i)
             QFile::remove(cached.at(i).absoluteFilePath());
     }
+    // 缓存键必须覆盖完整 URL（scheme+host+path+query）。防盗链直链普遍形如
+    // https://host/stream?id=xxx&vkey=yyy —— 只取 path 的话所有歌曲同键，
+    // 会命中同一个缓存文件，表现为「点 A 播放 B」。
     const QString key = QString::fromLatin1(
-        QCryptographicHash::hash(url.path().toUtf8(), QCryptographicHash::Sha1).toHex());
+        QCryptographicHash::hash(url.toString(QUrl::FullyEncoded).toUtf8(),
+                                 QCryptographicHash::Sha1).toHex());
     const QString path = dir + QLatin1Char('/') + key + QLatin1Char('.') + cacheSuffixFor(url);
 
     auto startLocal = [this](const QString &p) {
@@ -236,8 +267,12 @@ void PlayerController::fetchWithHeaders()
     };
 
     if (QFileInfo(path).size() > 0) {
-        startLocal(path);
-        return;
+        if (cacheFileLooksLikeAudio(path)) {
+            startLocal(path);
+            return;
+        }
+        // 历史遗留的坏缓存（如防盗链过期时的 200+HTML 错误页）删掉重下
+        QFile::remove(path);
     }
 
     HttpClient::instance()->download(url, m_headers, path,
@@ -245,6 +280,13 @@ void PlayerController::fetchWithHeaders()
             if (gen != m_playGen) return;          // 期间已经切歌
             if (!ok) {
                 emit errorOccurred(QStringLiteral("播放失败：%1").arg(error));
+                return;
+            }
+            // 防盗链过期时 CDN 常回 200 + HTML/JSON 错误页，size>0 但不是音频。
+            // 不校验就会把错误页永久缓存，这首歌在清理缓存前永远播不出来。
+            if (!cacheFileLooksLikeAudio(path)) {
+                QFile::remove(path);
+                emit errorOccurred(QStringLiteral("播放失败：取流被拒绝（链接已失效）"));
                 return;
             }
             startLocal(path);

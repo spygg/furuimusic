@@ -131,8 +131,11 @@ void ThemeManager::setViewport(qreal width, qreal height, bool adaptive)
 void ThemeManager::refreshSystemDark()
 {
     const bool dark = detectSystemDark();
+    // 注意：赋值必须放在 return 之前。之前写成 `return; m_systemDark = dark;`，
+    // 赋值成了死代码——跟随系统模式只在启动时生效，运行中切系统深色永不更新。
     if (dark == m_systemDark)
-        return;    m_systemDark = dark;
+        return;
+    m_systemDark = dark;
     emit systemDarkChanged();
     if (m_mode == QLatin1String("system"))
         emit paletteChanged();

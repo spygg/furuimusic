@@ -28,9 +28,12 @@ Item {
         Qt.inputMethod.hide()
         const af = root.Window.window ? root.Window.window.activeFocusItem : null
         if (af) af.focus = false
-        if (pageIndex !== 1) {
+        // 4 是 MV 全屏覆盖层：它有自己的 mvReturnPage 记录来源页。
+        // 把它记进 lastContentPage 会造成死循环——看过 MV 后从播放页按返回，
+        // 会回到 4（黑屏 MV 覆盖层，媒体已关），再返回又回播放页，无限弹跳。
+        if (pageIndex !== 1 && pageIndex !== 4) {
             lastContentPage = pageIndex
-        } else {
+        } else if (pageIndex === 1) {
             // 进页动画由外壳显式触发：StackLayout 会反复切换子项 visible，
             // 页面自己监听 visibleChanged 会把动画一直重启在起始帧
             playerPage.playEntrance()
