@@ -1,7 +1,11 @@
 {
-  "version": "1.4.3",
-  "desc": "修复\n- Windows 桌面 Qt5 与 Qt6 构建共用同一份配置文件时，播放队列与播放栏的歌曲信息逐会话叠加乱码（Qt5 的 QSettings 按拉丁编码读取 Qt6 写入的裸 UTF-8），启动时自动修复已损坏的续播队列\n\n其他\n- breakpad 源码入库：自此版本的 CI 构建产物起带崩溃转储能力（v1.4.2 及更早的产物无 minidump）",
+  "version": "1.4.4",
+  "desc": "修复\n- Windows 一键构建脚本（build_windows.bat / build_android.bat / build_android_qt6.bat）因 UTF-8 中文注释被 cmd 按系统 GBK 解析，中文串被当成命令执行导致打包失败；已全部改为 ASCII 注释\n- Android 构建（CI 与本地）因 Breakpad 接入宏内的 return() 在 CMakeLists 顶层提前结束，导致 FuruiMusic_make_apk 目标缺失、无法生成 APK；已将宏改为函数并回传 FURUI_HAVE_BREAKPAD\n- CI 桌面构建因 install-qt-action 内置旧版 aqtinstall 无法解析 Qt 6.8.3 的 qtwebview 模块而 Install Qt 失败；改为先装 qtmultimedia 再单独追加 qtwebview",
   "history": [
+    {
+      "version": "1.4.3",
+      "desc": "修复\n- Windows 桌面 Qt5 与 Qt6 构建共用同一份配置文件时，播放队列与播放栏的歌曲信息逐会话叠加乱码（Qt5 的 QSettings 按拉丁编码读取 Qt6 写入的裸 UTF-8），启动时自动修复已损坏的续播队列\n\n其他\n- breakpad 源码入库：自此版本的 CI 构建产物起带崩溃转储能力（v1.4.2 及更早的产物无 minidump）"
+    },
     {
       "version": "1.4.2",
       "desc": "修复\n- 扫码登录出码失败（如二维码内容过长）后，旧二维码图片未清除，登录流程误判为出码成功"
@@ -28,9 +32,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.3/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.3/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.3/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.3/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.4/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.4/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.4/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.4/FuruiMusic-android-arm64-v8a.apk"
   }
 }
