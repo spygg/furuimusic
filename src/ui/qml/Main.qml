@@ -223,6 +223,14 @@ ApplicationWindow {
         }
     }
 
+    // 内置浏览器（应用内 WebView）：用字符串 source 条件加载，Qt 5 兼容构建
+    // 没有 QtWebView 模块时根本不解析这个文件，不会把整个 Main.qml 拖垮。
+    Loader {
+        anchors.fill: parent
+        z: 9000
+        source: browser.available ? "qrc:/qml/BrowserWindow.qml" : ""
+    }
+
     // 全局轻提示：所有页面通过 app 信号统一在这里展示。
     // 挂在窗口层而不是 Overlay.overlay，跨 Qt5/Qt6 行为一致；
     // z 高于窗口拉伸热区，但隐藏时 visible=false 不拦截点击。

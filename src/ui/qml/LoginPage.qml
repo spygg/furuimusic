@@ -944,8 +944,8 @@ Item {
                         }
 
                         // 网易云的 8821 是账号级风控：服务端要求行为验证码（滑块），
-                        // 本工程没链 WebEngine，应用内做不了这一步；但浏览器里能正常登录。
-                        // 所以给一条确定可用的退路：官网登录 → 复制 Cookie → 粘回来。
+                        // 纯 HTTP 客户端做不了这一步。现在用应用内 WebView 打开官网，
+                        // 登录态由平台原生 CookieManager 读回来；外部浏览器手动粘贴作兜底。
                         ColumnLayout {
                             Layout.fillWidth: true
                             visible: root.selectedSource === "netease"
@@ -958,7 +958,7 @@ Item {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: "密码登录提示「行为验证码 / 8821」时，请用浏览器登录"
+                                text: "密码登录提示「行为验证码 / 8821」时，请在内置浏览器里登录"
                                 color: cText
                                 font.pixelSize: 12
                                 font.bold: true
@@ -967,9 +967,10 @@ Item {
                             Text {
                                 Layout.fillWidth: true
                                 text: "这是网易云对第三方客户端的账号级风控，换协议或重试都绕不过。"
-                                      + "在官网登录成功后，按 F12 → Network → 任一请求的 Request Headers，"
-                                      + "复制整行 Cookie 或它的值（必须含 MUSIC_U=…）粘到下面即可。"
-                                      + "带不带「Cookie: 」前缀都能识别。"
+                                      + "点左侧按钮在应用内打开官网完成登录（滑块/短信都能过），"
+                                      + "检测到登录态会自动导入并同步歌单。"
+                                      + "若内置浏览器不可用，也可在外部浏览器登录后按 F12 → Network "
+                                      + "复制整行 Cookie（必须含 MUSIC_U=…）粘到下面，带不带「Cookie: 」前缀都能识别。"
                                 color: cSub
                                 font.pixelSize: theme.fontXs
                                 lineHeight: 1.4
@@ -985,14 +986,16 @@ Item {
                                     color: Qt.rgba(cPrimary.r, cPrimary.g, cPrimary.b, 0.10)
                                     Text {
                                         anchors.centerIn: parent
-                                        text: "打开官网登录"
+                                        text: browser.available ? "应用内登录" : "打开官网登录"
                                         color: cPrimary
                                         font.pixelSize: 12
                                     }
                                     MouseArea {
                                         anchors.fill: parent
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: app.openExternal("https://music.163.com/")
+                                        onClicked: browser.available
+                                                   ? browser.open("https://music.163.com/", "login:netease")
+                                                   : app.openExternal("https://music.163.com/")
                                     }
                                 }
                                 TextField {

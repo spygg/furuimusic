@@ -17,6 +17,7 @@
 
 #include "../core/AppController.h"
 #include "../core/AuthManager.h"
+#include "../core/BrowserController.h"
 #include "../core/HttpClient.h"
 #include "../core/Logger.h"
 #include "../core/Settings.h"
@@ -25,6 +26,9 @@
 #include "GlyphImageProvider.h"
 #include "PlatformAdapter.h"
 #include "ThemeManager.h"
+#ifdef FURUI_HAVE_WEBVIEW
+#include <QtWebView/qtwebviewfunctions.h>
+#endif
 #ifdef FURUI_HAVE_FFMPEG
 #include "FfmpegVideoPlayer.h"
 #endif
@@ -38,6 +42,15 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("福瑞音乐"));
     QGuiApplication::setOrganizationName(QStringLiteral("Furui"));
+
+#ifdef FURUI_HAVE_WEBVIEW
+    // 自编译 / 随包部署的 QtWebView 后端放在 <exe>/plugins/webview/，
+    // 开发期 Qt 的默认插件路径还指向 Qt 安装目录，必须显式补一条。
+    QCoreApplication::addLibraryPath(QCoreApplication::applicationDirPath()
+                                     + QStringLiteral("/plugins"));
+    // 必须在 QGuiApplication 之后、QML WebView 创建之前；Android 上会初始化系统 WebView。
+    QtWebView::initialize();
+#endif
 
     // 代理策略必须在 QML 引擎创建前确定：QML 的 Image / 音频走 Qt 默认的
     // QNetworkAccessManager，只认应用级代理。这里与 HttpClient 保持完全一致，
@@ -87,6 +100,9 @@ int main(int argc, char *argv[])
                                              Furui::AppController::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("platform"), &platform);
     engine.rootContext()->setContextProperty(QStringLiteral("theme"), &theme);
+    // 内置浏览器：QML 侧统一的 WebView 外壳 + 平台原生 Cookie 读取
+    engine.rootContext()->setContextProperty(QStringLiteral("browser"),
+                                             Furui::BrowserController::instance());
     // 在线检测更新：设置页检查/下载/安装，QML 经 updater 属性访问
     engine.rootContext()->setContextProperty(QStringLiteral("updater"),
                                              Furui::UpdateChecker::instance());
@@ -99,6 +115,19 @@ int main(int argc, char *argv[])
         });
     }
     engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
+
+#ifdef FURUI_HAVE_WEBVIEW
+    // FURUI_BROWSER_URL=<url> [FURUI_BROWSER_MODE=browse|login:netease]：
+    // 无人值守验证内置浏览器（配 FURUI_CAPTURE_MS 等网页加载完再抓图）。
+    const QString browserUrl = qEnvironmentVariable("FURUI_BROWSER_URL");
+    if (!browserUrl.isEmpty()) {
+        const QString browserMode = qEnvironmentVariable("FURUI_BROWSER_MODE");
+        QTimer::singleShot(500, &app, [browserUrl, browserMode] {
+            Furui::BrowserController::instance()->open(
+                    browserUrl, browserMode.isEmpty() ? QStringLiteral("browse") : browserMode);
+        });
+    }
+#endif
 
     if (engine.rootObjects().isEmpty())
         return -1;

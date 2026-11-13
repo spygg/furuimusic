@@ -37,6 +37,15 @@ rem 等 FFmpeg 运行库（MV 解码就靠它们），不再需要手工拷 Open
 windeployqt --no-translations --qmldir "%SRC%\ui\qml" "%ROOT%\bin_qt6\FuruiMusic.exe" || goto :fail
 echo [deploy] Qt 6 QML + multimedia (FFmpeg) plugins deployed into bin_qt6
 
+rem MinGW 版 Qt 不带 QtWebView 后端插件；CMake POST_BUILD 已把它和 WebView2Loader.dll
+rem 放进 build\desktop-qt6，随 exe 一起拷到分发目录，内置浏览器才可用。
+if exist "%ROOT%\build\desktop-qt6\plugins\webview\qtwebview_webview2.dll" (
+    if not exist "%ROOT%\bin_qt6\plugins\webview" mkdir "%ROOT%\bin_qt6\plugins\webview"
+    copy /y "%ROOT%\build\desktop-qt6\plugins\webview\qtwebview_webview2.dll" "%ROOT%\bin_qt6\plugins\webview\" >nul || goto :fail
+    copy /y "%ROOT%\build\desktop-qt6\WebView2Loader.dll" "%ROOT%\bin_qt6\" >nul || goto :fail
+    echo [deploy] QtWebView WebView2 backend + loader deployed into bin_qt6
+)
+
 rem ---------- 可选：Qt 5.15 兼容构建（自编译 FFmpeg 播放后端）----------
 if not "%FURUI_BUILD_QT5%"=="1" goto :skip_qt5
 set "FURUI_MINGW_BIN=%MINGW5_DIR%\bin"

@@ -45,6 +45,7 @@ CORE_HEADERS += \
     core/AuthManager.h \
     core/PlayerController.h \
     core/AppController.h \
+    core/BrowserController.h \
     core/OpenApiServer.h \
     core/OpenApiWeb.h \
     core/Logger.h \
@@ -77,6 +78,7 @@ CORE_SOURCES += \
     core/AuthManager.cpp \
     core/PlayerController.cpp \
     core/AppController.cpp \
+    core/BrowserController.cpp \
     core/OpenApiServer.cpp \
     core/Logger.cpp \
     core/Aes128.cpp \

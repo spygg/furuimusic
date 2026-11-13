@@ -18,6 +18,7 @@
 |---|---|
 | 多平台音源聚合 | 网易云、QQ、酷狗、酷我、咪咕、汽水音乐；支持歌曲/歌单/专辑/歌手搜索、榜单、歌单详情、歌词 |
 | 登录与歌单同步 | 网易云（密码 / 扫码）、QQ（扫码）、酷狗（扫码）、咪咕（扫码 / 密码）、酷我（帐号密码 / 手机短信 / 微信扫码）为内置直连；汽水需配置自建账号 API 服务后登录并同步歌单 |
+| 内置浏览器 | 设置页「内置浏览器」或账号页「应用内登录」打开应用内 `QML WebView`，地址栏可访问任意网页；网易云 8821 风控在内置浏览器里完成滑块后自动读取登录态并同步歌单（无需手贴 Cookie）。桌面用 MinGW 自编译的 WebView2 后端，Android 用系统 WebView，Qt 5 兼容构建自动隐藏该入口 |
 | 跨源替代播放 | 内置源取链失败时，自动尝试自定义音源与在线音源，并在界面标注“替代播放” |
 | 自定义音源 | 可添加 HTTP 音源（自定义搜索/取链契约）与本地音乐目录 |
 | 在线 JS 音源 | 支持导入洛雪（LX Music）风格的在线脚本 URL；内嵌 QuickJS 2024-01-13 执行，脚本能力、版本、检查状态、失败原因分类（syntax/runtime/timeout/network/tls/http/empty）全部可查；支持启用/禁用/更新/删除与持久化 |
@@ -73,6 +74,7 @@ MV 按 AlgerMusicPlayer 的 `MvPlayer.vue` + `views/mv/index.vue` 组织：
 - **Qt 6 视频解码不需要单独编译 FFmpeg**：QtMultimedia 自带官方后端（Windows 为 `ffmpegmediaplugin.dll` + `avcodec-61.dll` 等，Android 为 `libavcodec.so` 等），`windeployqt` / `androiddeployqt` 会随包部署。**Qt 5 桌面**要走「自编译 FFmpeg 后端」小节，产物静态链接进 exe，运行时不额外带 DLL。两种构建共用 `src/thirdparty/ffmpeg/FFmpeg-n6.1.2` 源码（仅 Qt5 用），互不干扰；这份 FFmpeg n6.1.2 源码已随仓库入库（约 8.2k 文件 / 93 MB），clone 后 CMake 就能直接自动编译，不必另外下载。仓库只收录播放链路用的 n6.1.2，QtRemoteDesktop 编码链遗留的 n3.4.8 / oneVPL / nv-codec-headers / amf-sdk / install 由 `.gitignore` 排除。
 - FFmpeg 播放后端编译需要 Git Bash（Windows 提供 `sh`/`nasm`）、对应 Qt 的 MinGW 或系统 gcc/clang；Windows 用系统 SChannel、macOS 用 SecureTransport 提供 TLS，Linux 需要 OpenSSL 开发包（`libssl-dev`），都不需要额外运行时库。
 - Qt 6 Windows 用 Schannel / 自带的 OpenSSL 3，无需再手工塞 OpenSSL 1.1 DLL；`src/thirdparty/openssl1.1/` 里的 OpenSSL 1.1 运行库只给 Qt 5 兼容构建用，由 `src/cmake/FuruiOpenssl.cmake`（CMake）或 `FuruiMusic.pro` 的 win32 段（qmake）自动拷到 exe 旁，不用手工处理。
+- **内置浏览器（Qt 6）**：Windows MinGW 版 Qt 不带 QtWebView 的 WebView2 后端，也不支持 QtWebEngine，因此工程保持 MinGW 工具链、自行编译同一个后端插件（`src/cmake/FuruiWebView2.cmake`）；所需 WebView2 SDK 头与 191 KB `WebView2Loader.dll` 已入库 `src/thirdparty/webview2/`，终端只需 Edge WebView2 Runtime（Win11 自带）。Android 用 Qt 自带系统 WebView 后端，`androiddeployqt` 自动打包 jar/so。Qt 5 兼容构建没有 QtWebView 模块，入口自动隐藏、退回外部浏览器 + 手动粘贴 Cookie。
 
 ## 构建
 
@@ -182,7 +184,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
   契约见 `src/config/sources.json` 的 `userApiContract`；然后在设置页把“账号 API 服务”地址填为对应地址（支持按平台分别填写）。
 - **自定义音源**：参考 `src/config/sources.json` 的 `customSourceContract`；示例服务 `python src/tools/custom_source_server.py`。
 - **在线 JS 音源**：设置页 → 在线音源 → 粘贴 `.js` 的 HTTPS 直链导入；导入只代表“保存并执行成功”，是否真的能取链要看“检查”结果。脚本执行过程中拿不到账号 Cookie，宿主只提供 `lx.request`/`lx.utils` 等能力。
-- **应用内登录（无浏览器、无 Cookie）**：登录全部在应用内完成，不再打开浏览器、也不再粘贴 Cookie。
+- **应用内登录（内置直连为主，内置浏览器兜底）**：常规登录纯 HTTP 完成，不需要外部浏览器；只有服务端要求行为验证码时才用应用内 WebView 过验证。
   - 网易云：**密码优先**（手机号 / 邮箱 + 密码），扫码为备选。实现逐参数对齐
     [AlgerMusicPlayer](https://github.com/algerkong/AlgerMusicPlayer) 内置的
     `netease-cloud-music-api-alger`（NeteaseCloudMusicApi 的 fork）：
@@ -198,13 +200,21 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
       `type=3`（不是旧文档里的 1）；eapi 不通时整条链路退回明文 `/api`。二维码内容只有
       `https://music.163.com/login?codekey=<unikey>`，不自造 chainId
     - **8821 行为验证码（实测结论，2026-11-13）**：用真实账号分别测邮箱与手机号密码登录，两者都返回 `8821 需要行为验证码`；这不是密码错、不是
-      weapi 加密或网络问题，而是网易云对第三方客户端的**账号级风控**。浏览器能登录是因为
-      它能完成滑块，MinGW 版 Qt 没有 WebEngine，应用内无法完成这一步，重试只会加重风控。
-      因此密码/扫码卡片底部提供**浏览器登录态导入**：「打开官网登录」→ F12 复制含
-      `MUSIC_U` 的 Cookie → 粘贴 → `AuthManager::loginByCookie()` 校验并落盘，再
-      `/weapi/w/nuser/account/get` 补昵称头像并 `syncUserLibrary()`。Cookie 允许带
-      `Cookie: ` 前缀，缺 `__csrf` 时自动补本地稳定令牌
-    - 若仍被 `8821` 拒绝，界面会说明原因并引导到上面的导入入口，不必反复重试
+      weapi 加密或网络问题，而是网易云对第三方客户端的**账号级风控**。滑块只能在真实浏览器环境里完成，
+      纯 HTTP 客户端重试只会加重风控。现在账号页点「应用内登录」会打开内置 `QML WebView`
+      加载官网，用户登录完成后自动导入并同步歌单：
+      - Windows：Qt 6.11.1 的官方 MinGW 二进制把 QtWebView 五个后端全关了，本工程用 MinGW
+        自编译 `Src/qtwebview/src/plugins/windows`（源码在 `src/platform/windows/webview2-plugin/`），
+        随包部署 `qtwebview_webview2.dll` + `WebView2Loader.dll`；插件把
+        `ICoreWebView2CookieManager` 以纯 C 接口 `furui_webview2_cookies()` 导出，主程序
+        `BrowserController` 用 `QLibrary::resolve` 读回**含 HttpOnly** 的完整 Cookie。
+      - Android：Qt 自带的 `android WebView` 后端，`BrowserController` 用 `QJniObject` 调
+        `android.webkit.CookieManager.getCookie()` 读同一份 Cookie。
+      - `MUSIC_U` 是 HttpOnly，`document.cookie` 拿不到，所以必须走上面两个原生
+        Cookie 存储；登录态回灌仍复用 `AuthManager::loginByCookie()`（校验 `MUSIC_U`、
+        剥 `Cookie: ` 前缀、缺 `__csrf` 补本地稳定令牌），再取昵称头像并 `syncUserLibrary()`。
+      - 手动粘贴 Cookie 的入口保留作兜底（Qt 5 兼容构建没有 QtWebView 模块，只能走这条）。
+    - 若仍被 `8821` 拒绝，界面会说明原因并引导到内置浏览器，不必反复重试
   - QQ 音乐、酷狗：原生扫码
   - 咪咕：扫码 / 手机号·邮箱·用户名 + 密码。扫码与官方门户同一套接口
     （`GET /api/qrcWeb/qrcLogin?sourceid=208003` 出码 → `GET /api/qrcWeb/qrcquery?qrc_sessionid=…`
@@ -230,7 +240,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
       请求 `i.kuwo.cn/US/platform/WeixinCallback.jsp` 收 Cookie
     - 三条接口都要求 **JSON 请求体**（form 提交直接 415）；`www.kuwo.cn/api/www` 那条老路对
       非浏览器指纹一律回 `The request is illegal!`，不要再走
-    - QQ / 微博登录的回调是 HTML 弹窗，需要内嵌浏览器，本工程未链 WebEngine，故未内置
+    - QQ / 微博登录的回调是 HTML 弹窗，需要浏览器环境；现在可在「设置 → 内置浏览器」里走网页登录
   - 汽水音乐：登录现已内置官方 `passport/web` 出码链路（`GET /passport/web/get_qrcode → POST /passport/web/check_qrconnect → GET /luna/pc/me?aid=386088`，浏览器常规头直连即可，服务端完成 secsdk 设备签名）；二维码出码后需用抖音 App 扫一扫确认，扫描后自动登录。未配置自建账号 API 服务即可「直接扫码」；自建账号 API 服务 /auth 契约仍作为可选部署链路（主要用于歌单同步）。
   - 登录页版式参考 [AlgerMusicPlayer](https://github.com/algerkong/AlgerMusicPlayer)：平台先选、方式用分段 Tab、
     二维码带「生成中 / 已扫码 / 已过期」三态遮罩，出错时原因常驻卡片底部
@@ -239,7 +249,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 
 - **内置平台接口是示例模板**：`src/config/sources.json` 里的搜索/取链端点可按需替换；部分平台的取链依赖登录态或已失效，失败时界面会给出如实原因，而不是静默跳过。
 - **在线音源现状**：详见下节「在线音源实测（2026-11-09）」；本次 5 个公开源都只声明 `musicUrl`、没有 `search`，所以不会贡献搜索结果。
-- **扫码登录**：网易云默认走密码，扫码若被账号级风控（8821）拒绝会自动切到密码页；若密码也遇到 8821，请走该页底部的「浏览器登录态导入」（见上节）；QQ / 酷狗 / 咪咕 / 酷我（微信）扫码为内置原生链路；汽水扫码为内置官方 passport 直连链路（出码后用抖音 App 扫一扫）。
+- **扫码登录**：网易云默认走密码，扫码若被账号级风控（8821）拒绝会自动切到密码页；若密码也遇到 8821，请走该页的「应用内登录」（内置浏览器过滑块后自动导入登录态，见上节）；QQ / 酷狗 / 咪咕 / 酷我（微信）扫码为内置原生链路；汽水扫码为内置官方 passport 直连链路（出码后用抖音 App 扫一扫）。
 - **宿主能力边界**：在线脚本运行时的 `crypto.aesEncrypt`、`crypto.rsaEncrypt`、`utils.zlib` 为显式桩（本次 5 个公开源未使用），用到时会明确报“宿主未实现该能力”。
 - **未实机验证**：Linux、macOS 仅有构建配置/脚本；Android 已完成 Qt 6 编译、签名与界面真机运行，图标/二维码修复待用户复测；Windows 为唯一完整实机验证的桌面平台。
 - **旧 Widgets 前端**：`src/legacy/widgets/` 为迁移期保留，默认不编译、不再新增功能。
@@ -289,19 +299,24 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
     ├── CMakeLists.txt                 # 主构建（FuruiCore / FuruiMusic）
     ├── FuruiMusic.pro                 # qmake 构建（桌面与 Qt5 Android 兼容链路）
     ├── version.json                   # 在线更新清单（唯一事实来源）
-    ├── cmake/                         # FuruiFfmpeg / FuruiOpenssl 等构建期模块
+    ├── cmake/                         # 构建期模块：FFmpeg / OpenSSL / WebView2
     │   ├── FuruiFfmpeg.cmake          # Qt5 FFmpeg 自动编译 / ABI 分目录 / 探测
-    │   └── FuruiOpenssl.cmake         # Qt5 Windows 的 OpenSSL 1.1 运行库部署
+    │   ├── FuruiOpenssl.cmake         # Qt5 Windows 的 OpenSSL 1.1 运行库部署
+    │   └── FuruiWebView2.cmake        # MinGW 自编译 + 部署 QtWebView 的 WebView2 后端
     ├── config/sources.json            # 平台音源配置与契约（搜索/取链/登录/账号 API）
     ├── core/                          # C++ 后端：音源、聚合、账号、播放、曲库、在线音源宿主
+    │   ├── BrowserController.{h,cpp}   # 内置浏览器入口 + 跨平台 Cookie 抓取（HttpOnly）
     │   └── 3rd/                       # QuickJS、qrcodegen（源码内嵌）
     ├── ui/                            # 当前唯一前端：QML 页面、主题、平台适配、main.cpp
+    │   └── qml/BrowserWindow.qml      # 内置浏览器统一外壳（地址栏/导航/登录态捕获）
     ├── platform/                      # 各平台打包资源，按 Qt 版本分目录
     │   ├── android-qt5/               # qmake / Qt5 Android（manifest、gradle、res）
-    │   └── android-qt6/               # CMake / Qt6 Android（manifest、res、OpenSSL 3 .so）
+    │   ├── android-qt6/               # CMake / Qt6 Android（manifest、res、OpenSSL 3 .so）
+    │   └── windows/webview2-plugin/   # MinGW 兼容版 QtWebView WebView2 后端源码 + Cookie 桥
     ├── legacy/widgets/                # 已退役的 Widgets 旧前端（默认不构建）
     ├── thirdparty/                    # 入库的第三方源码与运行库
     │   ├── openssl1.1/                # Qt5 Windows 所需 OpenSSL 1.1 DLL 与许可证
+    │   ├── webview2/                  # Microsoft.Web.WebView2 SDK 头 + WebView2Loader.dll + 许可
     │   └── ffmpeg/FFmpeg-n6.1.2/      # Qt5 播放后端用的 FFmpeg 源码
     ├── scripts/                       # 各平台构建脚本（含 build_ffmpeg_desktop.*）
     ├── tools/                         # 账号 API / 自定义音源示例服务

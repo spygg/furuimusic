@@ -50,8 +50,17 @@ if(FURUI_BUILD_LEGACY_WIDGETS AND NOT ANDROID)
 endif()
 
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS ${QT_COMPONENTS})
+# QtWebView 只在 Qt 6 有；Qt 5.15.2 MinGW 连模块都没装，内置浏览器自动降级。
+if(QT_VERSION_MAJOR GREATER_EQUAL 6)
+    list(APPEND QT_COMPONENTS WebView)
+    set(FURUI_HAVE_WEBVIEW TRUE)
+endif()
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS ${QT_COMPONENTS})
 set(QT Qt${QT_VERSION_MAJOR})
+
+# Windows MinGW 自编译 QtWebView 的 WebView2 后端（MSVC/Android 用 Qt 自带后端）
+include(cmake/FuruiWebView2.cmake)
+furui_configure_webview2()
 
 # Qt 6 的公开头文件要求 C++17；Qt 5 保持 C++14（MinGW 8.1 已验证）
 if(QT_VERSION_MAJOR GREATER_EQUAL 6)
@@ -99,6 +108,7 @@ set(CORE_FILES
     core/AuthManager.h core/AuthManager.cpp
     core/PlayerController.h core/PlayerController.cpp
     core/AppController.h core/AppController.cpp
+    core/BrowserController.h core/BrowserController.cpp
     core/OpenApiServer.h core/OpenApiServer.cpp
     core/OpenApiWeb.h
     core/Logger.h core/Logger.cpp
@@ -128,6 +138,7 @@ set(UI_FILES
     ui/qml/MainMobile.qml
     ui/qml/LibraryPage.qml
     ui/qml/LoginPage.qml
+    ui/qml/BrowserWindow.qml
     ui/qml/CaptchaField.qml
     ui/qml/MvPage.qml
     ui/qml/MvMedia5.qml
@@ -160,6 +171,10 @@ add_library(FuruiCore STATIC ${CORE_FILES})
 target_include_directories(FuruiCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(FuruiCore PUBLIC
     ${QT}::Core ${QT}::Gui ${QT}::Network ${QT}::Sql ${QT}::Multimedia)
+if(FURUI_HAVE_WEBVIEW)
+    target_link_libraries(FuruiCore PUBLIC ${QT}::WebView)
+    target_compile_definitions(FuruiCore PUBLIC FURUI_HAVE_WEBVIEW=1)
+endif()
 
 if(ANDROID)
     if(QT_VERSION_MAJOR LESS 6)
@@ -215,6 +230,7 @@ else()
         configure_file(ui/icons/app.rc.in ${CMAKE_CURRENT_BINARY_DIR}/app.rc @ONLY)
         target_sources(FuruiMusic PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/app.rc)
         furui_deploy_openssl_runtime(FuruiMusic)
+        furui_deploy_webview2(FuruiMusic)
     endif()
 
     if(FURUI_BUILD_LEGACY_WIDGETS)

@@ -366,6 +366,41 @@ Item {
                 }
             }
 
+            // 内置浏览器：地址栏可打开任意网页；登录页的官网登录也复用这个外壳。
+            // 没有 QtWebView 后端的 Qt 5 兼容构建自动隐藏。
+            RowLayout {
+                Layout.fillWidth: true
+                visible: browser.available
+                spacing: 8
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Text { text: "内置浏览器"; color: cText; font.pixelSize: theme.fontMd }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "在应用内打开任意网页，地址栏可手动输入网址"
+                        color: cSub
+                        font.pixelSize: theme.fontSm
+                        wrapMode: Text.Wrap
+                    }
+                }
+                Button {
+                    id: openBrowserBtn
+                    text: "打开"
+                    Layout.preferredWidth: 72
+                    Layout.preferredHeight: theme.touchMin
+                    background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
+                    contentItem: Text {
+                        text: openBrowserBtn.text
+                        color: cPrimary
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    onClicked: browser.open("https://music.163.com/", "browse")
+                }
+            }
+
             Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
 
             // 在线检测更新：检查 -> 弹层展示更新说明 -> 同意后应用内直接下载 -> 安装
