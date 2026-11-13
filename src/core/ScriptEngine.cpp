@@ -238,6 +238,11 @@ QByteArray bytesFromJs(JSContext *ctx, JSValueConst value)
         int32_t len = 0;
         JS_ToInt32(ctx, &len, lenVal);
         JS_FreeValue(ctx, lenVal);
+        // 脚本是用户导入的不可信输入：length 直接决定 reserve 与循环次数，
+        // 不夹取则一行 JS 即可触发 bad_alloc 崩溃 / 永久冻结 GUI（P0-1/P0-2）。
+        // 上限与 jsBufAlloc 的 1MB 保持一致。
+        if (len < 0) len = 0;
+        if (len > 1024 * 1024) len = 1024 * 1024;
         QByteArray out;
         out.reserve(len);
         for (int i = 0; i < len; ++i) {
@@ -607,7 +612,13 @@ struct ScriptEngineHost {
             int32_t len = 0;
             JS_ToInt32(ctx, &len, lenVal);
             JS_FreeValue(ctx, lenVal);
-            for (int i = 0; i < len; ++i) {
+            // 宿主 C 循环不受 QuickJS 中断处理器保护（ExecDeadlineGuard 只在
+            // 字节码循环里被轮询），元素个数与累计输出都必须有上界，
+            // 否则 buffer.concat(new Array(1e8)) 会把 GUI 线程永久冻结。
+            if (len < 0) len = 0;
+            if (len > 1024 * 1024) len = 1024 * 1024;
+            constexpr int kMaxConcatBytes = 16 * 1024 * 1024;
+            for (int i = 0; i < len && out.size() <= kMaxConcatBytes; ++i) {
                 JSValue item = JS_GetPropertyUint32(ctx, argv[0], quint32(i));
                 out += bytesFromJs(ctx, item);
                 JS_FreeValue(ctx, item);
@@ -813,6 +824,19 @@ void ScriptEngine::stop()
             p.cb(r);
         }
     }
+    // 上下文释放延后：stop() 可能在 QuickJS 的 C 栈上被触发（脚本回调里再触发
+    // 同 id 的 startEngine / remove / setEnabled），同步 JS_FreeContext 等于在
+    // JS 执行中途销毁宿主 → use-after-free。m_execDeadline > 0 即当前正有 JS
+    // 在跑（ExecDeadlineGuard 期间），投递到事件循环等这轮执行退出后再释放。
+    if (m_execDeadline > 0) {
+        QTimer::singleShot(0, this, [this] { teardownContext(); });
+        return;
+    }
+    teardownContext();
+}
+
+void ScriptEngine::teardownContext()
+{
     JSContext *ctx = static_cast<JSContext *>(m_ctx);
     if (ctx) {
         for (void *h : m_handlers) dropHolder(ctx, h);

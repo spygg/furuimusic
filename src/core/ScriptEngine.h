@@ -95,6 +95,7 @@ private:
     void onInited(const QVariant &data);
     void finishInit(bool ok, const QString &type, const QString &msg);
     void reportException(const QString &where);
+    void teardownContext();
     void jsToVariant(void *value, QVariant &out, int depth = 0) const;
     void *variantToJs(const QVariant &value) const;
     void freeHolder(void *holder);

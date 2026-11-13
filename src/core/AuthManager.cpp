@@ -1469,8 +1469,23 @@ QString AuthManager::qishuiCookieHeader() const
 void AuthManager::generateQrImage(const QString &content, const QString &sourceId)
 {
     using namespace qrcodegen;
-    QrCode qr = QrCode::encodeText(content.toUtf8().constData(), QrCode::Ecc::MEDIUM);
-    const int size = qr.getSize();
+    // qrcodegen 对超长内容会抛 data_too_long / std::length_error（ECC MEDIUM 上限
+    // 2953 字节），saveQrDataUrl 的兜底路径会把整条 data URL 喂进来，不接异常
+    // 就是 std::terminate 直接崩掉整个进程。
+    QrCode *qr = nullptr;
+    try {
+        if (content.size() > 2953)
+            throw std::length_error("Data too long");
+        qr = new QrCode(QrCode::encodeText(content.toUtf8().constData(), QrCode::Ecc::MEDIUM));
+    } catch (const std::exception &) {
+        delete qr;
+        m_qrStatus = QStringLiteral("二维码生成失败：内容过长，请点击刷新重试");
+        m_qrHint = QStringLiteral("生成失败，点击二维码区域刷新");
+        emit toast(m_qrStatus);
+        emit qrChanged();
+        return;
+    }
+    const int size = qr->getSize();
     const int scale = 8;
     const int border = 4;
     const int dim = (size + border * 2) * scale;
@@ -1481,10 +1496,11 @@ void AuthManager::generateQrImage(const QString &content, const QString &sourceI
     painter.setBrush(Qt::black);
     for (int y = 0; y < size; ++y) {
         for (int x = 0; x < size; ++x) {
-            if (qr.getModule(x, y))
+            if (qr->getModule(x, y))
                 painter.drawRect((x + border) * scale, (y + border) * scale, scale, scale);
         }
     }
+    delete qr;
     const QString path = Settings::filePath(QStringLiteral("qr_") + sourceId + QStringLiteral(".png"));
     if (img.save(path, "PNG")) {
         m_qrImagePath = path;
