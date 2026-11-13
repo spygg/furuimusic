@@ -93,9 +93,51 @@ bool isControlPath(const QString &path)
     static const QSet<QString> controls {
         QStringLiteral("/play"), QStringLiteral("/pause"), QStringLiteral("/toggle"),
         QStringLiteral("/skip-next"), QStringLiteral("/skip-prev"), QStringLiteral("/play-index"),
-        QStringLiteral("/seek"), QStringLiteral("/volume"), QStringLiteral("/search")
+        QStringLiteral("/seek"), QStringLiteral("/volume"), QStringLiteral("/search"),
+        // 网页控制台的曲库操作：点歌、打开歌单/榜单、刷新歌单
+        QStringLiteral("/play-result"), QStringLiteral("/open-playlist"),
+        QStringLiteral("/open-discovery"), QStringLiteral("/refresh"),
+        QStringLiteral("/refresh-discovery")
     };
     return controls.contains(path);
+}
+
+// ---- 网页控制台的数据组装 ----
+QJsonObject songObject(AppController *app, const Song &s, int index = -1)
+{
+    QJsonObject o;
+    if (index >= 0) o.insert(QStringLiteral("index"), index);
+    o.insert(QStringLiteral("name"), s.title);
+    o.insert(QStringLiteral("singer"), s.artist);
+    o.insert(QStringLiteral("albumName"), s.album);
+    o.insert(QStringLiteral("cover"), s.cover);
+    o.insert(QStringLiteral("source"), s.source);
+    o.insert(QStringLiteral("sourceName"), app->sourceName(s.source));
+    o.insert(QStringLiteral("duration"), double(s.duration));
+    o.insert(QStringLiteral("vip"), s.vip);
+    return o;
+}
+
+QJsonArray playlistArray(AppController *app, const QVector<Playlist> &list)
+{
+    QJsonArray arr;
+    for (const Playlist &p : list) {
+        QJsonObject o;
+        o.insert(QStringLiteral("id"), p.uid);
+        o.insert(QStringLiteral("name"), p.title);
+        o.insert(QStringLiteral("count"), p.count);
+        o.insert(QStringLiteral("source"), p.source);
+        o.insert(QStringLiteral("sourceName"), app->sourceName(p.source));
+        o.insert(QStringLiteral("cover"), p.cover);
+        o.insert(QStringLiteral("owner"), p.owner);
+        arr.append(o);
+    }
+    return arr;
+}
+
+QByteArray jsonArrayBody(const QJsonArray &arr)
+{
+    return QJsonDocument(arr).toJson(QJsonDocument::Compact);
 }
 
 } // namespace
@@ -350,6 +392,80 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
         respond(socket, 200, QStringLiteral("application/json; charset=utf-8"), statusJson());
         return;
     }
+    // ---- 网页控制台用的读接口 ----
+    if (path == QLatin1String("/playlists") || path == QLatin1String("/discovery")) {
+        const QVector<Playlist> &list = (path == QLatin1String("/discovery"))
+                                            ? app->discovery()->playlists()
+                                            : app->playlists()->playlists();
+        respond(socket, 200, QStringLiteral("application/json; charset=utf-8"),
+                jsonArrayBody(playlistArray(app, list)));
+        return;
+    }
+    if (path == QLatin1String("/results")) {
+        QJsonObject o;
+        o.insert(QStringLiteral("count"), app->results()->songs().size());
+        QJsonArray songs;
+        const QVector<Song> &list = app->results()->songs();
+        for (int i = 0; i < list.size(); ++i) songs.append(songObject(app, list.at(i), i));
+        o.insert(QStringLiteral("songs"), songs);
+        respond(socket, 200, QStringLiteral("application/json; charset=utf-8"),
+                QJsonDocument(o).toJson(QJsonDocument::Compact));
+        return;
+    }
+    if (path == QLatin1String("/accounts")) {
+        QJsonArray arr;
+        for (const Account &a : app->accounts()->accounts()) {
+            QJsonObject o;
+            o.insert(QStringLiteral("source"), a.source);
+            o.insert(QStringLiteral("sourceName"), app->sourceName(a.source));
+            o.insert(QStringLiteral("nickname"), a.nickname);
+            o.insert(QStringLiteral("avatar"), a.avatar);
+            o.insert(QStringLiteral("logged"), a.logged);
+            o.insert(QStringLiteral("status"), a.status);
+            arr.append(o);
+        }
+        respond(socket, 200, QStringLiteral("application/json; charset=utf-8"), jsonArrayBody(arr));
+        return;
+    }
+    if (path == QLatin1String("/settings")) {
+        QJsonObject o;
+        o.insert(QStringLiteral("theme"), app->theme());
+        o.insert(QStringLiteral("quality"), qualityName(qualityFromKey(app->quality())));
+        o.insert(QStringLiteral("playMode"), app->playModeName());
+        o.insert(QStringLiteral("vipSubstitute"), app->vipSubstituteEnabled());
+        o.insert(QStringLiteral("autoToggle"), app->autoToggleSource());
+        o.insert(QStringLiteral("openApi"), running());
+        o.insert(QStringLiteral("address"), address());
+        o.insert(QStringLiteral("localOnly"), app->openApiLocalOnly());
+        o.insert(QStringLiteral("logToFile"), app->logToFile());
+        o.insert(QStringLiteral("logPath"), app->logFilePath());
+        o.insert(QStringLiteral("appName"), app->appName());
+        o.insert(QStringLiteral("version"), app->version());
+        o.insert(QStringLiteral("sources"), app->sourceNames().join(QStringLiteral(" / ")));
+        respond(socket, 200, QStringLiteral("application/json; charset=utf-8"),
+                QJsonDocument(o).toJson(QJsonDocument::Compact));
+        return;
+    }
+    if (path == QLatin1String("/lyrics")) {
+        // 带时间轴的歌词给网页播放页做逐行高亮；没有时间轴时前端只显示静态文本
+        QJsonObject o;
+        const QStringList texts = app->lyricLines();
+        const QVariantList times = app->lyricTimes();
+        o.insert(QStringLiteral("timed"), app->lyricsTimed());
+        o.insert(QStringLiteral("index"), app->currentLyricIndex());
+        o.insert(QStringLiteral("current"), app->currentLyricLine());
+        QJsonArray lines;
+        for (int i = 0; i < texts.size(); ++i) {
+            QJsonObject l;
+            l.insert(QStringLiteral("t"), i < times.size() ? double(times.at(i).toLongLong()) : 0.0);
+            l.insert(QStringLiteral("text"), texts.at(i));
+            lines.append(l);
+        }
+        o.insert(QStringLiteral("lines"), lines);
+        respond(socket, 200, QStringLiteral("application/json; charset=utf-8"),
+                QJsonDocument(o).toJson(QJsonDocument::Compact));
+        return;
+    }
     if (path == QLatin1String("/lyric")) {
         respond(socket, 200, QStringLiteral("text/plain; charset=utf-8"), app->lyricsText().toUtf8());
         return;
@@ -380,6 +496,11 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
             QStringLiteral("/search?keyword=<text>&source=<id>"),
             QStringLiteral("/queue"), QStringLiteral("/playlist"), QStringLiteral("/favorites"),
             QStringLiteral("/play-index?index=<n>"), QStringLiteral("/logs?lines=<n>&download=1"),
+            QStringLiteral("/playlists"), QStringLiteral("/discovery"), QStringLiteral("/results"),
+            QStringLiteral("/accounts"), QStringLiteral("/settings"), QStringLiteral("/lyrics"),
+            QStringLiteral("/history"), QStringLiteral("/play-result?index=<n>"),
+            QStringLiteral("/open-playlist?id=<uid>"), QStringLiteral("/open-discovery?id=<uid>"),
+            QStringLiteral("/refresh"), QStringLiteral("/refresh-discovery"),
             QStringLiteral("/")
         }));
         respond(socket, 200, QStringLiteral("application/json; charset=utf-8"),
@@ -387,39 +508,24 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
         return;
     }
     if (path == QLatin1String("/queue") || path == QLatin1String("/playlist") ||
-        path == QLatin1String("/favorites")) {
-        QJsonArray arr;
-        const QVector<Song> *songs = nullptr;
-        if (path == QLatin1String("/queue")) songs = &app->queue()->songs();
-        if (songs) {
-            for (const Song &s : *songs) {
-                QJsonObject o;
-                o.insert(QStringLiteral("name"), s.title);
-                o.insert(QStringLiteral("singer"), s.artist);
-                o.insert(QStringLiteral("albumName"), s.album);
-                o.insert(QStringLiteral("source"), s.source);
-                o.insert(QStringLiteral("duration"), s.duration);
-                arr.append(o);
-            }
-        } else if (path == QLatin1String("/playlist")) {
-            for (const Playlist &p : app->playlists()->playlists()) {
-                QJsonObject o;
-                o.insert(QStringLiteral("id"), p.uid);
-                o.insert(QStringLiteral("name"), p.title);
-                o.insert(QStringLiteral("count"), p.count);
-                o.insert(QStringLiteral("source"), p.source);
-                arr.append(o);
-            }
-        } else {
-            for (const Song &s : Library::instance()->favorites()) {
-                QJsonObject o;
-                o.insert(QStringLiteral("name"), s.title);
-                o.insert(QStringLiteral("singer"), s.artist);
-                arr.append(o);
-            }
+        path == QLatin1String("/favorites") || path == QLatin1String("/history")) {
+        if (path == QLatin1String("/playlist")) {
+            respond(socket, 200, QStringLiteral("application/json; charset=utf-8"),
+                    jsonArrayBody(playlistArray(app, app->playlists()->playlists())));
+            return;
         }
-        respond(socket, 200, QStringLiteral("application/json; charset=utf-8"),
-                QJsonDocument(arr).toJson(QJsonDocument::Compact));
+        QVector<Song> songs;
+        if (path == QLatin1String("/queue")) songs = app->queue()->songs();
+        else if (path == QLatin1String("/favorites")) songs = Library::instance()->favorites();
+        else songs = Library::instance()->history(200);
+        QJsonArray arr;
+        const int current = path == QLatin1String("/queue") ? app->currentQueueIndex() : -1;
+        for (int i = 0; i < songs.size(); ++i) {
+            QJsonObject o = songObject(app, songs.at(i), i);
+            if (path == QLatin1String("/queue")) o.insert(QStringLiteral("current"), i == current);
+            arr.append(o);
+        }
+        respond(socket, 200, QStringLiteral("application/json; charset=utf-8"), jsonArrayBody(arr));
         return;
     }
 
@@ -444,6 +550,32 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
         }
         app->playQueue(index);
         msg = QStringLiteral("playing index ") + QString::number(index);
+    } else if (path == QLatin1String("/play-result")) {
+        // 网页搜索结果 / 歌单详情里点某一行：按当前结果集下标播放
+        const int index = query.queryItemValue(QStringLiteral("index")).toInt();
+        if (index < 0 || index >= app->results()->songs().size()) {
+            respond(socket, 400, QStringLiteral("application/json; charset=utf-8"),
+                    "{\"error\":\"index out of range\"}");
+            return;
+        }
+        app->playResult(index);
+        msg = QStringLiteral("playing result ") + QString::number(index);
+    } else if (path == QLatin1String("/open-playlist") ||
+               path == QLatin1String("/open-discovery")) {
+        const QString uid = query.queryItemValue(QStringLiteral("id"));
+        if (uid.isEmpty()) {
+            respond(socket, 400, QStringLiteral("application/json; charset=utf-8"),
+                    "{\"error\":\"missing id\"}");
+            return;
+        }
+        if (path == QLatin1String("/open-playlist")) app->loadPlaylist(uid);
+        else app->openDiscoveryPlaylist(uid);
+        msg = QStringLiteral("loading playlist");
+    } else if (path == QLatin1String("/refresh") ||
+               path == QLatin1String("/refresh-discovery")) {
+        if (path == QLatin1String("/refresh")) app->refreshPlaylists();
+        else app->loadDiscovery(QString());
+        msg = QStringLiteral("refreshing");
     } else if (path == QLatin1String("/seek")) {
         app->seek(query.queryItemValue(QStringLiteral("time")).toLongLong());
     } else if (path == QLatin1String("/volume")) {

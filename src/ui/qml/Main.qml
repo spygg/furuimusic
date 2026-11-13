@@ -239,20 +239,12 @@ ApplicationWindow {
         function onToast(message) { toast.show(message, "info") }
         // 带语义色的通知（登录失败 / MV 解析失败 / 无数据等）
         function onNotify(message, kind) { toast.show(message, kind) }
-        function onSearchFinished(count, kind) {
-            // count < 0 表示这次搜索被新操作作废，只收起 loading，不弹完成提示
-            if (count < 0)
-                return
-            if (kind === "playlist")
-                toast.show("搜索完成，共 " + count + " 个歌单", "info")
-            else if (kind === "song")
-                toast.show("搜索完成，共 " + count + " 首结果", "info")
-        }
+        // 搜索完成 / 换源成功之类的好消息不再弹条：
+        // 页面里已经有「搜索到 N 首」和「VIP 替代 · X」角标，这里再弹只是噪音
         function onLoginStateChanged(sourceId, ok, message) {
             toast.show((ok ? "登录成功：" : "登录失败：") + message,
                        ok ? "success" : "error")
         }
-        function onSubstituteInfo(text) { toast.show(text, "info") }
         function onDownloadFinished(path) { toast.show("下载完成：" + path, "success") }
     }
 

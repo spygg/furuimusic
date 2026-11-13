@@ -42,6 +42,11 @@ Item {
     property string discoveryTitle: ""
     // 歌单封面卡片墙 / 列表
     property bool gridView: true
+    // 只有「我的歌单」「发现榜单」和搜索结果有两种排布；收藏/历史/队列本身就是单列曲目列表，
+    // 在这些 Tab 上显示切换按钮会是死按钮，直接不展示
+    readonly property bool gridToggleAvailable: root.searchMode
+                                               || root.tabIndex === 0
+                                               || root.tabIndex === 4
 
     // ---- 搜索（原独立搜索页已并入音乐库）----
     // 搜索框有内容即进入搜索结果视图，清空则回到当前 Tab；两者共用 app.results
@@ -296,9 +301,11 @@ Item {
                 ToolTip.delay: 400
             }
 
-            // 网格/列表切换：圆形图标按钮（MV 页固定网格，不展示这个开关）
+            // 网格/列表切换：圆形图标按钮
+            // 只在真正有「卡片墙 ↔ 列表」两种排布的页里出现（见 gridToggleAvailable），
+            // 否则点了只换个图标、内容不动，看起来就是坏按钮
             Rectangle {
-                visible: root.tabIndex !== 5
+                visible: root.gridToggleAvailable
                 implicitWidth: root.headerRowH
                 implicitHeight: root.headerRowH
                 radius: height / 2
@@ -316,6 +323,9 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.gridView = !root.gridView
                 }
+                ToolTip.visible: gridMa.containsMouse
+                ToolTip.text: root.gridView ? "切换为列表视图" : "切换为封面视图"
+                ToolTip.delay: 400
             }
         }
     }
@@ -982,7 +992,7 @@ Item {
                         model: app.discovery
                         cellWidth: root.gridCellWidth
                         cellHeight: root.gridCellHeight
-                        visible: root.discoveryTitle === ""
+                        visible: root.gridView && root.discoveryTitle === ""
 
                         delegate: AlbumCard {
                             width: discoveryGrid.cellWidth
@@ -994,6 +1004,97 @@ Item {
                             badge: model.sourceName
                             accent: app.sourceColor(model.source)
                             onClicked: root.openDiscovery(model.title, model.uid)
+                        }
+                    }
+
+                    // 榜单列表视图：与「我的歌单」同一套行样式，跟着右上角的视图开关走
+                    ListView {
+                        id: discoveryList
+                        anchors.fill: parent
+                        clip: true
+                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                        spacing: 8
+                        model: app.discovery
+                        visible: !root.gridView && root.discoveryTitle === ""
+
+                        delegate: Rectangle {
+                            width: discoveryList.width
+                            height: Math.max(68, theme.touchMin + 20)
+                            radius: 12
+                            color: discoveryRowHover.hovered ? theme.cardHover : cCard
+                            border.color: cLine
+
+                            property color accent: app.sourceColor(model.source)
+
+                            MouseArea {
+                                id: discoveryRowHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.openDiscovery(model.title, model.uid)
+                            }
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.margins: 10
+                                spacing: 10
+
+                                Rectangle {
+                                    Layout.preferredWidth: 46
+                                    Layout.preferredHeight: 46
+                                    radius: 10
+                                    clip: true
+                                    color: Qt.rgba(accent.r, accent.g, accent.b, 0.12)
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "♪"
+                                        color: accent
+                                        font.pixelSize: 18
+                                    }
+                                    // 榜单都有封面，列表里也带一张小图；取不到时留上面的音符占位
+                                    Image {
+                                        anchors.fill: parent
+                                        source: model.cover
+                                        fillMode: Image.PreserveAspectCrop
+                                        visible: status === Image.Ready
+                                        asynchronous: true
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 3
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: model.title
+                                        color: cText
+                                        font.pixelSize: 14
+                                        font.bold: true
+                                        elide: Text.ElideRight
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: (model.count > 0 ? model.count + " 首 · " : "")
+                                              + model.sourceName
+                                        color: cSub
+                                        font.pixelSize: theme.fontSm
+                                        elide: Text.ElideRight
+                                    }
+                                }
+
+                                Rectangle {
+                                    Layout.preferredWidth: 76
+                                    Layout.preferredHeight: theme.touchMin
+                                    radius: height / 2
+                                    color: Qt.rgba(accent.r, accent.g, accent.b, 0.12)
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "查看"
+                                        color: accent
+                                        font.pixelSize: theme.fontSm
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -1011,7 +1112,7 @@ Item {
                                  && root.discoveryTitle === ""
                         iconName: "music"
                         title: "还没有公开榜单"
-                        hint: "点右上角「刷新歌单」重新拉取，或检查网络后重试"
+                        hint: "点右上角「刷新榜单」重新拉取，或检查网络后重试"
                     }
 
                     // 榜单曲目详情（与「我的歌单」共用 app.results，互不干扰）
