@@ -365,12 +365,46 @@ void PlayerController::saveState()
     Settings::set(QStringLiteral("resumePlaying"), playing());
 }
 
+// 修复历史坏数据：Qt5 构建曾把 Qt6 写的裸 UTF-8 ini 按 Latin-1 读花再存回，
+// resumeQueue 里的标题/歌手已变成 Latin-1 化的乱码（层数 = 经过的 Qt5 会话数）。
+// 修复 = 把这种「Latin-1 字符串」重新按 UTF-8 解码，最多 4 轮（乱码每多经过
+// 一次旧 Qt5 会话加深一层，4 轮足够兜住历史会话）。仅当整段内容每个字符
+// ≤ 0xFF、字节序列是合法 UTF-8（往返无损）时才修——正常中文（> 0xFF）和
+// 真实拉丁文（如 é 的 Latin-1 字节不是合法 UTF-8）都会在此止步，零误伤。
+static bool unmojibake(QString &text)
+{
+    bool changed = false;
+    for (int round = 0; round < 4; ++round) {
+        QByteArray bytes(int(text.size()), Qt::Uninitialized);
+        bool latin1 = true;
+        for (int i = 0; i < text.size(); ++i) {
+            const ushort u = text.at(i).unicode();
+            if (u > 0xFF) { latin1 = false; break; }
+            bytes[i] = char(u);
+        }
+        if (!latin1) break;
+        const QString decoded = QString::fromUtf8(bytes);
+        if (decoded == text) break;            // 纯 ASCII 或已修干净
+        if (decoded.toUtf8() != bytes) break;  // 不是合法 UTF-8，不能修
+        text = decoded;
+        changed = true;
+    }
+    return changed;
+}
+
 void PlayerController::restoreState()
 {
     const QString raw = Settings::string(QStringLiteral("resumeQueue"));
-    if (raw.trimmed().isEmpty())
-        return;
-    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8());
+    QString json = raw;
+    if (!json.isEmpty() && unmojibake(json)) {
+        // 损坏历史数据自愈：立即写回修好的文本（不动 index/position/playing）
+        const QJsonDocument probe = QJsonDocument::fromJson(json.toUtf8());
+        if (probe.isArray())
+            Settings::set(QStringLiteral("resumeQueue"), json);
+        else
+            json = raw;   // 转码后反而不成 JSON：放弃修复，按原文解析
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
     if (!doc.isArray())
         return;
     QVector<Song> restored;

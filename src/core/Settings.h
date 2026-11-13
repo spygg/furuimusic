@@ -53,6 +53,13 @@ private:
         Store()
             : settings(Settings::filePath(QStringLiteral("settings.ini")), QSettings::IniFormat)
         {
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+            // Qt6 的 IniFormat 写入器把非 ASCII 写成裸 UTF-8，而 Qt5 默认按
+            // Latin-1 读回：两代构建共用同一份 settings.ini 时，Qt5 会话会把
+            // Qt6 存的队列标题读花，存回后逐会话叠加成更深的乱码。显式对齐
+            // UTF-8 后 Qt5 读写与 Qt6 完全一致（旧 \xNNNN 转义仍能解码）。
+            settings.setIniCodec("UTF-8");
+#endif
             timer.setSingleShot(true);
             timer.setInterval(600);
             QObject::connect(&timer, &QTimer::timeout, this, [this] { settings.sync(); });
