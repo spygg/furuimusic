@@ -103,27 +103,33 @@ Item {
             SettingsPage { }
         }
 
-        // 迷你播放条：贴底，位于页面与底部标签栏之间；进入全屏播放页（pageIndex=1）或 MV 页（index 4）时隐藏，避免控件重复
+        // 迷你播放条：贴底浮动胶囊（Alger 风格：圆角、左右留白、圆形封面），位于页面与底部标签栏之间
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 66
+            Layout.preferredHeight: 64
+            Layout.leftMargin: 12
+            Layout.rightMargin: 12
+            Layout.topMargin: 4
+            Layout.bottomMargin: 4
+            radius: 18
             color: cCard
+            border.color: cLine
+            border.width: 1
             visible: root.pageIndex !== 1 && root.pageIndex !== 4
 
+            // 底部内嵌细进度（胶囊内缩 14，避免圆角处溢出）
             Rectangle {
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.top: parent.top
-                height: 1
-                color: cLine
-            }
-
-            Rectangle {
-                anchors.left: parent.left
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
                 anchors.bottom: parent.bottom
+                anchors.bottomMargin: 2
                 height: 2
-                width: parent.width * (app.duration > 0 ? Math.min(1, app.position / app.duration) : 0)
+                radius: 1
+                width: (parent.width - 28) * (app.duration > 0 ? Math.min(1, app.position / app.duration) : 0)
                 color: cPrimary
+                visible: app.currentTitle.length > 0
             }
 
             RowLayout {
@@ -144,8 +150,11 @@ Item {
                             Layout.preferredWidth: 46
                             Layout.preferredHeight: 46
                             Layout.alignment: Qt.AlignVCenter
-                            radius: theme.radiusSm
+                            radius: width / 2
+                            border.width: 3
+                            border.color: theme.dark ? Qt.rgba(1, 1, 1, 0.14) : Qt.rgba(0, 0, 0, 0.10)
                             color: cPrimarySoft
+                            clip: true
                             Text {
                                 anchors.centerIn: parent
                                 text: "♪"
@@ -277,7 +286,7 @@ Item {
                             GlyphIcon {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 name: root.tabIcons[index]
-                                size: 17
+                                size: checked ? 21 : 19
                                 color: checked ? cPrimary : cSub
                             }
                             Text {
@@ -287,16 +296,6 @@ Item {
                                 font.pixelSize: theme.fontXs
                                 font.bold: checked
                             }
-                        }
-
-                        Rectangle {
-                            visible: checked
-                            anchors.top: parent.top
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            width: 18
-                            height: 2
-                            radius: 1
-                            color: cPrimary
                         }
 
                         MouseArea {

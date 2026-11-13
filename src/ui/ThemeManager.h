@@ -68,26 +68,26 @@ public:
     bool systemDark() const { return m_systemDark; }
     bool systemThemeSupported() const;
 
-    QColor bg() const { return isDark() ? QColor("#121216") : QColor("#F4F6FA"); }
-    QColor surface() const { return isDark() ? QColor("#1A1A20") : QColor("#FFFFFF"); }
-    QColor card() const { return isDark() ? QColor("#212128") : QColor("#FFFFFF"); }
-    QColor cardHover() const { return isDark() ? QColor("#2A2A33") : QColor("#F1F4F9"); }
-    QColor text() const { return isDark() ? QColor("#ECECF1") : QColor("#1B2029"); }
-    // 次级/弱化文字要同时过 4.5:1：浅色主题原先 mutedText(#9AA1AC) 在卡片上只有
-    // 2.60、深色 3.18，占位符几乎看不清；subText 也仅 4.83，压不出层次。
-    // 整体下移一档，实测浅色 5.98/5.06、深色 5.75/4.56（卡片/背景都达标）。
-    QColor subText() const { return isDark() ? QColor("#9A9AA6") : QColor("#5C6470"); }
-    QColor mutedText() const { return isDark() ? QColor("#888892") : QColor("#686F7C"); }
-    QColor line() const { return isDark() ? QColor("#2E2E38") : QColor("#E4E8EF"); }
-    QColor accent() const { return isDark() ? QColor("#FF5B6E") : QColor("#EC4141"); }
-    QColor accentSoft() const { return isDark() ? QColor("#3A2229") : QColor("#FDECEF"); }
-    QColor accentAlt() const { return isDark() ? QColor("#FF8A5B") : QColor("#FF7A59"); }
-    QColor heroStart() const { return isDark() ? QColor("#C22B44") : QColor("#E63B52"); }
-    QColor heroEnd() const { return isDark() ? QColor("#E2603F") : QColor("#FF7A59"); }
+    // ---- 配色对齐 AlgerMusicPlayer（品牌绿 #22C55E + 白/黑干净的底）----
+    QColor bg() const { return isDark() ? QColor("#0E0E10") : QColor("#FFFFFF"); }
+    QColor surface() const { return isDark() ? QColor("#17171A") : QColor("#FFFFFF"); }
+    QColor card() const { return isDark() ? QColor("#1A1A1E") : QColor("#FFFFFF"); }
+    QColor cardHover() const { return isDark() ? QColor("#242429") : QColor("#F3F4F6"); }
+    QColor text() const { return isDark() ? QColor("#F5F5F7") : QColor("#111827"); }
+    // 次级/弱化文字仍然过 4.5:1：浅色 #6B7280 / #9CA3AF，深色 #A1A1AA / #71717A
+    QColor subText() const { return isDark() ? QColor("#A1A1AA") : QColor("#6B7280"); }
+    QColor mutedText() const { return isDark() ? QColor("#71717A") : QColor("#9CA3AF"); }
+    QColor line() const { return isDark() ? QColor("#2A2A2F") : QColor("#E8EAED"); }
+    // Alger 品牌绿：浅深同色，弱化底用浅绿/深绿
+    QColor accent() const { return QColor("#22C55E"); }
+    QColor accentSoft() const { return isDark() ? QColor("#12301E") : QColor("#DCFCE7"); }
+    QColor accentAlt() const { return isDark() ? QColor("#4ADE80") : QColor("#16A34A"); }
+    QColor heroStart() const { return QColor("#22C55E"); }
+    QColor heroEnd() const { return isDark() ? QColor("#15803D") : QColor("#16A34A"); }
     QColor vip() const { return isDark() ? QColor("#F0A23C") : QColor("#E8912A"); }
-    QColor success() const { return isDark() ? QColor("#35D07F") : QColor("#2ECC71"); }
-    QColor danger() const { return isDark() ? QColor("#FF6B6B") : QColor("#E5484D"); }
-    QColor shadowTint() const { return isDark() ? QColor("#000000") : QColor("#3D485C"); }
+    QColor success() const { return isDark() ? QColor("#4ADE80") : QColor("#22C55E"); }
+    QColor danger() const { return isDark() ? QColor("#F87171") : QColor("#EF4444"); }
+    QColor shadowTint() const { return isDark() ? QColor("#000000") : QColor("#94A3B8"); }
 
     // 视口驱动的缩放：width/height 用 QML 的逻辑像素（Android 上约等于 dp）。
     // adaptive=false（桌面）时恒为 1.0 —— 桌面缩放交给 Qt 的高 DPI 机制，

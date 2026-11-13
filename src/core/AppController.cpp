@@ -324,6 +324,10 @@ AppController::AppController(QObject *parent)
     syncCustomModel();
     refreshPlaylists();
 
+    // 启动续播：信号已全部接好（requestPlay -> resolveAndPlay），此时恢复上次的
+    // 播放列表与位置；若上次在播，会自动续播并跳到原位置。
+    player->restoreState();
+
     // 从 build/cmake 之类没有 OpenSSL DLL 的目录直接启动时，Qt 会在所有 HTTPS
     // 请求上返回「TLS initialization failed」，表现就是「音源导入了却取不到链接」。
     // 这里主动自检并说清楚原因，避免用户误以为是 VIP 判定或音源失效。

@@ -7,17 +7,62 @@
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #include <QMediaContent>
 #endif
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QStandardPaths>
 #include <QNetworkRequest>
+#include <QTimer>
 
 #include "HttpClient.h"
 #include "Settings.h"
 
 namespace Furui {
+
+// ---- 续播状态的 Song <-> JSON（只存续播需要的字段，extra 透传自定义音源）----
+static QJsonObject songToJson(const Song &s)
+{
+    QJsonObject o;
+    o[QStringLiteral("uid")] = s.uid;
+    o[QStringLiteral("source")] = s.source;
+    o[QStringLiteral("sourceId")] = s.sourceId;
+    o[QStringLiteral("title")] = s.title;
+    o[QStringLiteral("artist")] = s.artist;
+    o[QStringLiteral("album")] = s.album;
+    o[QStringLiteral("cover")] = s.cover;
+    o[QStringLiteral("albumId")] = s.albumId;
+    o[QStringLiteral("duration")] = static_cast<double>(s.duration);
+    o[QStringLiteral("vip")] = s.vip;
+    o[QStringLiteral("playable")] = s.playable;
+    o[QStringLiteral("quality")] = s.quality;
+    if (!s.extra.isEmpty())
+        o[QStringLiteral("extra")] = QJsonObject::fromVariantMap(s.extra);
+    return o;
+}
+
+static Song songFromJson(const QJsonObject &o)
+{
+    Song s;
+    s.uid = o.value(QStringLiteral("uid")).toString();
+    s.source = o.value(QStringLiteral("source")).toString();
+    s.sourceId = o.value(QStringLiteral("sourceId")).toString();
+    s.title = o.value(QStringLiteral("title")).toString();
+    s.artist = o.value(QStringLiteral("artist")).toString();
+    s.album = o.value(QStringLiteral("album")).toString();
+    s.cover = o.value(QStringLiteral("cover")).toString();
+    s.albumId = o.value(QStringLiteral("albumId")).toString();
+    s.duration = static_cast<qint64>(o.value(QStringLiteral("duration")).toDouble());
+    s.vip = o.value(QStringLiteral("vip")).toBool();
+    s.playable = o.value(QStringLiteral("playable")).toBool(true);
+    s.quality = o.value(QStringLiteral("quality")).toString();
+    s.extra = o.value(QStringLiteral("extra")).toObject().toVariantMap();
+    return s;
+}
 
 // 缓存文件后缀：播放器后端（Qt6 FFmpeg/Android、Qt5 DirectShow）都靠扩展名判断容器
 static QString cacheSuffixFor(const QUrl &url)
@@ -57,6 +102,12 @@ PlayerController::PlayerController(QObject *parent)
     connect(m_player, &QMediaPlayer::durationChanged, this, [this](qint64) { emit stateChanged(); });
     connect(m_player, &QMediaPlayer::mediaStatusChanged, this,
             [this](QMediaPlayer::MediaStatus status) {
+        // 续播恢复：媒体加载就绪后跳到上次停播位置（只应用一次，之后清零）
+        if (m_pendingSeek > 0
+            && (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia)) {
+            m_player->setPosition(m_pendingSeek);
+            m_pendingSeek = 0;
+        }
         if (status != QMediaPlayer::EndOfMedia) return;
         if (m_mode == 2) {
             // 单曲循环：原地重播，不重新联网解析地址
@@ -100,6 +151,19 @@ PlayerController::PlayerController(QObject *parent)
                 emit errorOccurred(msg.isEmpty() ? QStringLiteral("播放失败") : msg);
             });
 #endif
+
+    // ---- 续播落盘 ----
+    // 每 5 秒记一次位置（Android 常被系统直接杀进程，来不及走 aboutToQuit）；
+    // 切歌/播放状态变化也立刻落盘，退出时再补一次。
+    m_saveTimer = new QTimer(this);
+    m_saveTimer->setInterval(5000);
+    connect(m_saveTimer, &QTimer::timeout, this, &PlayerController::saveState);
+    m_saveTimer->start();
+    connect(this, &PlayerController::queueChanged, this, &PlayerController::saveState);
+    connect(this, &PlayerController::stateChanged, this, &PlayerController::saveState);
+    if (QCoreApplication::instance())
+        connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
+                this, &PlayerController::saveState);
 }
 
 void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers)
@@ -189,7 +253,12 @@ void PlayerController::fetchWithHeaders()
 
 void PlayerController::togglePause()
 {
-    if (!m_currentUrl.isValid()) return;
+    if (!m_currentUrl.isValid()) {
+        // 启动时恢复了「暂停」态（还没加载音频）：按下播放即开始解析，从上次位置继续
+        if (m_currentIndex >= 0 && m_currentIndex < m_queue.size())
+            emitRequest(m_currentIndex);
+        return;
+    }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     if (m_player->playbackState() == QMediaPlayer::PlayingState) m_player->pause();
     else m_player->play();
@@ -231,6 +300,58 @@ qint64 PlayerController::duration() const
             return meta;
     }
     return real;
+}
+
+void PlayerController::saveState()
+{
+    if (m_queue.isEmpty()) {
+        Settings::set(QStringLiteral("resumeQueue"), QString());
+        Settings::set(QStringLiteral("resumeIndex"), -1);
+        Settings::set(QStringLiteral("resumePosition"), 0);
+        Settings::set(QStringLiteral("resumePlaying"), false);
+        return;
+    }
+    QJsonArray arr;
+    for (const Song &s : m_queue)
+        arr.append(songToJson(s));
+    Settings::set(QStringLiteral("resumeQueue"),
+                  QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+    Settings::set(QStringLiteral("resumeIndex"), m_currentIndex);
+    // 恢复位置还没真正应用（媒体未加载完成）前，保留待跳转点，别被 0 覆盖掉
+    const qint64 pos = m_pendingSeek > 0 ? m_pendingSeek : position();
+    Settings::set(QStringLiteral("resumePosition"), pos);
+    Settings::set(QStringLiteral("resumePlaying"), playing());
+}
+
+void PlayerController::restoreState()
+{
+    const QString raw = Settings::string(QStringLiteral("resumeQueue"));
+    if (raw.trimmed().isEmpty())
+        return;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8());
+    if (!doc.isArray())
+        return;
+    QVector<Song> restored;
+    for (const QJsonValue &v : doc.array())
+        if (v.isObject())
+            restored.append(songFromJson(v.toObject()));
+    if (restored.isEmpty())
+        return;
+
+    m_queue = restored;
+    const int idx = Settings::integer(QStringLiteral("resumeIndex"), 0);
+    m_currentIndex = qBound(-1, idx, m_queue.size() - 1);
+    m_pendingSeek = static_cast<qint64>(Settings::integer(QStringLiteral("resumePosition"), 0));
+    const bool wasPlaying = Settings::boolean(QStringLiteral("resumePlaying"), false);
+
+    // 先让队列/播放条立即显示上次的播放列表与曲目（此时 pendingSeek 已就位，
+    // 上面 saveState 不会被 0 覆盖）
+    emit queueChanged();
+    emit mediaChanged();
+    if (wasPlaying && m_currentIndex >= 0) {
+        // 上次正在播 → 自动续播；具体位置在媒体加载完成后由 m_pendingSeek 应用
+        emitRequest(m_currentIndex);
+    }
 }
 
 void PlayerController::seek(qint64 ms)
@@ -285,6 +406,7 @@ void PlayerController::setQueue(const QVector<Song> &songs, int index)
 {
     m_queue = songs;
     m_currentIndex = qBound(-1, index, m_queue.size() - 1);
+    m_pendingSeek = 0;   // 用户显式换歌/开新列表，不再套用续播位置
     emit queueChanged();
     emit mediaChanged();
 }
@@ -343,6 +465,7 @@ void PlayerController::setCurrentIndex(int index)
 {
     if (index < 0 || index >= m_queue.size()) return;
     m_currentIndex = index;
+    m_pendingSeek = 0;
     emit mediaChanged();
     emitRequest(index);
 }
@@ -380,6 +503,7 @@ void PlayerController::next()
         break;
     }
     m_currentIndex = nextIndex;
+    m_pendingSeek = 0;
     emit mediaChanged();
     emitRequest(nextIndex);
 }
@@ -391,6 +515,7 @@ void PlayerController::previous()
     int prev = m_currentIndex - 1;
     if (prev < 0) prev = m_mode == 0 ? 0 : m_queue.size() - 1;
     m_currentIndex = prev;
+    m_pendingSeek = 0;
     emit mediaChanged();
     emitRequest(prev);
 }

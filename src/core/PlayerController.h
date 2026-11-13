@@ -13,6 +13,8 @@
 
 #include "Types.h"
 
+class QTimer;
+
 namespace Furui {
 
 class PlayerController : public QObject {
@@ -45,6 +47,14 @@ public:
     bool playing() const;
     qint64 position() const;
     qint64 duration() const;
+
+    // ---- 启动续播 ----
+    // 把队列 / 当前曲目 / 播放位置 / 是否在播写入本地设置；每 5 秒、切歌、
+    // 播放状态变化与退出时都会落盘，Android 被系统杀进程也能续上。
+    void saveState();
+    // 启动时从本地设置恢复上一次的队列与位置；若上次正在播则自动续播并跳到原位置。
+    // 由 AppController 在信号连接完成后调用（此时 requestPlay 已被接住）。
+    void restoreState();
 
     int mode() const { return m_mode; }
     void setMode(int mode);
@@ -102,6 +112,10 @@ private:
     // 每次换歌递增：迟到的带 headers 下载结果不能盖掉新歌
     quint64 m_playGen = 0;
     bool m_headerRetry = false;
+    // 恢复续播时要跳到的时间点（毫秒）；媒体加载完成（LoadedMedia）后应用一次并清零。
+    // 只在 restoreState 设置，用户切歌时会清掉，避免影响后续歌曲。
+    qint64 m_pendingSeek = 0;
+    QTimer *m_saveTimer = nullptr;
 };
 
 } // namespace Furui
