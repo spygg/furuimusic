@@ -316,7 +316,8 @@ AppController::AppController(QObject *parent)
     connect(ScriptSourceManager::instance(), &ScriptSourceManager::message,
             this, [this](const QString &id, bool ok, const QString &text) {
                 emit scriptSourceMessage(id, ok, text);
-                emit toast(text);
+                // 成功走普通提示、失败走红条：一眼分得清，不靠读长句子
+                emit notify(text, ok ? QStringLiteral("info") : QStringLiteral("error"));
             });
 
     syncQueueModel();
@@ -827,9 +828,12 @@ void AppController::onPlayerError(const QString &msg)
     // d->inFallback 为 true 表示正处于上一次换源的解析过程中或已成功换源正在播放，
     // 不再二次触发；只有用户主动切歌（resolveAndPlay）才会清掉它。
     Song song = d->currentSong;
+    // QMediaPlayer 的错误原文（"Error transferring http://... - server replied ..."）
+    // 又长又没信息量：状态栏留给排查，提示只保留一句，免得糊满屏幕
+    const QString brief = QStringLiteral("播放失败");
     if (song.title.isEmpty() || d->inFallback) {
         setStatus(msg);
-        emit toast(msg);
+        emit toast(brief);
         return;
     }
     d->inFallback = true;
@@ -837,7 +841,7 @@ void AppController::onPlayerError(const QString &msg)
     // 跳过：原平台（它已失败）+ 本次换源流程里已经试过的候选源。
     const QStringList exclude = QStringList() << song.source << d->triedFallback.values();
     SourceManager::instance()->resolveAlternate(song, exclude, d->quality,
-        [this, gen, msg, song](const Playable &r) {
+        [this, gen, msg, song, brief](const Playable &r) {
             if (gen != d->fallbackGen) return;     // 期间用户已切到别的歌，丢弃迟到结果
             if (r.ok) {
                 d->triedFallback.insert(r.source);
@@ -864,7 +868,7 @@ void AppController::onPlayerError(const QString &msg)
             // 所有候选源都失败：终止换源，原样提示播放失败。
             d->inFallback = false;
             setStatus(msg);
-            emit toast(msg);
+            emit toast(brief);
         });
 }
 
@@ -1170,8 +1174,8 @@ void AppController::importScriptSource(const QString &url)
 {
     ScriptSourceManager::instance()->importUrl(url, [this](bool ok, const QString &message) {
         emit scriptSourcesChanged();
-        emit toast(ok ? QStringLiteral("在线音源：") + message
-                      : QStringLiteral("在线音源导入失败：") + message);
+        // message 已经是「音源「X」可用 / 不可用（原因）」的短句，别再套前缀
+        emit notify(message, ok ? QStringLiteral("success") : QStringLiteral("error"));
     });
 }
 
@@ -1179,7 +1183,7 @@ void AppController::updateScriptSource(const QString &id)
 {
     ScriptSourceManager::instance()->update(id, [this](bool ok, const QString &message) {
         emit scriptSourcesChanged();
-        emit toast((ok ? QStringLiteral("音源已更新：") : QStringLiteral("更新失败：")) + message);
+        emit notify(message, ok ? QStringLiteral("success") : QStringLiteral("error"));
     });
 }
 
@@ -1199,14 +1203,14 @@ void AppController::checkScriptSource(const QString &id)
 {
     ScriptSourceManager::instance()->check(id, [this](bool ok, const QString &message) {
         emit scriptSourcesChanged();
-        emit toast((ok ? QStringLiteral("检查通过：") : QStringLiteral("检查失败：")) + message);
+        emit notify(message, ok ? QStringLiteral("success") : QStringLiteral("error"));
     });
 }
 
 void AppController::checkAllScriptSources()
 {
     ScriptSourceManager::instance()->checkAll();
-    emit toast(QStringLiteral("正在逐个检查已启用的在线音源…"));
+    emit toast(QStringLiteral("正在检查音源…"));
 }
 
 } // namespace Furui

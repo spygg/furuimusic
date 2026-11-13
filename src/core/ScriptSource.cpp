@@ -24,15 +24,14 @@ namespace {
 // pdone/lx-music-source 在线导入地址（README 测试可用至 2026-11-06）。
 // 同一脚本给多条镜像（加速站可达性随时变化，依次回退，成功即用）；
 // 仅首次启动预置下载，用户在设置页删除后不再补回（记入 builtinScriptRemoved）。
+// 注意：六音（sixyin）已从内置列表移除——脚本自身声明「已关闭，请去
+// www.sixyin.com 下载最新版」，且是 333 KB 的混淆代码，内置 JS 引擎解析时
+// 直接报「语法错误」，留着只会每次启动刷一条报错。
 struct BuiltinSource {
     const char *name;
     const char *mirrors[4];
 };
 const BuiltinSource kBuiltinSources[] = {
-    { u8"六音",   { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/sixyin/latest.js",
-                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/sixyin/latest.js",
-                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/sixyin/latest.js",
-                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/sixyin/latest.js" } },
     { u8"Huibq",  { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js",
                     "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js",
                     "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js",
@@ -231,6 +230,23 @@ bool ScriptSourceManager::isBuiltinUrl(const QString &url)
 
 void ScriptSourceManager::seedBuiltinSources()
 {
+    // 内置源自动预置要「安静且不折腾」：
+    //   · 全程 silent，成功失败都不弹提示（失败原因留在音源条目的 errorMsg 里）；
+    //   · 失败源（脚本停更 / 镜像被墙 / 语法与内置 JS 引擎不兼容）不能每次启动
+    //     都重下 4 条镜像再报错——那就是纯粹的骚扰。已有一个可用源时最多每天
+    //     自动重试一次；一个都没有（例如冷启动没网）时 5 分钟后允许再试。
+    //   用户随时可以在设置页对单个音源手动「更新」。
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 lastSeed = Settings::get(QStringLiteral("builtinSeedAt")).toLongLong();
+    bool haveAnyBuiltin = false;
+    for (const Item &it : m_items) {
+        if (isBuiltinUrl(it.url)) { haveAnyBuiltin = true; break; }
+    }
+    const qint64 minGap = haveAnyBuiltin ? 24LL * 3600 * 1000 : 5LL * 60 * 1000;
+    if (lastSeed > 0 && now - lastSeed < minGap)
+        return;
+    Settings::set(QStringLiteral("builtinSeedAt"), now);
+
     const QStringList removed = Settings::get(QStringLiteral("builtinScriptRemoved"))
                                     .toStringList();
     for (const BuiltinSource &b : kBuiltinSources) {
@@ -241,7 +257,7 @@ void ScriptSourceManager::seedBuiltinSources()
             urls << u;
             if (removed.contains(u)) { skip = true; continue; }
             // 已有可用条目（ok/pending/disabled）→ 该源已就位；error 条目是
-            // 上次启动回退链留下的坏镜像产物，本次清掉并重新走回退
+            // 上次回退链留下的坏镜像产物，本次清掉并重新走回退
             const Item it = m_items.value(scriptIdForUrl(u));
             if (it.id.isEmpty()) continue;
             if (it.status == QLatin1String("error")) {
@@ -262,12 +278,13 @@ void ScriptSourceManager::importWithFallback(const QStringList &urls, int index)
 {
     if (index >= urls.size()) return;
     QPointer<ScriptSourceManager> self(this);
+    // silent：自动预置属于后台行为，成功失败都不弹提示（失败细节留在音源列表里）
     importUrl(urls.at(index), [self, urls, index](bool ok, const QString &) {
         if (ok || !self) return;
         QTimer::singleShot(0, self.data(), [self, urls, index] {
             if (self) self->importWithFallback(urls, index + 1);
         });
-    });
+    }, true);
 }
 
 QVariantMap ScriptSourceManager::itemToVariant(const Item &item) const
@@ -466,7 +483,9 @@ void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistR
     meta.insert(QStringLiteral("rawScript"), item.script);
 
     QPointer<ScriptSourceManager> self(this);
-    engine->start(item.script, meta, [self, id, cb, persistResult](const ScriptInitResult &r) {
+    // 提示里只用名字：条目可能在初始化过程中被删除，先拷一份
+    const QString srcName = item.name.isEmpty() ? id : item.name;
+    engine->start(item.script, meta, [self, id, cb, persistResult, srcName](const ScriptInitResult &r) {
         ScriptSourceManager *mgr = self.data();
         if (!mgr) return;
         mgr->m_starting.remove(id);
@@ -493,20 +512,12 @@ void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistR
         }
         emit mgr->changed();
 
+        // 提示统一短句（参考洛雪的轻提示）：成功只在用户显式操作（导入/更新/
+        // 检查，带 cb）时提示一次；搜索/播放时引擎在后台自动拉起，不是用户动作，
+        // 不该刷屏。失败只报类型，完整错误文本留在 item.errorMsg（设置页可查）。
         QString text;
         if (r.ok) {
-            QStringList caps;
-            for (const ScriptSourceInfo &s : r.sources) {
-                QStringList acts;
-                if (s.actions.contains(QStringLiteral("search"))) acts << QStringLiteral("搜索");
-                if (s.actions.contains(QStringLiteral("musicUrl"))) acts << QStringLiteral("取链");
-                if (s.actions.contains(QStringLiteral("lyric"))) acts << QStringLiteral("歌词");
-                caps << QStringLiteral("%1(%2): %3")
-                            .arg(s.name.isEmpty() ? s.key : s.name, s.key,
-                                 acts.isEmpty() ? QStringLiteral("无") : acts.join(QLatin1Char('+')));
-            }
-            text = QStringLiteral("初始化成功") +
-                   (caps.isEmpty() ? QString() : QStringLiteral("：") + caps.join(QStringLiteral("；")));
+            text = QStringLiteral("音源「%1」可用").arg(srcName);
         } else {
             const QString typeName = [&r] {
                 if (r.errorType == QLatin1String("syntax")) return QStringLiteral("语法错误");
@@ -516,9 +527,10 @@ void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistR
                 if (r.errorType == QLatin1String("unsupported")) return QStringLiteral("缺少宿主能力");
                 return QStringLiteral("运行错误");
             }();
-            text = QStringLiteral("%1：%2").arg(typeName, r.errorMsg);
+            text = QStringLiteral("音源「%1」不可用（%2）").arg(srcName, typeName);
         }
-        emit mgr->message(id, r.ok, text);
+        if (!r.ok || cb)
+            emit mgr->message(id, r.ok, text);
         if (cb) cb(r.ok, text);
 
         const QVector<std::function<void(bool)>> waiters = mgr->m_waiters.take(id);
@@ -546,14 +558,14 @@ void ScriptSourceManager::ensureEngine(const QString &id, std::function<void(boo
     startEngine(*item, {}, true);
 }
 
-void ScriptSourceManager::importUrl(const QString &url, DoneCallback cb)
+void ScriptSourceManager::importUrl(const QString &url, DoneCallback cb, bool silent)
 {
     const QString trimmed = url.trimmed();
     const QUrl target(trimmed);
     if (!target.isValid() || target.scheme().isEmpty()
         || !(target.scheme() == QLatin1String("http") || target.scheme() == QLatin1String("https"))) {
-        const QString msg = QStringLiteral("请输入 http/https 开头的在线脚本地址");
-        emit message(QString(), false, msg);
+        const QString msg = QStringLiteral("请输入 http/https 开头的脚本地址");
+        if (!silent) emit message(QString(), false, msg);
         if (cb) cb(false, msg);
         return;
     }
@@ -561,8 +573,8 @@ void ScriptSourceManager::importUrl(const QString &url, DoneCallback cb)
     // 确需内网/自建 HTTP 源时设 FURUI_SCRIPT_ALLOW_HTTP=1 显式放开。
     static const bool allowHttp = qEnvironmentVariableIsSet("FURUI_SCRIPT_ALLOW_HTTP");
     if (target.scheme() == QLatin1String("http") && !allowHttp) {
-        const QString msg = QStringLiteral("在线脚本仅允许 https 地址（如需 http 请设 FURUI_SCRIPT_ALLOW_HTTP=1）");
-        emit message(QString(), false, msg);
+        const QString msg = QStringLiteral("在线脚本仅允许 https 地址");
+        if (!silent) emit message(QString(), false, msg);
         if (cb) cb(false, msg);
         return;
     }
@@ -573,32 +585,39 @@ void ScriptSourceManager::importUrl(const QString &url, DoneCallback cb)
 
     QPointer<ScriptSourceManager> self(this);
     HttpClient::instance()->request(QStringLiteral("GET"), target, headers, QByteArray(),
-        [self, trimmed, cb](const HttpClient::Reply &r) {
+        [self, trimmed, cb, silent](const HttpClient::Reply &r) {
             ScriptSourceManager *mgr = self.data();
             if (!mgr) return;
+            // 提示统一走短句（参考洛雪的轻提示）：完整原因写进 item.errorMsg，
+            // 在设置页的音源列表里看，不把整段异常糊到屏幕上
             if (!r.ok) {
-                const QString type = classifyNetworkError(r.error, r.status);
-                const QString msg = QStringLiteral("下载失败（%1）：%2").arg(type, r.error);
-                emit mgr->message(QString(), false, msg);
-                if (cb) cb(false, msg);
+                const QString msg = QStringLiteral("下载失败（%1）")
+                                        .arg(classifyNetworkError(r.error, r.status));
+                if (!silent) emit mgr->message(QString(), false, msg);
+                if (cb) cb(false, msg + QStringLiteral("：") + r.error);
                 return;
             }
             if (r.body.trimmed().isEmpty()) {
                 const QString msg = QStringLiteral("下载到的脚本为空");
-                emit mgr->message(QString(), false, msg);
+                if (!silent) emit mgr->message(QString(), false, msg);
                 if (cb) cb(false, msg);
                 return;
             }
             if (r.body.size() > 2 * 1024 * 1024) {
                 const QString msg = QStringLiteral("脚本超过 2 MB，已拒绝载入");
-                emit mgr->message(QString(), false, msg);
+                if (!silent) emit mgr->message(QString(), false, msg);
                 if (cb) cb(false, msg);
                 return;
             }
-            const QByteArray head = r.body.left(256).trimmed().toLower();
-            if (r.body.contains('\0') || head.startsWith("<!doctype html") || head.startsWith("<html")) {
-                const QString msg = QStringLiteral("下载内容不是 JavaScript（疑似 HTML/二进制），已拒绝载入");
-                emit mgr->message(QString(), false, msg);
+            // 加速站被限流/命中错误页时经常回 HTML：去掉 UTF-8 BOM 与前导空白后
+            // 首个字符是 '<' 就一律按「不是脚本」拒掉，否则会被 JS 引擎当代码执行，
+            // 报出一句莫名其妙的「语法错误」
+            QByteArray head = r.body;
+            if (head.startsWith("\xEF\xBB\xBF")) head = head.mid(3);
+            head = head.trimmed().toLower();
+            if (r.body.contains('\0') || head.startsWith('<')) {
+                const QString msg = QStringLiteral("下载内容不是脚本（疑似网页），已取消");
+                if (!silent) emit mgr->message(QString(), false, msg);
                 if (cb) cb(false, msg);
                 return;
             }
@@ -614,22 +633,23 @@ void ScriptSourceManager::importUrl(const QString &url, DoneCallback cb)
             // 完整性可追溯：同一 URL 再次导入时若指纹变化，明确提示用户复核来源
             const Item *previous = mgr->find(item.id);
             if (previous && !previous->hash.isEmpty() && previous->hash != item.hash) {
-                emit mgr->message(item.id, true,
-                    QStringLiteral("注意：脚本内容相对上次导入已变化（sha256 %1 → %2），请确认来源可信")
-                        .arg(previous->hash.left(8), item.hash.left(8)));
+                if (!silent) {
+                    emit mgr->message(item.id, true,
+                        QStringLiteral("脚本内容已变化，请确认来源可信"));
+                }
             }
             mgr->m_items.insert(item.id, item);
             mgr->persist(item);
             emit mgr->changed();
-            emit mgr->message(item.id, true, QStringLiteral("已下载并保存：") + item.name);
+            if (!silent)
+                emit mgr->message(item.id, true, QStringLiteral("已添加音源「%1」").arg(item.name));
 
             Item snapshot = mgr->m_items.value(item.id);
-            mgr->startEngine(snapshot, [cb, mgr](bool ok, const QString &msg) {
+            mgr->startEngine(snapshot, [cb, mgr, silent](bool ok, const QString &msg) {
                 emit mgr->changed();
                 if (cb) {
                     cb(ok, ok ? QStringLiteral("导入成功：") + msg
-                              : QStringLiteral("已保存但当前不可用：") + msg
-                                    + QStringLiteral("（可在列表中检查/更新/删除）"));
+                              : QStringLiteral("已保存但当前不可用：") + msg);
                 }
             }, true);
         }, 30000, true);

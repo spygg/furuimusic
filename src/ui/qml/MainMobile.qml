@@ -129,7 +129,9 @@ Item {
             color: cCard
             border.color: cLine
             border.width: 1
+            // 还没选中任何一首歌时整条隐藏：空胶囊占着 58dp 高度只是噪音
             visible: root.pageIndex !== 1 && root.pageIndex !== 4
+                     && app.currentTitle.length > 0
 
             // 底部内嵌细进度（胶囊内缩 14，避免圆角处溢出）
             Rectangle {

@@ -293,8 +293,10 @@ Item {
 
         PlayBar {
             Layout.fillWidth: true
-            // 播放页与 MV 页自带同一套控件，常驻栏让位（否则同屏两套进度/音量）
+            // 播放页与 MV 页自带同一套控件，常驻栏让位（否则同屏两套进度/音量）；
+            // 还没开始播放时也整条隐藏，不再占着一行空白栏
             visible: root.pageIndex !== 1 && root.pageIndex !== 4
+                     && app.currentTitle.length > 0
             onOpenPlayer: root.pageIndex = 1
             onOpenSettings: root.pageIndex = 3
             onToggleQueue: root.queueOpen = !root.queueOpen

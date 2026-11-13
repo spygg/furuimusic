@@ -11,10 +11,10 @@ Item {
     property string message: ""
     // info / success / error / warning
     property string kind: "info"
-    property int autoHideMs: 2800
+    property int autoHideMs: 2400
     property bool opened: false
 
-    width: Math.min(440, Math.max(220, (parent ? parent.width : 440) - 32))
+    width: Math.min(420, Math.max(200, (parent ? parent.width : 420) - 32))
     height: card.height + 12
     opacity: root.opened ? 1 : 0
     // opacity 归零后不再接收鼠标事件，避免挡住底部播放栏
@@ -102,7 +102,9 @@ Item {
                 color: theme.text
                 font.pixelSize: theme.fontMd
                 wrapMode: Text.Wrap
-                maximumLineCount: 3
+                // 参考洛雪的轻提示：最多两行，长文案截断。整段异常（HTTP 错误、
+                // 脚本报错）留给状态栏与设置页，不该糊在屏幕上
+                maximumLineCount: 2
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
             }
@@ -138,7 +140,13 @@ Item {
     }
 
     function show(msg, type) {
-        root.message = msg
+        // 统一洗一遍：去掉换行/制表符、压掉连续空白、超长截断，
+        // 保证任何来源（QMediaPlayer、脚本引擎、HTTP）都只占一两行
+        var s = msg === undefined || msg === null ? "" : String(msg)
+        s = s.replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim()
+        if (s.length > 80)
+            s = s.substring(0, 79) + "…"
+        root.message = s
         root.kind = type && type.length > 0 ? type : "info"
         root.opened = true
         hideTimer.restart()

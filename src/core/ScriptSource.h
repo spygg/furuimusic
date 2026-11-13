@@ -34,8 +34,9 @@ public:
     bool hasSearch() const;
     bool hasMusicUrl() const;
 
-    // url 导入：下载 → 解析元信息 → 落库 → 立即初始化并记录真实状态
-    void importUrl(const QString &url, DoneCallback cb = {});
+    // url 导入：下载 → 解析元信息 → 落库 → 立即初始化并记录真实状态。
+    // silent = 内置音源自动预置用：不弹任何提示，失败也不打扰（用户可在设置页手动重试）
+    void importUrl(const QString &url, DoneCallback cb = {}, bool silent = false);
     // 重新下载并初始化（脚本更新）
     void update(const QString &id, DoneCallback cb = {});
     // 用本地已存的脚本重新初始化（不改 URL）
