@@ -1,7 +1,11 @@
 {
-  "version": "1.4.2",
-  "desc": "修复\n- 扫码登录出码失败（如二维码内容过长）后，旧二维码图片未清除，登录流程误判为出码成功",
+  "version": "1.4.3",
+  "desc": "修复\n- Windows 桌面 Qt5 与 Qt6 构建共用同一份配置文件时，播放队列与播放栏的歌曲信息逐会话叠加乱码（Qt5 的 QSettings 按拉丁编码读取 Qt6 写入的裸 UTF-8），启动时自动修复已损坏的续播队列\n\n其他\n- breakpad 源码入库：自此版本的 CI 构建产物起带崩溃转储能力（v1.4.2 及更早的产物无 minidump）",
   "history": [
+    {
+      "version": "1.4.2",
+      "desc": "修复\n- 扫码登录出码失败（如二维码内容过长）后，旧二维码图片未清除，登录流程误判为出码成功"
+    },
     {
       "version": "1.4.1",
       "desc": "修复\n- 内置浏览器：旧版 WebView2 Runtime 机器上打开即崩溃；Release 下接口检查失效导致的空指针崩溃；Cookie 读取超时后的内存访问错误\n- 看过 MV 后，播放页返回键在「黑屏 MV ↔ 播放页」间死循环\n- 播放缓存键只取 URL 路径导致不同歌曲命中同一缓存（串歌）；防盗链失效时返回的错误页被当作音频永久缓存\n- 音源脚本可触发内存耗尽崩溃或界面永久冻结（缓冲长度夹取与宿主循环上界）\n- 扫码登录二维码内容过长时进程崩溃\n- 跟随系统深色主题在运行期切换不生效\n- 新克隆仓库 qmake 桌面构建失败（breakpad 源码缺失缺守卫）\n\n其他\n- 浏览器前进/后退按钮无历史时灰显，地址栏回车即加载\n- 正式接入 Breakpad 崩溃转储（Windows/Linux 桌面），崩溃写入本地 minidump 并在下次启动提示"
@@ -24,9 +28,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.2/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.2/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.2/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.2/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.3/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.3/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.3/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.3/FuruiMusic-android-arm64-v8a.apk"
   }
 }
