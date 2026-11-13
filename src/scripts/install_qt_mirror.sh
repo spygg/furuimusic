@@ -25,7 +25,7 @@ VERSION=''
 OUTDIR=''
 MIRROR='https://download.qt.io/online/qtsdkrepository'
 # Android=基础 arm64-v8a kit；Multimedia=qt.qt6.*.addons.qtmultimedia（本项目 MV/播放依赖）
-COMPONENTS='Android,Multimedia'
+COMPONENTS='Android,Multimedia,WebView'
 RETRIES=3
 
 while [ $# -gt 0 ]; do
@@ -140,7 +140,17 @@ for c in $(echo "$COMPONENTS" | tr ',' ' '); do
             find "$OUTDIR/$VERSION/android_arm64_v8a" -name 'Qt6MultimediaConfig.cmake' | grep -q . \
                 || { echo "[qt-mirror] ERROR: 未找到 Qt6MultimediaConfig.cmake" >&2; exit 1; }
             ;;
-        *) echo "[qt-mirror] ERROR: 未知组件 '$c'（支持: Android, Multimedia）" >&2; exit 1 ;;
+        WebView)
+            # 内置浏览器（QtWebView）Android 后端：C++ 模块 + 系统 WebView 桥接。
+            # CMakeLists 已把 WebView 设为可选（缺失则降级外部浏览器导入），但这里
+            # 装上能让 Android 发布包保留应用内登录等内置浏览器能力。
+            group="$MIRROR/all_os/android/qt6_$NO_DOTS/qt6_${NO_DOTS}_arm64_v8a"
+            install_group "$group" "qt.qt6.$NO_DOTS.addons.qtwebview.android_arm64_v8a" \
+                "$OUTDIR/$VERSION/android_arm64_v8a"
+            find "$OUTDIR/$VERSION/android_arm64_v8a" -name 'Qt6WebViewConfig.cmake' | grep -q . \
+                || { echo "[qt-mirror] ERROR: 未找到 Qt6WebViewConfig.cmake（内置浏览器将不可用）" >&2; exit 1; }
+            ;;
+        *) echo "[qt-mirror] ERROR: 未知组件 '$c'（支持: Android, Multimedia, WebView）" >&2; exit 1 ;;
     esac
 done
 

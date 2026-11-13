@@ -60,10 +60,18 @@ if(FURUI_BUILD_LEGACY_WIDGETS AND NOT ANDROID)
 endif()
 
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS ${QT_COMPONENTS})
-# QtWebView 只在 Qt 6 有；Qt 5.15.2 MinGW 连模块都没装，内置浏览器自动降级。
+# QtWebView（内置浏览器）是可选功能：Qt 5 没有该模块；CI / 部分发行包未安装
+# qtwebview 模块时，降级为外部浏览器导入（BrowserController 已有兜底），不阻断构建。
+set(FURUI_HAVE_WEBVIEW FALSE)
 if(QT_VERSION_MAJOR GREATER_EQUAL 6)
-    list(APPEND QT_COMPONENTS WebView)
-    set(FURUI_HAVE_WEBVIEW TRUE)
+    find_package(Qt6 QUIET COMPONENTS WebView)
+    if(Qt6WebView_FOUND)
+        list(APPEND QT_COMPONENTS WebView)
+        set(FURUI_HAVE_WEBVIEW TRUE)
+    else()
+        message(WARNING
+            "[webview] 未找到 Qt6 WebView 模块，内置浏览器降级为外部浏览器导入")
+    endif()
 endif()
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS ${QT_COMPONENTS})
 set(QT Qt${QT_VERSION_MAJOR})

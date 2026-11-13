@@ -58,7 +58,7 @@ jobs:
             # 注意 MinGW 工具已从 tools_mingw（只到 810）拆到独立工具名 tools_mingw1310，
             # 旧写法会报 "package 'qt.tools.win64_mingw1310' was not found"
             tools: 'tools_mingw1310,qt.tools.win64_mingw1310'
-            modules: 'qtmultimedia'
+            modules: 'qtmultimedia,qtwebview'
             artifact: FuruiMusic-windows-x64.zip
           # Linux (x86_64)
           - name: Linux (x86_64)
@@ -71,7 +71,7 @@ jobs:
             # 旧 id 会报 "packages ['qt_base', 'qtmultimedia'] were not found"
             arch: linux_gcc_64
             tools: ''
-            modules: 'qtmultimedia'
+            modules: 'qtmultimedia,qtwebview'
             artifact: FuruiMusic-linux-x86_64.AppImage
           # Qt 5.15.2 的旧 macdeployqt 在新 Xcode 下解析 otool 失败，故 macOS 用 Qt 6.8.3；
           # CMake 在 Qt 6 下自动切到 C++17（见 src/CMakeLists.txt）
@@ -84,7 +84,7 @@ jobs:
             arch: clang_64
             tools: ''
             # Qt 6 把 Multimedia 拆成独立模块，基础包不含 Qt6Multimedia
-            modules: 'qtmultimedia'
+            modules: 'qtmultimedia,qtwebview'
             artifact: FuruiMusic-macos-x86_64.zip
     steps:
       - name: Checkout
