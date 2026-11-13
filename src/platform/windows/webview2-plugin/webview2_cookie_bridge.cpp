@@ -14,12 +14,14 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QMetaObject>
+#include <QPointer>
 #include <QString>
 #include <QTimer>
 
 #include <windows.h>
 
 #include <cstring>
+#include <memory>
 #include <mutex>
 
 namespace {
@@ -85,27 +87,56 @@ int furui_webview2_cookies(const wchar_t *url, wchar_t *out, int outChars)
     if (!manager)
         return -1;
 
-    QString result;
+    // GetCookies 的完成回调被 WebView2 持有（AddRef），超时放弃后仍可能在
+    // 任意线程迟到触发。回调若按引用捕获本函数栈变量，就是向已释放的栈帧
+    // 写入 → use-after-free。因此把可变状态放到堆上，由回调与本函数共同
+    // 持有（shared_ptr），用 expired + mutex 串行化，迟到结果直接丢弃。
+    struct GetCookiesState {
+        std::mutex mutex;
+        QString result;
+        QPointer<QEventLoop> loop;   // loop 在栈上，可能先于回调销毁
+        bool expired = false;
+    };
+    const auto state = std::make_shared<GetCookiesState>();
+
     QEventLoop loop;
+    state->loop = &loop;
     QTimer timeout;
     timeout.setSingleShot(true);
-    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    QObject::connect(&timeout, &QTimer::timeout, &loop, [&state] {
+        { std::lock_guard<std::mutex> lock(state->mutex); state->expired = true; }
+        if (state->loop)
+            QMetaObject::invokeMethod(state->loop.data(), &QEventLoop::quit,
+                                      Qt::QueuedConnection);
+    });
     timeout.start(4000);
 
     const HRESULT hr = manager->GetCookies(
             url,
             Microsoft::WRL::Callback<ICoreWebView2GetCookiesCompletedHandler>(
-                    [&result, &loop](HRESULT, ICoreWebView2CookieList *list) -> HRESULT {
-                        result = cookiesToString(list);
-                        // WebView2 回调可能不在 Qt 的线程上，排队退出更安全
-                        QMetaObject::invokeMethod(&loop, &QEventLoop::quit,
-                                                  Qt::QueuedConnection);
+                    [state](HRESULT, ICoreWebView2CookieList *list) -> HRESULT {
+                        {
+                            std::lock_guard<std::mutex> lock(state->mutex);
+                            if (state->expired)
+                                return S_OK;   // 超时已放弃：丢弃结果，不碰栈帧
+                            state->result = cookiesToString(list);
+                        }
+                        // WebView2 回调可能不在 Qt 的线程上，排队退出更安全；
+                        // loop 已销毁时 QPointer 为空，跳过即可
+                        if (state->loop)
+                            QMetaObject::invokeMethod(state->loop.data(), &QEventLoop::quit,
+                                                      Qt::QueuedConnection);
                         return S_OK;
                     }).Get());
     if (FAILED(hr))
         return -1;
 
     loop.exec();
+    QString result;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        result = state->result;
+    }
     if (result.isEmpty())
         return 0;
 

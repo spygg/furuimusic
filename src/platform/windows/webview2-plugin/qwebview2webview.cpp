@@ -285,13 +285,23 @@ void QWebView2WebViewPrivate::initialize(HWND hWnd)
                         &token);
                 Q_ASSERT_SUCCEEDED(hr);
 
+                // ICoreWebView2_22（AddWebResourceRequestedFilterWithRequestSourceKinds）
+                // 需要很新的 WebView2 Runtime；旧机器上 QueryInterface 返回
+                // E_NOINTERFACE 是常态而非断言错误（Q_ASSERT_SUCCEEDED 在 Release
+                // 下是空操作），继续解引用 webview22 必崩。这里降级为仅告警。
                 ComPtr<ICoreWebView2_22> webview22;
                 hr = m_webview->QueryInterface(IID_PPV_ARGS(&webview22));
-                Q_ASSERT_SUCCEEDED(hr);
-                hr = webview22->AddWebResourceRequestedFilterWithRequestSourceKinds(
-                        L"file://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
-                        COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL);
-                Q_ASSERT_SUCCEEDED(hr);
+                if (SUCCEEDED(hr) && webview22) {
+                    hr = webview22->AddWebResourceRequestedFilterWithRequestSourceKinds(
+                            L"file://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+                            COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL);
+                    if (FAILED(hr))
+                        qWarning() << "AddWebResourceRequestedFilterWithRequestSourceKinds failed:"
+                                   << QString::number(hr, 16);
+                } else {
+                    qWarning() << "ICoreWebView2_22 not available (Runtime too old):"
+                               << QString::number(hr, 16);
+                }
                 this->updateWindowGeometry();
                 return S_OK;
             });
@@ -299,11 +309,29 @@ void QWebView2WebViewPrivate::initialize(HWND hWnd)
     auto environmentCallback = Microsoft::WRL::Callback<W2EnvironmentCallback>(
             [hWnd, thisPtr, controllerCallback, this](HRESULT result,
                                                       ICoreWebView2Environment *env) -> HRESULT {
-                env->CreateCoreWebView2Controller(hWnd, controllerCallback.Get());
-                return S_OK;
+                // 未装 WebView2 Runtime / 用户数据目录不可写时 result 失败、env 为空。
+                // 不判空就是空指针解引用崩溃；且同步失败时若不报告，QML 会永久白屏
+                // 而无任何提示。这里向上层发 Failed，让 BrowserWindow 能展示错误。
+                if (FAILED(result) || !env) {
+                    qWarning() << "CreateCoreWebView2Environment failed:"
+                               << QString::number(result, 16);
+                    if (!thisPtr.isNull() && thisPtr->q_ptr)
+                        emit thisPtr->q_ptr->loadingChanged(QWebViewFactory::LoadingInfo::create(
+                                QUrl(), QWebViewLoadingInfo::LoadStatus::Failed,
+                                QStringLiteral("WebView2 Runtime 不可用")));
+                    return FAILED(result) ? result : E_FAIL;
+                }
+                const HRESULT ctrlHr = env->CreateCoreWebView2Controller(hWnd, controllerCallback.Get());
+                if (FAILED(ctrlHr))
+                    qWarning() << "CreateCoreWebView2Controller failed:"
+                               << QString::number(ctrlHr, 16);
+                return ctrlHr;
             });
-    CreateCoreWebView2EnvironmentWithOptions(nullptr, userDataFolder.toStdWString().c_str(),
-                                             nullptr, environmentCallback.Get());
+    const HRESULT envHr = CreateCoreWebView2EnvironmentWithOptions(
+                nullptr, userDataFolder.toStdWString().c_str(), nullptr, environmentCallback.Get());
+    if (FAILED(envHr))
+        qWarning() << "CreateCoreWebView2EnvironmentWithOptions failed:"
+                   << QString::number(envHr, 16);
 }
 
 QWebView2WebViewPrivate::~QWebView2WebViewPrivate()
@@ -322,12 +350,17 @@ QString QWebView2WebViewPrivate::httpUserAgent() const
         hr = settings->QueryInterface(IID_PPV_ARGS(&settings2));
 
         if (settings2) {
-            wchar_t *userAgent;
+            // 出参必须初始化并校验：get_UserAgent 失败时不会写入，不判空就是
+            // 读野指针 + CoTaskMemFree 野指针（Q_ASSERT_SUCCEEDED 在 Release 是空操作）。
+            wchar_t *userAgent = nullptr;
             hr = settings2->get_UserAgent(&userAgent);
-            Q_ASSERT_SUCCEEDED(hr);
-            QString userAgentString(userAgent);
-            CoTaskMemFree(userAgent);
-            return userAgentString;
+            if (SUCCEEDED(hr) && userAgent) {
+                QString userAgentString(userAgent);
+                CoTaskMemFree(userAgent);
+                return userAgentString;
+            }
+            qWarning() << "No http user agent available.";
+            return "";
         }
         qWarning() << "No http user agent available.";
         return "";

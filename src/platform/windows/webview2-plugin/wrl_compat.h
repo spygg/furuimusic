@@ -4,9 +4,10 @@
 // qtwebview-config.h 里 webview_webview2_plugin = -1）。本工程保持 MinGW 工具链，
 // 用 MinGW 自行编译同一个插件源码，因此需要自己把 lambda 包成 COM 回调对象。
 //
-// 说明：QueryInterface 对任何 IID 都返回自身。WebView2 只会对回调对象查询
-// IUnknown / 该回调接口本身并调用 Invoke，返回自身指针是安全的，也避免了
-// MinGW 下 MIDL_INTERFACE 的 __uuidof 差异。
+// 说明：QueryInterface 对 IUnknown 与本回调接口自身返回自身指针；对 IAgileObject
+// 显式返回 E_NOINTERFACE（避免被误判 free-threaded 后在非 UI 线程 Invoke），
+// 其余 IID 同样返回自身指针。WebView2 只会对回调对象查询这些接口并调用 Invoke，
+// 引用计数为原子操作，允许跨线程 AddRef/Release。
 
 #ifndef FURUI_WRL_COMPAT_H
 #define FURUI_WRL_COMPAT_H
@@ -15,14 +16,22 @@
 #include <wrl/client.h>
 #include <webview2.h>
 
+#include <atomic>
 #include <functional>
 #include <utility>
 
 #include <QtCore/QtGlobal>
 
+// Q_ASSERT_SUCCEEDED 在 Release（QT_NO_DEBUG）下展开为空。它只适合「对象已验证
+// 有效、调用不可能失败」的场景；WebView2 接口的可用性取决于用户机器的 Runtime
+// 版本（如 ICoreWebView2_22 需要很新的 Runtime），QueryInterface 失败是常态而非
+// 断言错误——这类调用点必须改用下面的宏，Release 下同样生效并降级。
 #ifndef Q_ASSERT_SUCCEEDED
 #define Q_ASSERT_SUCCEEDED(hr) Q_ASSERT_X(SUCCEEDED(hr), Q_FUNC_INFO, "HRESULT failed");
 #endif
+// 用于「失败必须处理」的调用点：直接 return 错误码（只能在返回 HRESULT 的
+// 函数 / 回调里用）。
+#define FURUI_CHECK_HR(hr) do { if (FAILED(hr)) return hr; } while (0)
 
 namespace Microsoft {
 namespace WRL {
@@ -78,13 +87,26 @@ CallbackPtr<I> Callback(F &&fn)
             struct Impl final : public IFACE {                                                 \
                 using Signature = RET PARAMS;                                                  \
                 std::function<Signature> callback;                                             \
-                ULONG refs = 1;                                                                \
+                /* WebView2 的事件回调可能从非 UI 线程 AddRef/Release，引用计数必须原子；*/      \
+                /* 非原子计数会被并发递减打穿，提前 delete this 或 double-free。 */             \
+                std::atomic<ULONG> refs{1};                                                    \
                 explicit Impl(std::function<Signature> cb) : callback(std::move(cb)) {}       \
-                HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void **ppv) override         \
+                HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override    \
                 {                                                                              \
                     if (!ppv)                                                                  \
                         return E_POINTER;                                                      \
-                    *ppv = static_cast<IFACE *>(this);                                         \
+                    /* 拒绝 IAgileObject：返回 S_OK 会让 WebView2 认为本回调可跨线程聚合 */       \
+                    /* （free-threaded），从而在非 UI 线程 Invoke STA 语义的对象。 */             \
+                    /* IAgileObject 的 IID 固定（COM 全局唯一），这里硬编码比对。 */             \
+                    static const IID kAgileObjectIid = {                                       \
+                        0x94ea2b94, 0xe9cc, 0x49e0,                                            \
+                        {0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90}};                     \
+                    if (riid == kAgileObjectIid)                                               \
+                        return E_NOINTERFACE;                                                  \
+                    if (riid == IID_IUnknown)                                                  \
+                        *ppv = static_cast<IUnknown *>(static_cast<IFACE *>(this));            \
+                    else                                                                       \
+                        *ppv = static_cast<IFACE *>(this);                                     \
                     AddRef();                                                                  \
                     return S_OK;                                                               \
                 }                                                                              \
