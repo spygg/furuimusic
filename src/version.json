@@ -1,7 +1,11 @@
 {
-  "version": "1.4.0",
-  "desc": "新增\n- 内置在线音源：首次启动自动预置洛雪音乐（LX 脚本协议）整理的七套音源（六音 / Huibq / Fish / 洛雪LX / 长青 / 幻音 / 星海），每套带多条加速镜像自动回退，成功即用，无需手动导入\n\n优化\n- 设置页精简：移除实际不使用的「自定义音源 / 本地音源目录 / 下载目录 / 代理 / 超时 / 账号API / 网易云IP」配置项，仅保留外观、音质与开放API",
+  "version": "1.4.1",
+  "desc": "修复\n- 内置浏览器：旧版 WebView2 Runtime 机器上打开即崩溃；Release 下接口检查失效导致的空指针崩溃；Cookie 读取超时后的内存访问错误\n- 看过 MV 后，播放页返回键在「黑屏 MV ↔ 播放页」间死循环\n- 播放缓存键只取 URL 路径导致不同歌曲命中同一缓存（串歌）；防盗链失效时返回的错误页被当作音频永久缓存\n- 音源脚本可触发内存耗尽崩溃或界面永久冻结（缓冲长度夹取与宿主循环上界）\n- 扫码登录二维码内容过长时进程崩溃\n- 跟随系统深色主题在运行期切换不生效\n- 新克隆仓库 qmake 桌面构建失败（breakpad 源码缺失缺守卫）\n\n其他\n- 浏览器前进/后退按钮无历史时灰显，地址栏回车即加载\n- 正式接入 Breakpad 崩溃转储（Windows/Linux 桌面），崩溃写入本地 minidump 并在下次启动提示",
   "history": [
+    {
+      "version": "1.4.0",
+      "desc": "新增\n- 内置在线音源：首次启动自动预置洛雪音乐（LX 脚本协议）整理的七套音源（六音 / Huibq / Fish / 洛雪LX / 长青 / 幻音 / 星海），每套带多条加速镜像自动回退，成功即用，无需手动导入\n\n优化\n- 设置页精简：移除实际不使用的「自定义音源 / 本地音源目录 / 下载目录 / 代理 / 超时 / 账号API / 网易云IP」配置项，仅保留外观、音质与开放API"
+    },
     {
       "version": "1.3.0",
       "desc": "新增\n- 在线检测更新：设置页一键检查，同意后应用内直接下载安装包（Windows/Android），不跳转网页；Android 下载完成自动拉起系统安装器\n- 播放失败自动换源：失败后依次尝试自定义源与其它平台，成功源置顶并跨启动持久化\n\n修复\n- Android 播放 http 直链被系统禁止导致「播放失败」的问题（播放直链统一升级 https）\n- build_android.bat 在 MSYS 环境下 .so 复制静默失败导致打包报错\n\n优化\n- 未登录切换音源平台时，展示该平台默认榜单歌单"
@@ -16,9 +20,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.0/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.0/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.0/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.0/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.1/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.1/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.1/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.1/FuruiMusic-android-arm64-v8a.apk"
   }
 }
