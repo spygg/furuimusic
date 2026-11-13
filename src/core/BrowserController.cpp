@@ -9,7 +9,10 @@
 #include <QVector>
 #include <cstdio>
 
-#if defined(Q_OS_ANDROID)
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+// QJniObject 是 Qt 6 的类（Qt 5 叫 QtAndroidExtras 的 QAndroidJniObject，头文件不同）；
+// 本工程的 Qt 5 Android qmake 链路也要编这个文件，必须加版本守卫，
+// 否则 Qt5 Android 构建在 include 处直接 fatal error（与 UpdateChecker.cpp 同款写法）。
 #include <QJniObject>
 #endif
 

@@ -60,16 +60,28 @@ Item {
                             width: 52
                             height: 34
                             radius: 8
-                            color: Qt.rgba(theme.text.r, theme.text.g, theme.text.b, 0.07)
+                            // 前进/后退按键在 WebView 无可前进/可后退历史时灰显（禁用态）。
+                            // canGoBack / canGoForward 是 WebView 的只读属性，随导航实时变化。
+                            readonly property bool isEnabled: {
+                                const view = webLoader.item
+                                if (!view) return false
+                                if (modelData.action === "back") return view.canGoBack
+                                if (modelData.action === "forward") return view.canGoForward
+                                return true // 刷新始终可用
+                            }
+                            color: isEnabled
+                                ? Qt.rgba(theme.text.r, theme.text.g, theme.text.b, 0.07)
+                                : Qt.rgba(theme.text.r, theme.text.g, theme.text.b, 0.03)
                             Text {
                                 anchors.centerIn: parent
                                 text: modelData.label
-                                color: theme.text
+                                color: isEnabled ? theme.text : theme.mutedText
                                 font.pixelSize: 12
                             }
                             MouseArea {
                                 anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
+                                enabled: isEnabled
+                                cursorShape: isEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                                 onClicked: {
                                     const view = webLoader.item
                                     if (!view) return
@@ -119,7 +131,9 @@ Item {
                     border.color: theme.line
                 }
                 onAccepted: {
-                    if (webLoader.item) webLoader.item.url = browser.url
+                    // 回车即按当前输入加载：navigate() 会规范化网址（补 https://）
+                    // 并发出 urlChanged，WebView 的 `url: browser.url` 绑定随之重新求值，
+                    // 自动跳转到新地址——无需再手动给 WebView.url 赋值（否则会先写回旧地址）。
                     browser.navigate(text.trim())
                 }
             }
