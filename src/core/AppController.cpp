@@ -275,8 +275,7 @@ AppController::AppController(QObject *parent)
     connect(api, &OpenApiServer::stateChanged, this, [this] { emit settingsChanged(); });
     Logger::instance()->setFileEnabled(Settings::boolean(QStringLiteral("logToFile"), false));
     if (Settings::boolean(QStringLiteral("openApi"), false))
-        api->start(Settings::integer(QStringLiteral("openApiPort"), 23330),
-                   Settings::boolean(QStringLiteral("openApiLocalOnly"), false));
+        api->start(Settings::integer(QStringLiteral("openApiPort"), 23330), false);
 
     Library::instance();
     SourceConfig::instance();
@@ -487,8 +486,6 @@ bool AppController::autoToggleSource() const
 QString AppController::searchType() const { return d->searchType; }
 bool AppController::openApiEnabled() const { return OpenApiServer::instance()->running(); }
 QString AppController::openApiAddress() const { return OpenApiServer::instance()->address(); }
-bool AppController::openApiLocalOnly() const
-{ return Settings::boolean(QStringLiteral("openApiLocalOnly"), false); }
 bool AppController::logToFile() const { return Logger::instance()->fileEnabled(); }
 QString AppController::logFilePath() const { return Logger::instance()->filePath(); }
 QString AppController::recentLog(int lines)
@@ -619,7 +616,11 @@ void AppController::openDiscoveryPlaylist(const QString &playlistUid)
     Playlist target;
     for (const Playlist &p : m_discovery->playlists())
         if (p.uid == playlistUid) { target = p; break; }
-    if (target.uid.isEmpty()) { emit toast(QStringLiteral("未找到该榜单")); return; }
+    if (target.uid.isEmpty()) {
+        qWarning().noquote() << "[discovery] playlist not found:" << playlistUid;
+        emit toast(QStringLiteral("未找到该榜单"));
+        return;
+    }
 
     ++d->searchRequestId;
     cancelPendingSearch();
@@ -1163,12 +1164,10 @@ void AppController::setSetting(const QString &key, const QVariant &value)
     else if (key == QLatin1String("searchType")) d->searchType = value.toString();
     else if (key == QLatin1String("proxy")) HttpClient::instance()->setProxyFromSettings();
     else if (key == QLatin1String("logToFile")) Logger::instance()->setFileEnabled(value.toBool());
-    else if (key == QLatin1String("openApi") || key == QLatin1String("openApiPort") ||
-             key == QLatin1String("openApiLocalOnly")) {
+    else if (key == QLatin1String("openApi") || key == QLatin1String("openApiPort")) {
         OpenApiServer *api = OpenApiServer::instance();
         if (Settings::boolean(QStringLiteral("openApi"), false))
-            api->start(Settings::integer(QStringLiteral("openApiPort"), 23330),
-                       Settings::boolean(QStringLiteral("openApiLocalOnly"), false));
+            api->start(Settings::integer(QStringLiteral("openApiPort"), 23330), false);
         else api->stop();
     }
     emit settingsChanged();

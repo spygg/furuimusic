@@ -220,7 +220,10 @@ inline Song mapSong(const QJsonValue &v, const QVariantMap &fields, const QStrin
     s.title    = stringAt(v, fields.value(QStringLiteral("title")).toString());
     s.artist   = stringAt(v, fields.value(QStringLiteral("artist")).toString());
     s.album    = stringAt(v, fields.value(QStringLiteral("album")).toString());
-    s.cover    = fillImageSize(stringAt(v, fields.value(QStringLiteral("cover")).toString()));
+    // 没配 cover 字段时不能拿空路径去取值：stringAt 对空路径会 str(整个对象)，
+    // 返回的其实是 name/title（歌名），封面就变成了一串中文，UI 只能当坏图丢掉。
+    const QString coverPath = fields.value(QStringLiteral("cover")).toString();
+    s.cover    = coverPath.isEmpty() ? QString() : fillImageSize(stringAt(v, coverPath));
     s.albumId  = stringAt(v, fields.value(QStringLiteral("albumId")).toString());
     // 有些平台（QQ 搜索/榜单）响应里根本不给封面字段，只给专辑 mid，
     // 不给 coverTemplate 时网格里全是占位图。模板里的 {albumId} 用官方 CDN 实测可取到图。
@@ -261,7 +264,8 @@ inline Playlist mapPlaylist(const QJsonValue &v, const QVariantMap &fields, cons
     p.type = type;
     p.sourceId = stringAt(v, fields.value(QStringLiteral("id")).toString());
     p.title    = stringAt(v, fields.value(QStringLiteral("title")).toString());
-    p.cover    = fillImageSize(stringAt(v, fields.value(QStringLiteral("cover")).toString()));
+    const QString coverPath = fields.value(QStringLiteral("cover")).toString();
+    p.cover    = coverPath.isEmpty() ? QString() : fillImageSize(stringAt(v, coverPath));
     p.owner    = stringAt(v, fields.value(QStringLiteral("owner")).toString());
     p.count    = stringAt(v, fields.value(QStringLiteral("count")).toString()).toInt();
     if (p.sourceId.isEmpty()) p.sourceId = QString::number(qHash(p.title), 16);

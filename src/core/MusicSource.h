@@ -70,6 +70,10 @@ private:
     QUrl buildUrl(const Endpoint &ep, const QVariantMap &vars, QVariantMap *headers,
                   QByteArray *body) const;
     void requestSongs(const Endpoint &ep, const QVariantMap &vars, SongsCallback cb);
+    // 按 pageLimit 分页补齐：单页上限小于要的数量时循环请求，避免「平台把 rn 砍到 30，
+    // 我们一次性要 150 得到 code:-1 / 0 首」。
+    void requestSongsPaged(const Endpoint &ep, const QVariantMap &vars, int limit, int offset,
+                           SongsCallback cb);
     void requestPlaylists(const Endpoint &ep, const QVariantMap &vars, const QString &type,
                           PlaylistsCallback cb);
     static bool isVipResponse(const QVariantMap &rule, const QJsonValue &root,

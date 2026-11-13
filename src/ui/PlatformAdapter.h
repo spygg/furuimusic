@@ -45,7 +45,7 @@ class PlatformAdapter : public QObject {
     Q_PROPERTY(qreal insetRight READ insetRight NOTIFY insetsChanged)
     Q_PROPERTY(qreal insetBottom READ insetBottom NOTIFY insetsChanged)
     // 触控优先：车机即使跑桌面壳也是手指操作，hover 才有的入口必须常驻可见。
-    // 只按 isMobile 判断会在「Windows 车机主机 + 桌面外壳」下把播放浮钮藏掉。
+    // 桌面端按系统上报的输入设备自动判断（有触摸屏即为真），不再提供手开关。
     Q_PROPERTY(bool touchPrimary READ touchPrimary NOTIFY touchPrimaryChanged)
 
 public:
@@ -99,8 +99,6 @@ public:
 
     // 重新计算安全区边距：窗口尺寸、可见状态、屏幕或 DPR 变化时由 QML 调用
     Q_INVOKABLE void refreshInsets(QQuickWindow *window);
-    // 车机/触屏桌面可显式打开触控优先（手机不需要，恒为开）
-    Q_INVOKABLE void setTouchPrimary(bool on);
 
     // 系统级窗口操作：由 QQmlWindow/QQuickWindow 原生接管，比在 QML 里模拟更稳
     Q_INVOKABLE bool startSystemMove(QQuickWindow *window);

@@ -6,10 +6,21 @@
 #include <QGuiApplication>
 #include <QQuickWindow>
 #include <QScreen>
+#include <QTimer>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QInputDevice>
+#else
+#include <QTouchDevice>
+#endif
 
 namespace Furui {
 
-PlatformAdapter::PlatformAdapter(QObject *parent) : QObject(parent) {}
+PlatformAdapter::PlatformAdapter(QObject *parent) : QObject(parent)
+{
+    // 输入设备列表要等平台插件初始化完才可靠（车机触摸屏常晚于窗口创建被枚举），
+    // 启动后补一次广播，让 QML 里对 touchPrimary 的绑定重新求值。
+    QTimer::singleShot(1200, this, [this] { emit touchPrimaryChanged(); });
+}
 
 bool PlatformAdapter::isMobile() const
 {
@@ -173,19 +184,22 @@ bool PlatformAdapter::touchPrimary() const
 {
     if (isMobile())
         return true;
-    // 桌面无法可靠探测「这台机器其实是触摸屏」，交给设置项：车机 Windows 主机打开后
-    //  hover-only 的入口会常驻显示，触控目标也按 theme.touchMin 放大
-    return Settings::boolean(QStringLiteral("touchMode"), false);
-}
-
-void PlatformAdapter::setTouchPrimary(bool on)
-{
-    if (isMobile())
-        return;
-    if (Settings::boolean(QStringLiteral("touchMode"), false) == on)
-        return;
-    Settings::set(QStringLiteral("touchMode"), on);
-    emit touchPrimaryChanged();
+    // 桌面/车机桌面外壳：直接问系统有没有触摸屏。以前是设置页里的手开关，容易忘了开；
+    // 现在跟随系统自动判断——Windows 触屏一体机、车机主机自动为真，纯鼠标桌面为假。
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const QList<const QInputDevice *> devices = QInputDevice::devices();
+    for (const QInputDevice *dev : devices) {
+        if (dev && dev->type() == QInputDevice::DeviceType::TouchScreen)
+            return true;
+    }
+#else
+    const QList<QTouchDevice *> devices = QTouchDevice::devices();
+    for (const QTouchDevice *dev : devices) {
+        if (dev && dev->type() == QTouchDevice::TouchScreen)
+            return true;
+    }
+#endif
+    return false;
 }
 
 } // namespace Furui

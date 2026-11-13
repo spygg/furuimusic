@@ -199,7 +199,12 @@ void SourceManager::playlistDetail(const Playlist &playlist, SongsCallback cb)
             if (cb) cb(local);
         }
     };
-    if (!s || id.isEmpty()) { finish(QVector<Song>()); return; }
+    if (!s || id.isEmpty()) {
+        qWarning().noquote() << "[source] playlistDetail bailed, source=" << playlist.source
+                             << "id=" << id << "type=" << playlist.type;
+        finish(QVector<Song>());
+        return;
+    }
     if (playlist.type == QLatin1String("user"))
         s->userPlaylistDetail(id, finish);
     else if (playlist.type == QLatin1String("rank"))

@@ -42,6 +42,9 @@ Item {
     property string discoveryTitle: ""
     // 歌单封面卡片墙 / 列表
     property bool gridView: true
+    // 详情曲目正在从平台接口拉取：此时列表为空不等于「没有歌」，
+    // 头部直接显示「0 首」会让人以为榜单是空的
+    property bool detailLoading: false
     // 只有「我的歌单」「发现榜单」和搜索结果有两种排布；收藏/历史/队列本身就是单列曲目列表，
     // 在这些 Tab 上显示切换按钮会是死按钮，直接不展示
     readonly property bool gridToggleAvailable: root.searchMode
@@ -126,13 +129,24 @@ Item {
     }
 
     function openPlaylist(title, uid) {
+        root.detailLoading = true
+        detailTimeout.restart()
         app.loadPlaylist(uid)
         root.openPlaylistTitle = title
     }
 
     function openDiscovery(title, uid) {
+        root.detailLoading = true
+        detailTimeout.restart()
         app.openDiscoveryPlaylist(uid)
         root.discoveryTitle = title
+    }
+
+    // 兜底：接口彻底没回包（网络挂掉/榜单 id 失效）时别让头部一直停在「载入中…」
+    Timer {
+        id: detailTimeout
+        interval: 15000
+        onTriggered: root.detailLoading = false
     }
 
     Connections {
@@ -147,6 +161,8 @@ Item {
         function onSearchStarted() { root.searching = true }
         function onSearchFinished(count, kind) {
             root.searching = false
+            root.detailLoading = false
+            detailTimeout.stop()
             // kind 为空是「榜单/歌单详情」的回包，别把它当成搜索结果显示成「搜索到 N 首」
             if (count >= 0 && kind.length > 0)
                 root.hint = kind === "playlist" ? ("搜索到 " + count + " 个歌单")
@@ -700,7 +716,8 @@ Item {
                                     }
                                     Text {
                                         Layout.fillWidth: true
-                                        text: model.count + " 首 · " + model.sourceName
+                                        text: (model.count > 0 ? model.count + " 首 · " : "")
+                                              + model.sourceName
                                               + (model.owner.length > 0 ? " · " + model.owner : "")
                                         color: cSub
                                         font.pixelSize: theme.fontSm
@@ -743,7 +760,8 @@ Item {
                             width: playlistGrid.cellWidth
                             height: playlistGrid.cellHeight
                             title: model.title
-                            subtitle: model.count + " 首 · " + model.sourceName
+                            subtitle: (model.count > 0 ? model.count + " 首 · " : "")
+                                      + model.sourceName
                                       + (model.owner.length > 0 ? " · " + model.owner : "")
                             cover: model.cover
                             badge: model.sourceName
@@ -795,7 +813,10 @@ Item {
                                 elide: Text.ElideRight
                             }
                             Text {
-                                text: detailList.count + " 首"
+                                text: root.detailLoading && detailList.count === 0
+                                      ? "载入中…"
+                                      : (detailList.count > 0 ? detailList.count + " 首"
+                                                              : "暂无曲目")
                                 color: cSub
                                 font.pixelSize: theme.fontSm
                             }
@@ -836,7 +857,7 @@ Item {
                         EmptyState {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 120
-                            visible: detailList.count === 0
+                            visible: detailList.count === 0 && !root.detailLoading
                             iconName: "music"
                             title: "这个歌单是空的"
                             hint: "可能需要在对应平台登录后刷新歌单"
@@ -1150,7 +1171,10 @@ Item {
                                 elide: Text.ElideRight
                             }
                             Text {
-                                text: discoveryDetail.count + " 首"
+                                text: root.detailLoading && discoveryDetail.count === 0
+                                      ? "载入中…"
+                                      : (discoveryDetail.count > 0 ? discoveryDetail.count + " 首"
+                                                                   : "暂无曲目")
                                 color: cSub
                                 font.pixelSize: theme.fontSm
                             }
@@ -1208,7 +1232,7 @@ Item {
                         EmptyState {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 120
-                            visible: discoveryDetail.count === 0
+                            visible: discoveryDetail.count === 0 && !root.detailLoading
                             iconName: "music"
                             title: "这个榜单暂时没有歌曲"
                             hint: "该平台的公共歌单接口可能不可用，试试其他平台榜单"
@@ -1653,7 +1677,8 @@ Item {
                                             }
                                             Text {
                                                 Layout.fillWidth: true
-                                                text: model.count + " 首 · " + model.sourceName
+                                                text: (model.count > 0 ? model.count + " 首 · " : "")
+                                                      + model.sourceName
                                                       + (model.owner.length > 0 ? " · " + model.owner : "")
                                                 color: cSub
                                                 font.pixelSize: theme.fontSm
@@ -1678,7 +1703,8 @@ Item {
                                     width: searchPlaylistGrid.cellWidth
                                     height: searchPlaylistGrid.cellHeight
                                     title: model.title
-                                    subtitle: model.count + " 首 · " + model.sourceName
+                                    subtitle: (model.count > 0 ? model.count + " 首 · " : "")
+                                              + model.sourceName
                                               + (model.owner.length > 0 ? " · " + model.owner : "")
                                     cover: model.cover
                                     badge: model.sourceName

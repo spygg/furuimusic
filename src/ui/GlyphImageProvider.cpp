@@ -221,12 +221,16 @@ QImage GlyphImageProvider::render(const QString &name, const QColor &color, int 
         line(0.60, 0.38, 0.88, 0.62);
         line(0.88, 0.38, 0.60, 0.62);
     } else if (name == QLatin1String("settings")) {
-        circle(0.5, 0.5, 0.13, false);
-        for (int i = 0; i < 8; ++i) {
-            const qreal a = i * kPi / 4.0;
-            line(0.5 + std::cos(a) * 0.24, 0.5 + std::sin(a) * 0.24,
-                 0.5 + std::cos(a) * 0.36, 0.5 + std::sin(a) * 0.36);
-        }
+        // 两条滑杆（和网页控制台同一套线性图标）。原来的「中心圆 + 八根放射线」在
+        // 18px 下会被看成太阳，跟主题图标 moon/sun 也撞脸。
+        const qreal r = 0.10;
+        const qreal gap = r + 0.015;
+        line(0.17, 0.34, 0.62 - gap, 0.34);
+        line(0.62 + gap, 0.34, 0.84, 0.34);
+        circle(0.62, 0.34, r, false);
+        line(0.17, 0.66, 0.42 - gap, 0.66);
+        line(0.42 + gap, 0.66, 0.84, 0.66);
+        circle(0.42, 0.66, r, false);
     } else if (name == QLatin1String("moon")) {
         circle(0.5, 0.5, 0.34, true);
         p.setCompositionMode(QPainter::CompositionMode_DestinationOut);

@@ -1070,7 +1070,12 @@
             "cover": "pic",
             "duration": "duration",
             "durationScale": 1000
-          }
+          },
+          "headers": {
+            "Referer": "https://www.kuwo.cn/",
+            "csrf": "https://www.kuwo.cn/"
+          },
+          "_note": "wapi 的 /api/www 接口必须带 csrf 头，否则只回 {\"code\":-1}，表现就是榜单点进去 0 首；bangId 即榜单列表里的 sourceid"
         },
         "url": {
           "method": "GET",
@@ -1199,7 +1204,8 @@
           "title": "日语榜",
           "id": "183"
         }
-      ]
+      ],
+      "pageLimit": 30
     },
     {
       "id": "migu",

@@ -7,6 +7,8 @@
 #include "core/QtCompat.h"
 #include <QUrlQuery>
 
+#include <memory>
+
 #include "JsonMapper.h"
 #include "KugouProtocol.h"
 #include "Settings.h"
@@ -151,6 +153,12 @@ void MusicSource::call(const Endpoint &ep, const QVariantMap &vars, ReplyCallbac
     QVariantMap headers;
     QByteArray payload;
     const QUrl url = buildUrl(ep, vars, &headers, &payload);
+    if (qEnvironmentVariableIsSet("FURUI_HTTP_DEBUG")) {
+        QStringList hs;
+        for (auto it = headers.constBegin(); it != headers.constEnd(); ++it)
+            hs << it.key() + '=' + it.value().toString();
+        qWarning().noquote() << "[http]" << ep.method << url.toString() << "headers:" << hs.join("; ");
+    }
     HttpClient::instance()->request(ep.method, url, headers, payload, cb);
 }
 
@@ -179,9 +187,44 @@ void MusicSource::requestSongs(const Endpoint &ep, const QVariantMap &vars, Song
                 Song s = Json::mapSong(v, ep.fields, m_desc.id);
                 if (!s.title.isEmpty()) out << s;
             }
+            // 「一首歌都没有」是最难查的一类问题：把「接口没通」和「回包结构和配置对不上」
+            // 分开记一条，页面上只会看到 0 首，日志里能看到真正原因
+            if (out.isEmpty())
+                qWarning().noquote() << "[source]" << m_desc.id << "songs empty, root="
+                                     << ep.root << "body="
+                                     << QString::fromUtf8(r.body.left(180));
+        } else {
+            qWarning().noquote() << "[source]" << m_desc.id << "songs request failed:"
+                                 << r.error << "status=" << r.status << ep.path;
         }
         if (cb) cb(out);
     });
+}
+
+void MusicSource::requestSongsPaged(const Endpoint &ep, const QVariantMap &vars, int limit,
+                                    int offset, SongsCallback cb)
+{
+    const int cap = m_desc.pageLimit > 0 ? m_desc.pageLimit : limit;
+    if (cap >= limit || limit <= 0) { requestSongs(ep, vars, cb); return; }
+
+    auto acc = std::make_shared<QVector<Song>>();
+    auto stepPtr = std::make_shared<std::function<void()>>();
+    *stepPtr = [this, ep, vars, limit, cap, offset, acc, stepPtr, cb]() {
+        const int done = acc->size();
+        if (done >= limit) { if (cb) cb(*acc); return; }
+        const int take = qMin(cap, limit - done);
+        QVariantMap v = vars;
+        v.insert(QStringLiteral("limit"), QString::number(take));
+        v.insert(QStringLiteral("offset"), QString::number(offset + done));
+        v.insert(QStringLiteral("page"), QString::number((offset + done) / qMax(1, take) + 1));
+        requestSongs(ep, v, [take, acc, stepPtr, cb](const QVector<Song> &songs) {
+            *acc += songs;
+            // 短页说明该平台已到底，不用再翻
+            if (songs.size() < take) { if (cb) cb(*acc); return; }
+            (*stepPtr)();
+        });
+    };
+    (*stepPtr)();
 }
 
 void MusicSource::requestPlaylists(const Endpoint &ep, const QVariantMap &vars,
@@ -280,7 +323,7 @@ void MusicSource::playlistDetail(const QString &id, int limit, int offset, Songs
     v.insert(QStringLiteral("limit"), QString::number(limit));
     v.insert(QStringLiteral("offset"), QString::number(offset));
     v.insert(QStringLiteral("page"), QString::number(offset / qMax(1, limit) + 1));
-    requestSongs(ep, v, cb);
+    requestSongsPaged(ep, v, limit, offset, cb);
 }
 
 void MusicSource::rankDetail(const QString &id, int limit, int offset, SongsCallback cb)
@@ -293,7 +336,7 @@ void MusicSource::rankDetail(const QString &id, int limit, int offset, SongsCall
     v.insert(QStringLiteral("limit"), QString::number(limit));
     v.insert(QStringLiteral("offset"), QString::number(offset));
     v.insert(QStringLiteral("page"), QString::number(offset / qMax(1, limit) + 1));
-    requestSongs(ep, v, cb);
+    requestSongsPaged(ep, v, limit, offset, cb);
 }
 
 bool MusicSource::isVipResponse(const QVariantMap &rule, const QJsonValue &root,

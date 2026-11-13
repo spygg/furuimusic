@@ -123,6 +123,7 @@ static bool parseSources(const QByteArray &data, QVector<SourceDesc> *out, QStri
         s.base    = m.value(QStringLiteral("base")).toString();
         s.enabled = m.value(QStringLiteral("enabled"), true).toBool();
         s.driver  = m.value(QStringLiteral("driver")).toString();
+        s.pageLimit = m.value(QStringLiteral("pageLimit")).toInt();
         s.headers = m.value(QStringLiteral("headers")).toMap();
         s.raw     = m;
         const QVariantMap eps = m.value(QStringLiteral("endpoints")).toMap();

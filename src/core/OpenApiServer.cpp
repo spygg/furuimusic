@@ -436,7 +436,6 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
         o.insert(QStringLiteral("autoToggle"), app->autoToggleSource());
         o.insert(QStringLiteral("openApi"), running());
         o.insert(QStringLiteral("address"), address());
-        o.insert(QStringLiteral("localOnly"), app->openApiLocalOnly());
         o.insert(QStringLiteral("logToFile"), app->logToFile());
         o.insert(QStringLiteral("logPath"), app->logFilePath());
         o.insert(QStringLiteral("appName"), app->appName());
@@ -562,7 +561,9 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
         msg = QStringLiteral("playing result ") + QString::number(index);
     } else if (path == QLatin1String("/open-playlist") ||
                path == QLatin1String("/open-discovery")) {
-        const QString uid = query.queryItemValue(QStringLiteral("id"));
+        // 必须 FullyDecoded：歌单 uid 形如 "qq:4"，网页用 encodeURIComponent 发过来是
+        // "qq%3A4"，默认的 PrettyDecoded 不会解开 %3A，查不到歌单 → 详情永远是 0 首
+        const QString uid = query.queryItemValue(QStringLiteral("id"), QUrl::FullyDecoded);
         if (uid.isEmpty()) {
             respond(socket, 400, QStringLiteral("application/json; charset=utf-8"),
                     "{\"error\":\"missing id\"}");
@@ -581,8 +582,8 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
     } else if (path == QLatin1String("/volume")) {
         app->setVolume(query.queryItemValue(QStringLiteral("value")).toInt());
     } else if (path == QLatin1String("/search")) {
-        app->search(query.queryItemValue(QStringLiteral("keyword")),
-                    query.queryItemValue(QStringLiteral("source")));
+        app->search(query.queryItemValue(QStringLiteral("keyword"), QUrl::FullyDecoded),
+                    query.queryItemValue(QStringLiteral("source"), QUrl::FullyDecoded));
         msg = QStringLiteral("search started");
     } else {
         respond(socket, 404, QStringLiteral("application/json; charset=utf-8"),

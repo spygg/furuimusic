@@ -86,19 +86,6 @@ Item {
                 }
             }
 
-            // 车机/触屏主机跑的常是桌面外壳，但输入是手指：不打开就会丢掉只在 hover 出现的入口
-            RowLayout {
-                visible: platform.isDesktop
-                Layout.fillWidth: true
-                spacing: 8
-                Text { Layout.fillWidth: true; text: "触控优先（车机/触屏）"; color: cText; font.pixelSize: theme.fontMd }
-                Switch {
-                    Layout.preferredHeight: theme.touchMin
-                    checked: platform.touchPrimary
-                    onToggled: platform.setTouchPrimary(checked)
-                }
-            }
-
             Text { Layout.fillWidth: true; text: "音质"; color: cSub; font.pixelSize: 12 }
             RowLayout {
                 Layout.fillWidth: true
@@ -152,29 +139,13 @@ Item {
                 }
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text {
-                    Layout.fillWidth: true
-                    text: "仅本机访问"
-                    color: app.openApiEnabled ? cText : cSub
-                    font.pixelSize: 13
-                }
-                Switch {
-                    checked: app.openApiLocalOnly
-                    enabled: app.openApiEnabled
-                    onToggled: app.setSetting("openApiLocalOnly", checked)
-                }
-            }
-
             Text {
                 Layout.fillWidth: true
                 text: app.openApiEnabled
                       ? ("已开启 · 浏览器打开 " + app.openApiAddress
                          + " 即是本机网页控制台：播放状态、上一/下一首、进度与音量、播放队列，"
-                         + "以及查看并一键复制运行日志")
-                      : "关闭状态。开启后本机开放一个 HTTP 接口，供第三方脚本/工具（如桌面歌词、遥控脚本）读取播放状态与控制播放，与洛雪音乐开放 API 同类；关掉「仅本机访问」后，同一局域网里的手机/平板/电脑也能打开"
+                         + "以及查看并一键复制运行日志；同一局域网里的手机/平板/电脑打开这个地址也能用")
+                      : "关闭状态。开启后本机开放一个 HTTP 接口，供第三方脚本/工具（如桌面歌词、遥控脚本）读取播放状态与控制播放，与洛雪音乐开放 API 同类；同一局域网的手机/平板/电脑也能直接打开"
                 color: cSub
                 font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap

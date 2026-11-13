@@ -400,7 +400,10 @@ inline QByteArray openApiIndexHtml()
     page:'library', tab:'playlists', view:'grid',
     st:{}, settings:null, detailTitle:'', detailFrom:'playlists',
     playlists:[], discovery:[], queue:[], results:[], favs:[], hist:[],
-    lyrics:[], lyricIdx:-1, logShown:false
+    lyrics:[], lyricIdx:-1, logShown:false,
+    // 详情曲目还在从设备端拉取：此时曲目数为 0 不代表「没有歌」，
+    // 直接显示「0 首」会让人以为榜单是空的
+    detailLoading:false
   };
 
   function fmt(ms){
@@ -516,24 +519,33 @@ inline QByteArray openApiIndexHtml()
       if(S.tab === kind) renderLibrary();
     }).catch(function(){});
   }
+  // 设备端拉曲目要连平台接口，慢的时候 2~5 秒；这里按 700ms 轮询最多 18 次（~12s），
+  // 期间头部显示「载入中…」，不要拿 0 首当结果
   function pollResults(times){
     var n = 0;
     (function step(){
       json('/results').then(function(o){
         S.results = (o && o.songs) || [];
-        renderLibrary();
-        if(S.results.length === 0 && ++n < (times || 6)) setTimeout(step, 420);
-      }).catch(function(){});
+        if(S.results.length){ S.detailLoading = false; renderLibrary(); return; }
+        if(++n < (times || 18)){ renderLibrary(); setTimeout(step, 700); }
+        else { S.detailLoading = false; renderLibrary(); }
+      }).catch(function(){
+        if(++n < (times || 18)) setTimeout(step, 700);
+        else { S.detailLoading = false; renderLibrary(); }
+      });
     })();
   }
   function openPlaylist(uid, title, from){
     S.detailTitle = title || '歌单';
     S.detailFrom = from;
     S.results = [];
+    S.detailLoading = true;
     $('#tabResults').classList.remove('hide');
     setTab('results', {keep:true});
     var url = (from === 'discovery' ? '/open-discovery?id=' : '/open-playlist?id=') + encodeURIComponent(uid);
-    api(url).then(function(){ pollResults(10); }).catch(function(){ flash('打开歌单失败'); });
+    api(url).then(function(){ pollResults(18); }).catch(function(){
+      S.detailLoading = false; renderLibrary(); flash('打开歌单失败');
+    });
   }
 
   function songRow(s, i, playPath, playing){
@@ -555,6 +567,12 @@ inline QByteArray openApiIndexHtml()
     });
     return h + '</div>';
   }
+  // 卡片/行的副标题：部分平台（酷我）owner 就是歌单名，重复拼会变成「A · A」
+  function playlistSub(p){
+    var parts = [p.count > 0 ? p.count + ' 首' : '', p.sourceName];
+    if(p.owner && p.owner !== p.name) parts.push(p.owner);
+    return parts.filter(Boolean).join(' · ') || '歌单';
+  }
   function cardGrid(arr, kind){
     if(!arr || !arr.length) return '';
     var h = '<div class="grid">';
@@ -564,8 +582,7 @@ inline QByteArray openApiIndexHtml()
         + '<span class="ph">♪</span>'
         + (p.sourceName ? '<span class="tagpill">' + esc(p.sourceName) + '</span>' : '') + '</div>'
         + '<div class="cname">' + esc(p.name || '未命名歌单') + '</div>'
-        + '<div class="csub">' + esc([p.count > 0 ? p.count + ' 首' : '', p.sourceName, p.owner].filter(Boolean).join(' · ') || '歌单')
-        + '</div></div>';
+        + '<div class="csub">' + esc(playlistSub(p)) + '</div></div>';
     });
     return h + '</div>';
   }
@@ -576,7 +593,7 @@ inline QByteArray openApiIndexHtml()
       h += '<div class="row" data-kind="' + kind + '" data-id="' + esc(p.id) + '" data-title="' + esc(p.name) + '">'
         + '<span class="art">' + (p.cover ? '<img src="' + esc(p.cover) + '" alt="" loading="lazy" onerror="this.remove()">' : '♪') + '</span>'
         + '<span class="meta"><span class="n">' + esc(p.name || '未命名歌单') + '</span>'
-        + '<span class="a">' + esc([p.count > 0 ? p.count + ' 首' : '', p.owner].filter(Boolean).join(' · ') || '歌单') + '</span></span>'
+        + '<span class="a">' + esc(playlistSub(p)) + '</span></span>'
         + '<span class="d">' + esc(p.sourceName || '') + '</span></div>';
     });
     return h + '</div>';
@@ -590,11 +607,14 @@ inline QByteArray openApiIndexHtml()
     var body = '';
     var detailOpen = (S.tab === 'results' && S.detailTitle);
     if(detailOpen){
+      var dcount = S.results.length ? (S.results.length + ' 首')
+                                   : (S.detailLoading ? '载入中…' : '暂无曲目');
       body += '<div class="backbar"><button class="back" id="btnBack">← 返回</button>'
             + '<span class="detailtitle">' + esc(S.detailTitle) + '</span>'
-            + '<span class="detailcount">' + S.results.length + ' 首</span></div>';
+            + '<span class="detailcount">' + dcount + '</span></div>';
       body += S.results.length ? songList(S.results, '/play-result')
-                               : emptyBox('正在加载曲目…', '歌单曲目由设备端拉取，稍等片刻');
+             : (S.detailLoading ? emptyBox('正在加载曲目…', '歌单曲目由设备端拉取，稍等片刻')
+                                : emptyBox('没有读到曲目', '该平台接口这次没返回歌，稍后再试或换一个歌单'));
     } else if(S.tab === 'playlists' || S.tab === 'discovery'){
       var arr = S.tab === 'discovery' ? S.discovery : S.playlists;
       var kind = S.tab;
@@ -615,7 +635,11 @@ inline QByteArray openApiIndexHtml()
     box.innerHTML = body;
     if(detailOpen){
       var back = $('#btnBack');
-      if(back) back.onclick = function(){ setTab(S.detailFrom || 'playlists', {keep:false}); };
+      if(back) back.onclick = function(){
+        S.detailLoading = false;
+        S.results = [];
+        setTab(S.detailFrom || 'playlists', {keep:false});
+      };
     }
     $$('#libBody [data-play]').forEach(function(el){
       el.onclick = function(){
@@ -791,7 +815,7 @@ inline QByteArray openApiIndexHtml()
       $('#setApi').innerHTML = kv({
         '服务状态': o.openApi ? '运行中' : '未开启',
         '访问地址': o.address || '—',
-        '仅本机': o.localOnly ? '是' : '否'
+        '访问范围': '本机与同一局域网'
       });
       $('#addr').textContent = o.address || (location.host || '');
       $('#setLog').innerHTML = kv({

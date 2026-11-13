@@ -66,6 +66,9 @@ struct SourceDesc {
     QString base;
     bool enabled = true;
     QString driver;               // 可选：平台特定解析驱动（如 "qishui" 展平双层嵌套响应）
+    // 单次请求能拿多少条的上限（酷我 wapi 的 rn 超过 30 直接回 code:-1）。
+    // 0 = 不限制；设了以后 MusicSource 会按页循环补齐到调用方要的数量。
+    int pageLimit = 0;
     QVariantMap headers;
     QHash<QString, Endpoint> endpoints;   // search / rank / playlistDetail / url / lyric
     QVariantList defaultBoards;           // 未登录也展示的默认榜单（洛雪式：按平台给默认歌单）
