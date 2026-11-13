@@ -17,10 +17,14 @@ class OpenApiServer : public QObject {
 public:
     static OpenApiServer *instance();
 
-    void start(int port = 23330, bool localOnly = true);
+    void start(int port = 23330, bool localOnly = false);
     void stop();
     bool running() const;
+    // 给用户看的主地址：优先局域网 IP（手机/平板/车机上别的设备能直接打开），
+    // 仅本机访问或找不到局域网地址时回退 127.0.0.1
     QString address() const;
+    QString localAddress() const;
+    QString lanAddress() const;
     int port() const { return m_port; }
 
 signals:
@@ -32,7 +36,8 @@ private:
     void onNewConnection();
     void onReadyRead();
     void handleRequest(QTcpSocket *socket, const QByteArray &request);
-    void respond(QTcpSocket *socket, int code, const QString &contentType, const QByteArray &body);
+    void respond(QTcpSocket *socket, int code, const QString &contentType, const QByteArray &body,
+                 const QByteArray &extraHeaders = QByteArray());
     QByteArray statusJson() const;
     void pushSubscribe();
 
@@ -42,7 +47,7 @@ private:
     QHash<QTcpSocket *, QByteArray> m_buffers;
     QHash<QTcpSocket *, QByteArray> m_origins;
     int m_port = 23330;
-    bool m_localOnly = true;
+    bool m_localOnly = false;
 };
 
 } // namespace Furui

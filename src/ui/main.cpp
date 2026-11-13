@@ -18,7 +18,10 @@
 #include "../core/AppController.h"
 #include "../core/AuthManager.h"
 #include "../core/HttpClient.h"
+#include "../core/Logger.h"
+#include "../core/Settings.h"
 #include "../core/UpdateChecker.h"
+#include "../core/Version.h"
 #include "GlyphImageProvider.h"
 #include "PlatformAdapter.h"
 #include "ThemeManager.h"
@@ -41,6 +44,17 @@ int main(int argc, char *argv[])
     // 设置为空时强制 NoProxy，避免 Android 上系统代理探测返回无效结果时
     // 封面全部报 “Proxy connection refused”。
     Furui::HttpClient::applyApplicationProxyFromSettings();
+
+    // 运行日志：处理器要在门面单例创建前装好，启动期的告警才收得进来。
+    // 是否落盘由设置决定（默认只进内存缓冲，设置页与开放 API 网页都能查看/拷贝）。
+    Furui::Logger::install();
+    Furui::Logger::instance()->setFileEnabled(
+        Furui::Settings::boolean(QStringLiteral("logToFile"), false));
+    Furui::Logger::write(QStringLiteral("I"),
+                         QStringLiteral("启动 %1 v%2（Qt %3）")
+                             .arg(QGuiApplication::applicationName(),
+                                  QString::fromLatin1(FURUI_APP_VERSION),
+                                  QString::fromLatin1(qVersion())));
 
     // Qt 6 在 Windows 默认使用原生样式，会忽略 QML 里自定义的 background/contentItem/handle；
     // 统一固定 Basic 样式，保证 Qt 5 / Qt 6 及各平台外观一致，也让控件完全可定制。

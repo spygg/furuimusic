@@ -46,6 +46,8 @@ CORE_HEADERS += \
     core/PlayerController.h \
     core/AppController.h \
     core/OpenApiServer.h \
+    core/OpenApiWeb.h \
+    core/Logger.h \
     core/Aes128.h \
     core/UserApi.h \
     core/NeteaseCrypto.h \
@@ -76,6 +78,7 @@ CORE_SOURCES += \
     core/PlayerController.cpp \
     core/AppController.cpp \
     core/OpenApiServer.cpp \
+    core/Logger.cpp \
     core/Aes128.cpp \
     core/UserApi.cpp \
     core/NeteaseCrypto.cpp \

@@ -152,12 +152,49 @@ Item {
                 }
             }
 
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Text {
+                    Layout.fillWidth: true
+                    text: "仅本机访问"
+                    color: app.openApiEnabled ? cText : cSub
+                    font.pixelSize: 13
+                }
+                Switch {
+                    checked: app.openApiLocalOnly
+                    enabled: app.openApiEnabled
+                    onToggled: app.setSetting("openApiLocalOnly", checked)
+                }
+            }
+
             Text {
                 Layout.fillWidth: true
                 text: app.openApiEnabled
-                      ? ("已开启，本机服务 " + app.openApiAddress
-                         + "  ·  /status 查询播放状态  /lyric 当前歌词  /play /pause /skip-next 控制")
-                      : "关闭状态。开启后本机开放一个 HTTP 接口，供第三方脚本/工具（如桌面歌词、遥控脚本）读取播放状态与控制播放，与洛雪音乐开放 API 同类"
+                      ? ("已开启 · 浏览器打开 " + app.openApiAddress
+                         + " 即是本机网页控制台：播放状态、上一/下一首、进度与音量、播放队列，"
+                         + "以及查看并一键复制运行日志")
+                      : "关闭状态。开启后本机开放一个 HTTP 接口，供第三方脚本/工具（如桌面歌词、遥控脚本）读取播放状态与控制播放，与洛雪音乐开放 API 同类；关掉「仅本机访问」后，同一局域网里的手机/平板/电脑也能打开"
+                color: cSub
+                font.pixelSize: theme.fontSm
+                wrapMode: Text.Wrap
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Text { Layout.fillWidth: true; text: "写入日志文件"; color: cText; font.pixelSize: 13 }
+                Switch {
+                    checked: app.logToFile
+                    onToggled: app.setSetting("logToFile", checked)
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: app.logToFile
+                      ? ("日志写入 " + app.logFilePath + "（单文件超过 8 MB 自动轮转一份）")
+                      : "关闭状态。开启后把启动、播放失败、音源异常等运行日志写入文件，排查问题时才有据可查；随时可在开放 API 网页里查看并复制最近 400 行"
                 color: cSub
                 font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap

@@ -119,6 +119,11 @@ class AppController : public QObject {
     Q_PROPERTY(QString searchType READ searchType NOTIFY settingsChanged)
     Q_PROPERTY(bool openApiEnabled READ openApiEnabled NOTIFY settingsChanged)
     Q_PROPERTY(QString openApiAddress READ openApiAddress NOTIFY settingsChanged)
+    Q_PROPERTY(bool openApiLocalOnly READ openApiLocalOnly NOTIFY settingsChanged)
+    // 运行日志：默认只进内存缓冲（开放 API 网页可看/拷贝），
+    // 打开 logToFile 后才落盘到 logFilePath
+    Q_PROPERTY(bool logToFile READ logToFile NOTIFY settingsChanged)
+    Q_PROPERTY(QString logFilePath READ logFilePath NOTIFY settingsChanged)
     Q_PROPERTY(QStringList sourceIds READ sourceIds CONSTANT)
     Q_PROPERTY(QStringList sourceNames READ sourceNames CONSTANT)
     Q_PROPERTY(QStringList customSourceIds READ customSourceIds NOTIFY customSourcesChanged)
@@ -184,6 +189,11 @@ public:
     QString searchType() const;
     bool openApiEnabled() const;
     QString openApiAddress() const;
+    bool openApiLocalOnly() const;
+    bool logToFile() const;
+    QString logFilePath() const;
+    // 设置页「复制日志」用：返回最近 lines 行
+    Q_INVOKABLE QString recentLog(int lines = 300);
     QStringList sourceIds() const;
     QStringList sourceNames() const;
     QStringList customSourceIds() const;

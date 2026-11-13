@@ -82,6 +82,8 @@ set(CORE_FILES
     core/PlayerController.h core/PlayerController.cpp
     core/AppController.h core/AppController.cpp
     core/OpenApiServer.h core/OpenApiServer.cpp
+    core/OpenApiWeb.h
+    core/Logger.h core/Logger.cpp
     core/Aes128.h core/Aes128.cpp
     core/UserApi.h core/UserApi.cpp
     core/NeteaseCrypto.h core/NeteaseCrypto.cpp

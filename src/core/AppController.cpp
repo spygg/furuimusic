@@ -15,6 +15,7 @@
 #include "CustomSource.h"
 #include "HttpClient.h"
 #include "Library.h"
+#include "Logger.h"
 #include "OpenApiServer.h"
 #include "PlayerController.h"
 #include "ScriptSource.h"
@@ -38,6 +39,20 @@ static QString extensionForUrl(const QUrl &url)
 }
 
 // ---------------------------------------------------------------- 模型实现
+// 历史数据里有把专辑名/歌名写进 cover 的旧记录（早期解析遗留，也会跟着续播
+// 队列一起持久化）。原样交给 QML 会变成 "Cannot open: qrc:/qml/<歌名>" 的
+// 重复告警，封面也永远是占位图 —— 这里只放行真正的图片地址。
+static QString coverUrlOrEmpty(const QString &cover)
+{
+    const QString c = cover.trimmed();
+    if (c.isEmpty()) return QString();
+    if (c.startsWith(QLatin1String("http://")) || c.startsWith(QLatin1String("https://"))
+        || c.startsWith(QLatin1String("file://")) || c.startsWith(QLatin1String("qrc:/"))
+        || c.startsWith(QLatin1String("image://")) || c.startsWith(QLatin1String("data:")))
+        return c;
+    return QString();
+}
+
 SongListModel::SongListModel(QObject *parent) : QAbstractListModel(parent) {}
 
 int SongListModel::rowCount(const QModelIndex &parent) const
@@ -53,7 +68,7 @@ QVariant SongListModel::data(const QModelIndex &index, int role) const
     case ArtistRole:    return s.artist;
     case AlbumRole:     return s.album;
     case DurationRole:  return s.duration;
-    case CoverRole:     return s.cover;
+    case CoverRole:     return coverUrlOrEmpty(s.cover);
     case SourceRole:    return s.source;
     case SourceNameRole:return SourceConfig::instance()->nameOf(s.source);
     case VipRole:       return s.vip;
@@ -121,7 +136,7 @@ QVariant PlaylistListModel::data(const QModelIndex &index, int role) const
     switch (role) {
     case UidRole:        return p.uid;
     case TitleRole:      return p.title;
-    case CoverRole:      return p.cover;
+    case CoverRole:      return coverUrlOrEmpty(p.cover);
     case CountRole:      return p.count;
     case SourceRole:     return p.source;
     case SourceNameRole: return SourceConfig::instance()->nameOf(p.source);
@@ -258,9 +273,10 @@ AppController::AppController(QObject *parent)
     OpenApiServer *api = OpenApiServer::instance();
     connect(api, &OpenApiServer::toast, this, [this](const QString &msg) { emit toast(msg); });
     connect(api, &OpenApiServer::stateChanged, this, [this] { emit settingsChanged(); });
+    Logger::instance()->setFileEnabled(Settings::boolean(QStringLiteral("logToFile"), false));
     if (Settings::boolean(QStringLiteral("openApi"), false))
         api->start(Settings::integer(QStringLiteral("openApiPort"), 23330),
-                   Settings::boolean(QStringLiteral("openApiLocalOnly"), true));
+                   Settings::boolean(QStringLiteral("openApiLocalOnly"), false));
 
     Library::instance();
     SourceConfig::instance();
@@ -316,6 +332,8 @@ AppController::AppController(QObject *parent)
     connect(ScriptSourceManager::instance(), &ScriptSourceManager::message,
             this, [this](const QString &id, bool ok, const QString &text) {
                 emit scriptSourceMessage(id, ok, text);
+                Logger::write(ok ? QStringLiteral("I") : QStringLiteral("W"),
+                              QStringLiteral("在线音源[%1] %2").arg(id, text));
                 // 成功走普通提示、失败走红条：一眼分得清，不靠读长句子
                 emit notify(text, ok ? QStringLiteral("info") : QStringLiteral("error"));
             });
@@ -443,7 +461,8 @@ bool AppController::accountLogged(const QString &sourceId) const
 
 QString AppController::currentTitle() const { return PlayerController::instance()->current().title; }
 QString AppController::currentArtist() const { return PlayerController::instance()->current().artist; }
-QString AppController::currentCover() const { return PlayerController::instance()->current().cover; }
+QString AppController::currentCover() const
+{ return coverUrlOrEmpty(PlayerController::instance()->current().cover); }
 QString AppController::currentSourceLabel() const { return d->currentSourceLabel; }
 QString AppController::substituteBadge() const { return d->substituteBadge; }
 bool AppController::playing() const { return PlayerController::instance()->playing(); }
@@ -468,6 +487,14 @@ bool AppController::autoToggleSource() const
 QString AppController::searchType() const { return d->searchType; }
 bool AppController::openApiEnabled() const { return OpenApiServer::instance()->running(); }
 QString AppController::openApiAddress() const { return OpenApiServer::instance()->address(); }
+bool AppController::openApiLocalOnly() const
+{ return Settings::boolean(QStringLiteral("openApiLocalOnly"), false); }
+bool AppController::logToFile() const { return Logger::instance()->fileEnabled(); }
+QString AppController::logFilePath() const { return Logger::instance()->filePath(); }
+QString AppController::recentLog(int lines)
+{
+    return Logger::instance()->recentText(lines > 0 ? lines : 300);
+}
 QStringList AppController::sourceIds() const { return SourceConfig::instance()->ids(); }
 QStringList AppController::sourceNames() const { return SourceConfig::instance()->names(); }
 QStringList AppController::customSourceIds() const { return d->customIds; }
@@ -831,6 +858,8 @@ void AppController::onPlayerError(const QString &msg)
     // QMediaPlayer 的错误原文（"Error transferring http://... - server replied ..."）
     // 又长又没信息量：状态栏留给排查，提示只保留一句，免得糊满屏幕
     const QString brief = QStringLiteral("播放失败");
+    Logger::write(QStringLiteral("W"),
+                  QStringLiteral("播放失败：%1 - %2（%3）").arg(song.title, song.artist, msg));
     if (song.title.isEmpty() || d->inFallback) {
         setStatus(msg);
         emit toast(brief);
@@ -860,8 +889,11 @@ void AppController::onPlayerError(const QString &msg)
                 setStatus(r.message.isEmpty()
                               ? QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist)
                               : r.message);
-                emit notify(r.message.isEmpty() ? QStringLiteral("已自动换源继续播放")
-                                              : r.message, QStringLiteral("info"));
+                // 换源成功只写状态栏 / 日志，不再弹提示：像「已由自定义音源「X」替代播放」
+                // 这类信息属于正常链路，弹出来只是噪音（播放条上的替代徽标已经说明了）
+                Logger::write(QStringLiteral("I"),
+                              QStringLiteral("换源成功：%1 - %2 → %3")
+                                  .arg(song.title, song.artist, r.source));
                 emit playerChanged();
                 return;
             }
@@ -1130,12 +1162,13 @@ void AppController::setSetting(const QString &key, const QVariant &value)
     else if (key == QLatin1String("vipSubstitute")) d->vipSubstitute = value.toBool();
     else if (key == QLatin1String("searchType")) d->searchType = value.toString();
     else if (key == QLatin1String("proxy")) HttpClient::instance()->setProxyFromSettings();
+    else if (key == QLatin1String("logToFile")) Logger::instance()->setFileEnabled(value.toBool());
     else if (key == QLatin1String("openApi") || key == QLatin1String("openApiPort") ||
              key == QLatin1String("openApiLocalOnly")) {
         OpenApiServer *api = OpenApiServer::instance();
         if (Settings::boolean(QStringLiteral("openApi"), false))
             api->start(Settings::integer(QStringLiteral("openApiPort"), 23330),
-                       Settings::boolean(QStringLiteral("openApiLocalOnly"), true));
+                       Settings::boolean(QStringLiteral("openApiLocalOnly"), false));
         else api->stop();
     }
     emit settingsChanged();
