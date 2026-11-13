@@ -29,6 +29,12 @@ if(NOT _furui_version_match)
 endif()
 project(FuruiMusic VERSION "${CMAKE_MATCH_1}" LANGUAGES C CXX)
 
+# 启用 ASM：FuruiBreakpad 在 UNIX 分支编译 common/linux/breakpad_getcontext.S
+# （预处理汇编，提供 breakpad_getcontext 符号）。ASM 未启用时 CMake 会把 .S
+# 当成「无法确定语言」的文件排除出构建，链接 FuruiMusic 时才报
+# undefined reference to breakpad_getcontext。各工具链均自带汇编器，无条件启用安全。
+enable_language(ASM)
+
 option(FURUI_BUILD_LEGACY_WIDGETS "构建迁移期 Widgets 旧前端" OFF)
 
 set(CMAKE_CXX_STANDARD 14)
