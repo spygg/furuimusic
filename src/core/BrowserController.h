@@ -74,6 +74,14 @@ public:
     // 所以 document.cookie 那条路在这里不成立）
     Q_INVOKABLE bool looksLoggedIn(const QString &sourceId, const QString &cookie) const;
 
+    // 打开官网登录页之前调用：告诉 WebView2 后端「下一个 WebView 的首帧要先蒙白纱」。
+    //
+    // 为什么需要：官网页面在第一次绘制之后、load 事件之前会闪一下整站外壳
+    // （导航/轮播/播放器），QML 侧只能在 load 之后注入样式，拦不住首帧。
+    // WebView2 后端能在文档创建时（页面脚本之前）注入，闪一下的问题就没了。
+    // 传 false 关闭（覆盖层关闭时调用）。
+    Q_INVOKABLE void setLoginVeil(bool on);
+
 signals:
     void openedChanged();
     void urlChanged();

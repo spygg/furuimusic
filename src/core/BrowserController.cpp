@@ -137,10 +137,15 @@ const char *kLoginCandidatesJs = R"JS(
     if(r.right<0||r.bottom<0||r.left>vw||r.top>vh)return false;
     var st=doc.defaultView.getComputedStyle(e);
     if(st.visibility==='hidden'||st.display==='none')return false;
-    if(parseFloat(st.opacity||'1')===0)return false;
+    // 注意：这里不能检查 opacity —— 咱们的「白纱」就是靠 body * {opacity:0} 把
+    // 整页内容先藏起来的（QML 遮罩盖不住原生子窗口），白纱下所有元素都是
+    // opacity 0，但它们依然可见可点击，opacity 检查会把登录入口全部漏掉
     return true;
   }
-  function small(e){var r=box(e);return r.width<=260&&r.height<=72;}
+  // 入口本身要小（避免点到横幅/大卡片）。高度上限放到 140：QQ 音乐的
+  // .top_login__link 是 32x90（头部整条高 90px），按 72 卡会把真入口误杀，
+  // 结果永远「no-candidate」。真正决定点击位置的是 leafOf() 里的最内层文字节点。
+  function small(e){var r=box(e);return r.width<=260&&r.height<=140;}
   function text(e){return (e.textContent||'').replace(/\s+/g,'');}
   // 登录入口的常见文案（比较前已去掉空白，"登录 / 注册" 也能对上 "登录/注册"）
   var wantWords=['\u767b\u5f55','\u7acb\u5373\u767b\u5f55','\u767b\u5f55/\u6ce8\u518c',
@@ -178,8 +183,8 @@ const char *kLoginCandidatesJs = R"JS(
       }
     }
   }
-  // 专用入口优先（酷我 .reg_text / 酷狗 ._login / 各家 header 里的登录按钮）
-  add(['.reg_text','#loginBtn','[class*=loginBtn]','[class*=login-btn]','[class*=_login]',
+  // 专用入口优先（酷我 .reg_text / 酷狗 ._login / QQ .top_login__link / 各家 header 里的登录按钮）
+  add(['.reg_text','.top_login__link','#loginBtn','[class*=loginBtn]','[class*=login-btn]','[class*=_login]',
        '[class*=header] [class*=login]','[class*=top] [class*=login]',
        '[class*=user] [class*=login]','[class*=nav] [class*=login]']);
   // 文字兜底
@@ -450,6 +455,30 @@ QString BrowserController::loginUrl(const QString &sourceId) const
     return spec ? QString::fromLatin1(spec->url) : QString();
 }
 
+void BrowserController::setLoginVeil(bool on)
+{
+#if defined(Q_OS_WIN) && defined(FURUI_HAVE_WEBVIEW)
+    // 与读 Cookie、真实点击同一条路：插件随 WebView 加载，QLibrary 解析到的
+    // 是同一个 HMODULE（同一路径不会重复加载），全局状态是共享的。
+    const QString plugin = QCoreApplication::applicationDirPath()
+            + QStringLiteral("/plugins/webview/qtwebview_webview2.dll");
+    if (!QFileInfo::exists(plugin))
+        return;
+    QLibrary lib(plugin);
+    if (!lib.load())
+        return;
+    using VeilFn = int (*)(int);
+    auto fn = reinterpret_cast<VeilFn>(lib.resolve("furui_webview2_set_veil"));
+    if (!fn)
+        return;
+    fn(on ? 1 : 0);
+    if (trace())
+        std::fprintf(stderr, "[browser] setLoginVeil(%d)\n", on ? 1 : 0);
+#else
+    Q_UNUSED(on)
+#endif
+}
+
 QString BrowserController::loginCookieNames(const QString &sourceId) const
 {
     const WebLoginSpec *spec = webLoginSpec(sourceId);
@@ -473,8 +502,7 @@ QString BrowserController::loginJs(const QString &sourceId) const
     return spec ? QString::fromLatin1(spec->js) : QString();
 }
 
-bool BrowserController::looksLoggedIn(const QString &sourceId, const QString &cookie) const
-{
+bool BrowserController::looksLoggedIn(const QString &sourceId, const QString &cookie) const{
     const QString names = loginCookieNames(sourceId);
     if (names.isEmpty() || cookie.isEmpty())
         return false;

@@ -12,6 +12,7 @@
 #include "wrl_compat.h"
 
 #include <QCoreApplication>
+#include <QDebug>
 #include <QEventLoop>
 #include <QMetaObject>
 #include <QPointer>
@@ -35,6 +36,61 @@ Microsoft::WRL::ComPtr<ICoreWebView2CookieManager> g_manager;
 std::mutex g_controllerMutex;
 Microsoft::WRL::ComPtr<ICoreWebView2Controller> g_controller;
 HWND g_parentHwnd = nullptr;
+
+// 「登录页白纱」的一次性开关（计数器）：见 webview2_cookie_bridge.h 的说明。
+// 用计数而不是布尔：换平台时旧 WebView 的控制器可能迟到创建（那时 WebView
+// 已经销毁、回调会提前返回，但保险起见按名额计数更稳），布尔会被它吃掉名额，
+// 导致新 WebView 拿不到白纱。
+std::mutex g_veilMutex;
+int g_veilModeCount = 0;
+
+// 白纱脚本：文档创建时（页面任何脚本之前）执行，把整页盖成白底 + 全透明，
+// 只剩「登录区」裁剪完成后才掀开。id 与 QML 侧注入的一致，掀纱时都能被移除。
+QString buildVeilScript()
+{
+    return QStringLiteral(
+            "(function(){try{"
+            // 自检标记：脚本有没有跑、写进 window 供 QML 侧读
+            "window.__furuiVeilRan=1;"
+            "var css='body{background:#fff!important}"
+            "body *{opacity:0!important;transition:none!important;}';"
+            // inject 内部自己兜住异常：文档创建那一刻 document.head /
+            // document.documentElement 都可能还不存在，若让异常冒出去，
+            // 后面注册 DOMContentLoaded 重试的那两行就永远不会执行。
+            "function inject(){try{"
+            "if(document.getElementById('furui-login-veil'))return;"
+            "var host=document.head||document.documentElement;if(!host)return;"
+            "var s=document.createElement('style');s.id='furui-login-veil';"
+            "s.textContent=css;host.appendChild(s);"
+            "}catch(e){window.__furuiVeilErr=String(e);}}"
+            "inject();"
+            "document.addEventListener('DOMContentLoaded',inject);"
+            "window.addEventListener('load',inject);"
+            "}catch(e){window.__furuiVeilErr=String(e);}})();");
+}
+
+// 给指定 WebView 注册白纱脚本（可重复调用，脚本幂等）
+void registerVeilScript(ICoreWebView2 *webview)
+{
+    if (!webview)
+        return;
+    auto handler = Microsoft::WRL::Callback<
+            ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
+            [](HRESULT errorCode, LPCWSTR /*result*/) -> HRESULT {
+                if (FAILED(errorCode))
+                    qWarning() << "AddScriptToExecuteOnDocumentCreated:"
+                               << QString::number(errorCode, 16);
+                return S_OK;
+            });
+    const QString script = buildVeilScript();
+    const HRESULT hr = webview->AddScriptToExecuteOnDocumentCreated(
+            (wchar_t *)script.utf16(), handler.Get());
+    if (FAILED(hr))
+        qWarning() << "AddScriptToExecuteOnDocumentCreated failed:"
+                   << QString::number(hr, 16);
+    else
+        qWarning() << "[webview2] veil script registered";
+}
 
 QString cookiesToString(ICoreWebView2CookieList *list)
 {
@@ -85,6 +141,31 @@ void FuruiRegisterWebViewController(ICoreWebView2Controller *controller, HWND pa
     std::lock_guard<std::mutex> lock(g_controllerMutex);
     g_controller = controller;
     g_parentHwnd = parent;
+}
+
+void FuruiSetLoginVeilMode(bool on)
+{
+    std::lock_guard<std::mutex> lock(g_veilMutex);
+    if (on)
+        ++g_veilModeCount;
+    else
+        g_veilModeCount = 0;
+}
+
+bool FuruiTakeLoginVeilMode()
+{
+    std::lock_guard<std::mutex> lock(g_veilMutex);
+    if (g_veilModeCount <= 0)
+        return false;
+    --g_veilModeCount;   // 一次性：只给下一个创建的控制器
+    return true;
+}
+
+void FuruiRegisterLoginVeilScript(ICoreWebView2 *webview)
+{
+    if (!FuruiTakeLoginVeilMode())
+        return;
+    registerVeilScript(webview);
 }
 
 namespace {
@@ -176,9 +257,17 @@ int furui_webview2_click(double cssX, double cssY, double viewportWidth)
     return 0;
 }
 
+// 打开官网登录页之前调用：让插件在下一个 WebView 的文档创建时就注入白纱，
+// 挡住首帧的站点外壳闪现。传 0 关闭（覆盖层关闭时调用）。
 extern "C" __declspec(dllexport)
-int furui_webview2_cookies(const wchar_t *url, wchar_t *out, int outChars)
+int furui_webview2_set_veil(int on)
 {
+    FuruiSetLoginVeilMode(on != 0);
+    return 0;
+}
+
+extern "C" __declspec(dllexport)
+int furui_webview2_cookies(const wchar_t *url, wchar_t *out, int outChars){
     if (!url || !out || outChars <= 0)
         return -1;
 

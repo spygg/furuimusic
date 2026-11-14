@@ -49,11 +49,20 @@ Item {
     // 官网登录页以整页覆盖层呈现：WebView 是原生子窗口，QML 的 clip 管不住它，
     // 放进可滚动的卡片里会盖住卡片外的内容，所以只让它铺满账号页这一整块
     property bool webLoginActive: false
-    // 本次选中平台是否已经自动弹过一次官网登录页，避免用户关掉后被反复打开
-    property string webLoginShownFor: ""
-    // 换平台的这一次 method 变更不算「用户点了密码 Tab」：进入账号页时先给
-    // 说明卡 + 按钮，别一进来就用网页盖住平台选择
-    property bool switchingSource: false
+
+    // 选中了平台、该平台有官网登录页、本机还没登录 → 官网登录页就是默认视图，
+    // 直接打开，不再让用户先点一下「打开官网登录页」。所有平台一致处理
+    // （网易云/酷我/QQ/酷狗/咪咕/汽水），白纱+裁剪由 WebLoginView 统一收口。
+    function openWebLoginDefault() {
+        if (root.webLoginAvailable && root.selectedSource.length > 0
+                && !root.loggedNow && !root.webLoginActive
+                && browser.loginUrl(root.selectedSource).length > 0) {
+            // 先让 WebView2 后端知道「下一个 WebView 的首帧要先蒙白纱」：
+            // 官网首页会先渲染再被裁剪，中间那一瞬用户会看到导航/播放器闪过去。
+            browser.setLoginVeil(true)
+            root.webLoginActive = true
+        }
+    }
 
     function refreshCounts() {
         root.totalCount = app.accountTotal()
@@ -105,16 +114,10 @@ Item {
 
     onMethodChanged: {
         root.ensureCaptcha()
-        // 用户主动点「密码」Tab 时直接打开该平台官网的真实登录页：本地表单提交会被
-        // 风控（网易云 8821 行为验证码、酷狗人机校验），只有官网页面过得了滑块/短信验证。
-        // 换平台引起的那次 method 变更不弹（root.switchingSource），先让用户看到说明卡。
-        if (!root.switchingSource && root.method === "password" && root.webLoginAvailable
-                && root.selectedSource.length > 0
-                && !root.webLoginActive
-                && root.webLoginShownFor !== root.selectedSource) {
-            root.webLoginShownFor = root.selectedSource
-            root.webLoginActive = true
-        }
+        // 用户点了某个 Tab 说明他想在本地表单操作；若覆盖层没开着（比如被手动
+        // 关掉过），点「密码」Tab 时再拉起官网登录页——本地表单提交会被风控，
+        // 只有官网页面过得了滑块/短信验证
+        root.openWebLoginDefault()
     }
 
     function updateMethods() {
@@ -136,12 +139,16 @@ Item {
         // 换平台回到该平台自己的默认方式（酷狗/咪咕=二维码，网易云=密码）。
         // 清空后 updateMethods() 会落到第一个方式；而登录结果回来时的
         // updateMethods() 不清空，用户当前选的 Tab 得以保留。
-        root.switchingSource = true
         root.method = ""
         root.updateMethods()
-        root.switchingSource = false
         root.refreshCounts()
         root.ensureCaptcha()
+        // 覆盖层里的 WebView 只加载初始 sourceId 的 URL，换平台必须重建
+        // （active false→true 销毁原生窗口再新建），否则还停留在上一个平台的页面
+        root.webLoginActive = false
+        // 该平台有官网登录页且未登录的话，覆盖层直接打开（所有平台一致），
+        // 不用再点一下「打开官网登录页」
+        root.openWebLoginDefault()
     }
 
     Component.onCompleted: {
@@ -159,7 +166,7 @@ Item {
             root.hint = (ok ? "登录成功：" : "登录失败：") + message
             // 8821 / 行为验证码是服务端风控，重试只会更糟；直接指到下面的浏览器登录入口
             if (!ok && (message.indexOf("8821") >= 0 || message.indexOf("行为验证码") >= 0))
-                root.hint += "\n不要用密码反复重试：请拉到本卡片下方，用「打开官网登录」后导入 Cookie。"
+                root.hint += "\n不要用密码反复重试：请切到「密码」用官网登录页完成登录（滑块/短信都能过）。"
             root.hintError = !ok
             app.refreshAccounts()
             root.updateMethods()
@@ -898,8 +905,7 @@ Item {
                                 }
                                 Text {
                                     anchors.centerIn: parent
-                                    text: root.webLoginShownFor === root.selectedSource
-                                          && root.webLoginActive ? "正在官网登录页登录…" : "打开官网登录页"
+                                    text: root.webLoginActive ? "正在官网登录页登录…" : "打开官网登录页"
                                     color: "#FFFFFF"
                                     font.pixelSize: 13
                                     font.bold: true
@@ -907,6 +913,7 @@ Item {
                                 MouseArea {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
+                                    // 关掉覆盖层后想再打开，或自动打开被站点拖住时手动兜底
                                     onClicked: root.webLoginActive = true
                                 }
                             }
@@ -1443,8 +1450,14 @@ Item {
             item.sourceName = Qt.binding(function () {
                 return root.selectedSource.length > 0 ? app.sourceName(root.selectedSource) : ""
             })
-            item.closed.connect(function () { root.webLoginActive = false })
-            item.imported.connect(function () { root.webLoginActive = false })
+            item.closed.connect(function () {
+                root.webLoginActive = false
+                browser.setLoginVeil(false)
+            })
+            item.imported.connect(function () {
+                root.webLoginActive = false
+                browser.setLoginVeil(false)
+            })
         }
     }
 

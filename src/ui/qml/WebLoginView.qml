@@ -40,6 +40,12 @@ Item {
     property bool accountDone: false
     property int accountTries: 0
     property string status: "正在打开官网登录页…"
+    // 「白纱」：官网整页加载 → 裁剪脚本把导航/播放器等收掉，中间有几秒会看到站点
+    // 外壳。WebView 是原生子窗口，QML 遮罩盖不住它，隐藏原生窗口又有渲染恢复的
+    // 风险，所以在页面里注入一层白纱（body 白底 + 所有子元素 opacity:0）：
+    // 布局、懒加载、命中测试全保留（真实点击照常把登录框点开），用户看到的
+    // 只是纯白，直到裁剪成功才掀开。veilLifted 防止重复注入/重复掀。
+    property bool veilLifted: false
 
     // 找到登录区所在的容器，沿祖先链逐层隐藏兄弟节点，只留登录区这一支。
     // 识别顺序：① class/id 里带 login 且足够大的可见容器（取面积最小的那个，最具体）；
@@ -50,6 +56,7 @@ Item {
     // 网易云把内容装在同域名 iframe（#g_iframe）里，命中 iframe 就钻进去再裁，
     // 主文档只留这个 iframe 并让它铺满。
     readonly property string focusJs: "(function(){"
+        + "function box2(e){return e.getBoundingClientRect();}"
         + "function loginish(e){var s=((e.className||'')+' '+(e.id||'')).toLowerCase();"
         + "return /login|layer|modal|dialog|popup|passport|qrcode|signin|sign-in/.test(s);}"
         + "function dialogLike(e){try{var st=e.ownerDocument.defaultView.getComputedStyle(e);"
@@ -72,9 +79,32 @@ Item {
         + "if(r2.width*r2.height>bestA){best=n;bestA=r2.width*r2.height;}}"
         + "n=n.parentElement;}"
         + "return best;}"
+        + "function vis(e){try{var r=e.getBoundingClientRect();"
+        + "if(r.width<8||r.height<8)return false;"
+        + "var st=e.ownerDocument.defaultView.getComputedStyle(e);"
+        // 不看 opacity：白纱就是靠 opacity:0 藏整页的，看了就永远「不可见」
+        + "return st.visibility!=='hidden'&&st.display!=='none';}catch(x){return false;}}"
         + "function probe(doc){var w=doc.defaultView;if(!w)return null;"
+        // ① 密码框：登录表单最可靠的锚点。酷我的登录层盖不满视口，屏幕中心
+        //    命中的还是首页轮播，靠中心采样永远裁不到登录区。
+        + "var pws=doc.querySelectorAll('input[type=password],input[name*=password],"
+        + "input[id*=password],input[placeholder*=\\u5bc6\\u7801]');"
+        + "for(var i=0;i<pws.length;i++){if(!vis(pws[i]))continue;"
+        + "var b0=walkUp(pws[i],doc);if(b0)return b0;}"
+        // ② 二维码 / 图形验证码：扫码登录页的锚点
+        + "var qrs=doc.querySelectorAll('[class*=qrcode],[class*=qr-code],[class*=QRCode],"
+        + "[class*=qr_code],[class*=code],[class*=verify],[class*=captcha],"
+        + "[class*=yanzheng],canvas');"
+        + "for(i=0;i<qrs.length;i++){if(!vis(qrs[i]))continue;"
+        + "var b1=walkUp(qrs[i],doc);if(b1)return b1;}"
+        // ③ 登录层本身（class/id 带 login 关键词、面积够大）
+        + "var lgs=doc.querySelectorAll('[class*=reg_login],[class*=login],[class*=logon],"
+        + "[class*=loginbox],[class*=login_box],[id*=login],[class*=user_login]');"
+        + "for(i=0;i<lgs.length;i++){if(!vis(lgs[i]))continue;"
+        + "var r2=box2(lgs[i]);if(r2.width>=240&&r2.height>=160)return lgs[i];}"
+        // ④ 兜底：屏幕中心采样
         + "var pts=[[0.5,0.5],[0.5,0.3],[0.5,0.7],[0.42,0.5],[0.58,0.5]];"
-        + "for(var i=0;i<pts.length;i++){"
+        + "for(i=0;i<pts.length;i++){"
         + "var el=doc.elementFromPoint(w.innerWidth*pts[i][0],w.innerHeight*pts[i][1]);"
         + "if(!el)continue;var b=walkUp(el,doc);if(b)return b;}"
         + "return null;}"
@@ -120,14 +150,76 @@ Item {
         + "el.style.setProperty('top','0','important');"
         + "el.style.setProperty('border','0','important');"
         + "trim(fd,ib);return 'ok:iframe';}}}"
-        + "var b=walkUp(el,document);"
+        // 主文档也走 probe()：酷我的登录层是 pointer-events:none，屏幕中心
+        // 命中的还是首页轮播，只靠中心采样永远裁不到登录区。
+        + "var b=probe(document);"
         + "if(!b)return 'no-box';"
         + "return trim(document,b)?'ok:top':'undo';"
         + "})()"
 
     // FURUI_BROWSER_TRACE 用的诊断输出：登录层/密码框/真实输入事件计数
     readonly property string probeJs: "(function(){"
-        + "var out=['vw='+window.innerWidth+' vh='+window.innerHeight];"
+        + "var out=['vw='+window.innerWidth+' vh='+window.innerHeight"
+        + "+' rs='+document.readyState];"
+        + "var kids=document.body?document.body.children:[];"
+        + "var tags=[];"
+        + "for(var k=0;k<kids.length&&k<8;k++){"
+        + "var c=kids[k];var r=c.getBoundingClientRect();"
+        + "tags.push(c.tagName.toLowerCase()+(c.id?'#'+c.id:'')"
+        + "+(typeof c.className==='string'&&c.className?'.'+c.className.split(' ')[0]:'')"
+        + "+'@'+Math.round(r.width)+'x'+Math.round(r.height));}"
+        + "out.push('kids='+tags.join(','));"
+        + "out.push('title='+(document.title||'-'));"
+        // SPA 挂载情况：#app 里有没有子节点；图片有多少张是加载失败的
+        + "var appEl=document.getElementById('app');"
+        + "if(appEl){var ac=appEl.children.length;"
+        + "var at=[];for(var a=0;a<appEl.children.length&&a<4;a++){"
+        + "var an=appEl.children[a];var ar=an.getBoundingClientRect();"
+        + "at.push(an.tagName.toLowerCase()"
+        + "+(typeof an.className==='string'&&an.className?'.'+an.className.split(' ')[0]:'')"
+        + "+'@'+Math.round(ar.width)+'x'+Math.round(ar.height));}"
+        + "out.push('app='+ac+':'+at.join(','));}else out.push('app=nil');"
+        + "var imgs=document.querySelectorAll('img'),bad=0;"
+        + "for(var q=0;q<imgs.length;q++){if(imgs[q].complete&&imgs[q].naturalWidth===0)bad++;}"
+        + "out.push('img='+imgs.length+'/bad'+bad);"
+        // 裁剪用的 5 个采样点分别命中了什么：命中不到登录区时靠它定位遮挡层
+        + "var pts=[[0.5,0.5],[0.5,0.3],[0.5,0.7],[0.42,0.5],[0.58,0.5]],hits=[];"
+        + "for(var pi=0;pi<pts.length;pi++){"
+        + "var he=document.elementFromPoint(window.innerWidth*pts[pi][0],"
+        + "window.innerHeight*pts[pi][1]);"
+        + "if(!he){hits.push(pi+':nil');continue;}"
+        + "var hr2=he.getBoundingClientRect();"
+        + "hits.push(pi+':'+he.tagName.toLowerCase()"
+        + "+(typeof he.className==='string'&&he.className?'.'+he.className.split(' ')[0]:'')"
+        + "+'@'+Math.round(hr2.width)+'x'+Math.round(hr2.height));}"
+        + "out.push('hits='+hits.join(','));"
+        // 登录相关元素的可见性清单：class/id 带 login/qr/code/phone/tab 的元素，
+        // 打印矩形与 display/visibility/opacity/z-index，定位「到底哪个是可见的」
+        + "var le=document.querySelectorAll('[class*=reg_login],[class*=login],"
+        + "[class*=qr],[class*=QR],[class*=code],[class*=tab],[class*=phone],"
+        + "[class*=yanzheng],[class*=captcha],[class*=account]');"
+        + "var lst=[];"
+        + "for(var li=0;li<le.length&&li<14;li++){"
+        + "var le2=le[li];var lr3=le2.getBoundingClientRect();"
+        + "var ls=getComputedStyle(le2);"
+        + "lst.push(le2.tagName.toLowerCase()"
+        + "+(typeof le2.className==='string'&&le2.className?'.'+le2.className.split(' ')[0]:'')"
+        + "+'@'+Math.round(lr3.width)+'x'+Math.round(lr3.height)"
+        + "+'/'+ls.display+'/'+ls.visibility+'/'+ls.opacity+'/'+ls.zIndex);}"
+        + "out.push('loginels='+lst.join(','));"
+        // 登录入口选择器命中情况：QQ 音乐是 .top_login__link，酷我是 .reg_text，
+        // 酷狗是 ._login——把命中数与首个元素的矩形/可见性打出来，便于定位
+        + "var sels=['.top_login__link','[class*=top_login]','[class*=_login]',"
+        + "'[class*=reg_text]','[class*=login]','a[href*=login]'];"
+        + "for(var si=0;si<sels.length;si++){"
+        + "var l=document.querySelectorAll(sels[si]);"
+        + "var d=l.length>0?l[0]:null;"
+        + "if(d){var dr=d.getBoundingClientRect();"
+        + "var ds=getComputedStyle(d);"
+        + "out.push(sels[si]+'='+l.length+'@'+Math.round(dr.left)+','"
+        + "+Math.round(dr.top)+','+Math.round(dr.width)+'x'+Math.round(dr.height)"
+        + "+'/'+ds.display+'/'+ds.visibility+'/'+(d.textContent||'').trim().slice(0,6));}"
+        + "else out.push(sels[si]+'=0');}"
         + "var pw=document.querySelectorAll('input[type=password]');out.push('pwd='+pw.length);"
         + "var lg=document.querySelectorAll('[class*=reg_login],[class*=login-layer],[class*=loginLayer]');"
         + "for(var i=0;i<lg.length;i++){var r=lg[i].getBoundingClientRect();"
@@ -169,30 +261,90 @@ Item {
         const current = view.url ? view.url.toString() : ""
         if (current.length === 0) return
         if (root.trimmedFor === current) return
-        root.trimmedFor = current
         root.focused = false
         root.focusTries = 0
         root.accountDone = false
         root.accountTries = 0
-        // 样式用 JSON 转义后塞进脚本，避免 CSS 里的引号/换行把脚本截断
+        // 新文档先蒙上白纱：用户看到的是纯白，不是站点外壳
+        root.veilLifted = false
+        // 注入白纱。文档还没就绪（document.head 不存在）时返回 'no-head'，
+        // 这时把去重键清掉，下一轮 focusLogin 会重试——酷我官网的 load 事件
+        // 迟迟不来（首页有挂起的子资源），只能靠这个兜底把白纱蒙上。
+        //
+        // 先问一句「白纱是不是已经在」：WebView2 后端会在文档创建时（首帧之前）
+        // 就注入同一个 id 的样式。这里是 'present' 就说明首帧被盖住了、没有闪现；
+        // 'absent' 说明后端那条路没生效，只能靠 load 之后这一下，首帧会闪一下。
+        // 白纱状态诊断：样式在不在（present=首帧就被盖住，没有闪现），
+        // 以及插件在文档创建时注入的脚本有没有跑过（ran/err）。
+        // 合并成一次 runJavaScript：连续两次调用时第二次可能拿不到返回值。
+        view.runJavaScript("(function(){"
+                           + "var s=document.getElementById('furui-login-veil')"
+                           + "?'present':'absent';"
+                           + "return s+' ran='+(window.__furuiVeilRan||0)"
+                           + "+' err='+(window.__furuiVeilErr||'-');})()", function (v) {
+            if (browser.trace)
+                console.log("[weblogin]", root.sourceId, "veil", String(v || "?"))
+        })
+        view.runJavaScript("(function(){var s=document.getElementById('furui-login-veil');"
+                           + "if(s)s.remove();"
+                           + "s=document.createElement('style');s.id='furui-login-veil';"
+                           + "s.textContent='body{background:#fff!important}"
+                           + "body *{opacity:0!important;transition:none!important;}';"
+                           + "if(!document.head)return 'no-head';"
+                           + "document.head.appendChild(s);return 'ok';})()",
+                           function (r) {
+                               if (String(r || "") !== "ok") {
+                                   root.trimmedFor = ""
+                                   return
+                               }
+                               root.trimmedFor = current
+                               injectTrimCss()
+                               injectTraceHook()
+                           })
+    }
+
+    // 站点外壳（导航/页脚/播放器）的裁剪样式
+    function injectTrimCss() {
+        const view = webLoader.item
+        if (!view || typeof view.runJavaScript !== "function") return
         const css = browser.loginCss(root.sourceId)
-        if (css.length > 0) {
-            view.runJavaScript("(function(){var s=document.createElement('style');"
-                               + "s.id='furui-login-trim';s.textContent=" + JSON.stringify(css)
-                               + ";document.head&&document.head.appendChild(s);})()")
-        }
-        // 收一份页面脚本错误，登录入口点不开时能直接看到是站点自己报错还是没点中
-        if (browser.trace) {
-            view.runJavaScript("(function(){if(window.__furuiErrHook)return;"
-                               + "window.__furuiErrHook=1;window.__furuiErrs=[];"
-                               + "window.__mdCount=0;window.__mdTrusted=null;"
-                               + "window.addEventListener('error',function(e){"
-                               + "window.__furuiErrs.push(String(e.message||e.type));},true);"
-                               + "window.addEventListener('unhandledrejection',function(e){"
-                               + "window.__furuiErrs.push('rej:'+e.reason);});"
-                               + "document.addEventListener('mousedown',function(e){"
-                               + "window.__mdCount++;window.__mdTrusted=e.isTrusted;},true);})()")
-        }
+        if (css.length === 0) return
+        // 样式用 JSON 转义后塞进脚本，避免 CSS 里的引号/换行把脚本截断
+        view.runJavaScript("(function(){var s=document.createElement('style');"
+                           + "s.id='furui-login-trim';s.textContent=" + JSON.stringify(css)
+                           + ";document.head&&document.head.appendChild(s);})()")
+    }
+
+    // 收一份页面脚本错误，登录入口点不开时能直接看到是站点自己报错还是没点中
+    function injectTraceHook() {
+        const view = webLoader.item
+        if (!view || typeof view.runJavaScript !== "function") return
+        if (!browser.trace) return
+        view.runJavaScript("(function(){if(window.__furuiErrHook)return;"
+                           + "window.__furuiErrHook=1;window.__furuiErrs=[];"
+                           + "window.__mdCount=0;window.__mdTrusted=null;"
+                           + "window.addEventListener('error',function(e){"
+                           // 资源加载失败时 e.message 是空的，只有 e.target 里有 URL；
+                           // 把 URL 一起记下来才知道是哪个脚本/图片挂了
+                           + "var t=e.target;"
+                           + "var u=(t&&(t.src||t.href))||'';"
+                           + "window.__furuiErrs.push(String(e.message||e.type)"
+                           + "+(u?(':'+u):''));},true);"
+                           + "window.addEventListener('unhandledrejection',function(e){"
+                           + "window.__furuiErrs.push('rej:'+e.reason);});"
+                           + "document.addEventListener('mousedown',function(e){"
+                           + "window.__mdCount++;window.__mdTrusted=e.isTrusted;},true);})()")
+    }
+
+    // 掀掉白纱：裁剪成功后立刻恢复页面显示（opacity 全部还原）。
+    // 幂等——多轮 focusLogin 里反复调用没问题。
+    function liftVeil() {
+        if (root.veilLifted) return
+        root.veilLifted = true
+        const view = webLoader.item
+        if (!view || typeof view.runJavaScript !== "function") return
+        view.runJavaScript("(function(){var s=document.getElementById('furui-login-veil');"
+                           + "if(s)s.remove();return 'ok';})()")
     }
 
     // 每轮先试一下「点开登录框」，再裁剪到登录区。两件事都必须可重入：
@@ -200,11 +352,20 @@ Item {
     function focusLogin() {
         const view = webLoader.item
         if (!view || typeof view.runJavaScript !== "function") return
+        // 每轮先确保白纱/裁剪样式已注入：load 事件迟到或干脆不来时（酷我官网），
+        // 这里就是唯一的注入时机。injectOnce 内部按 URL 去重，重复调用无副作用。
+        root.injectOnce()
         root.focusTries++
+        // 兜底：等了 21 秒还没裁出来（站点改版/检测不到登录框），先把白纱掀掉，
+        // 宁可多显示一点站点外壳，也不能让用户对着白屏发呆
+        if (!root.veilLifted && root.focusTries > 14)
+            root.liftVeil()
 
         // 登录框一开就不再点入口：继续点会把它开合关掉。之后只做裁剪。
-        if (!root.focused && root.focusTries <= 12) {
-            if (root.focusTries <= 8) {
+        // 尝试窗口放到 20 轮（约 30 秒）：QQ 音乐首页是重 SPA，头部登录按钮
+        // 要等它把 196 张图都拉完才出现，前几轮页面里根本没有这个入口。
+        if (!root.focused && root.focusTries <= 20) {
+            if (root.focusTries <= 14) {
                 // 优先「真实鼠标点击」：酷我首页的「登录 / 注册」对 JS 合成事件完全
                 // 不响应（document 收得到 click，站点逻辑不动作、也没有报错），
                 // 只有 WebView2 输入管线产生的事件（isTrusted=true）才会开登录框。
@@ -229,14 +390,17 @@ Item {
                 })
             } else {
                 view.runJavaScript(browser.loginJs(root.sourceId), function (r) {
-                    if (!browser.trace) return
-                    console.log("[weblogin]", root.sourceId, "click=" + r,
-                                "try=" + root.focusTries)
-                    view.runJavaScript(root.probeJs, function (p) {
-                        console.log("[weblogin] dom", p)
-                    })
+                    if (browser.trace)
+                        console.log("[weblogin]", root.sourceId, "click=" + r,
+                                    "try=" + root.focusTries)
                 })
             }
+        }
+        // DOM 诊断探针：不管走哪条点击路径都打一次，方便定位「弹框开了但裁不到」
+        if (browser.trace && root.focusTries <= 14) {
+            view.runJavaScript(root.probeJs, function (p) {
+                console.log("[weblogin] dom", p)
+            })
         }
         view.runJavaScript(root.focusJs, function (result) {
             const res = String(result || "")
@@ -244,12 +408,13 @@ Item {
                 console.log("[weblogin]", root.sourceId, "focus=" + res, "try=" + root.focusTries)
             // 只认 ok:top / ok:iframe；no-box（还没弹框）和 undo（裁完不可见已回滚）都算没成
             if (res.indexOf("ok") !== 0) {
-                if (root.focusTries === 12)
+                if (root.focusTries === 20)
                     root.status = "请在下方页面里点一下「登录」入口，登录成功后会自动导入"
                 return
             }
             root.focused = true
             root.status = "请在官网页面完成登录（滑块 / 短信验证都能过）"
+            root.liftVeil()
             if (browser.trace && root.focusTries <= 3)
                 view.runJavaScript(root.probeJs, function (p) {
                     console.log("[weblogin] probe", p)
@@ -348,13 +513,18 @@ Item {
                 sourceComponent: WebView {
                     url: root.startUrl
                     onLoadingChanged: function (request) {
-                        if (request.status === WebView.LoadSucceededStatus) {
+                        if (request.status === WebView.LoadStartedStatus) {
+                            // 每次导航都是新文档：复位去重键，白纱会在 LoadSucceeded
+                            // 的 injectOnce() 里重新注入
+                            root.trimmedFor = ""
+                            root.status = "正在打开官网登录页…"
+                        } else if (request.status === WebView.LoadSucceededStatus) {
                             root.status = "正在整理登录页…"
                             root.injectOnce()
                         } else if (request.status === WebView.LoadFailedStatus) {
+                            // 打开失败页面是空的，直接掀纱露出错误信息
+                            root.liftVeil()
                             root.status = "官网页面打开失败：检查网络后点「刷新」重试"
-                        } else if (request.status === WebView.LoadStartedStatus) {
-                            root.status = "正在打开官网登录页…"
                         }
                     }
                 }
@@ -377,7 +547,8 @@ Item {
     Timer {
         interval: 1500
         repeat: true
-        running: root.visible && root.trimmedFor.length > 0 && root.focusTries < 60
+        // 不再等 load 事件：白纱与裁剪的注入由 focusLogin 每轮兜底尝试
+        running: root.visible && root.focusTries < 60
                  && (!root.focused || (!root.accountDone && root.accountTries < 3))
         onTriggered: root.focusLogin()
     }

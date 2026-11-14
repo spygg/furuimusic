@@ -161,6 +161,10 @@ FURUI_WRL_CALLBACK(ICoreWebView2ExecuteScriptCompletedHandler,
                    HRESULT,
                    (HRESULT errorCode, LPCWSTR resultObjectAsJson),
                    (errorCode, resultObjectAsJson))
+FURUI_WRL_CALLBACK(ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler,
+                   HRESULT,
+                   (HRESULT errorCode, LPCWSTR result),
+                   (errorCode, result))
 
 #undef FURUI_WRL_CALLBACK
 

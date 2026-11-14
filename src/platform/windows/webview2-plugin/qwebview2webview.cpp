@@ -195,6 +195,13 @@ void QWebView2WebViewPrivate::initialize(HWND hWnd)
                 FuruiRegisterWebViewController(m_webviewController.Get(),
                                                (HWND)m_window->winId());
 
+                // FuruiMusic: 登录页白纱。新文档创建时（页面任何脚本之前）就注入
+                // 遮罩样式，挡住「首帧先闪一下站点外壳、之后才被裁掉」的空窗期。
+                // 必须在 Navigate 之前注册，否则首个文档赶不上。
+                // （换平台时 WebView 实例复用、前缀后改的情况由
+                //  FuruiSetLoginVeilPrefix → 立即补注册兜住。）
+                FuruiRegisterLoginVeilScript(m_webview.Get());
+
                 m_settings->init(m_webviewController.Get());
 
                 // Add a few settings for the webview
