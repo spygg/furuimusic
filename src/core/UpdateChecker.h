@@ -28,6 +28,8 @@ class UpdateChecker : public QObject {
     Q_PROPERTY(QVariantList history READ history NOTIFY stateChanged)
     Q_PROPERTY(bool checking READ checking NOTIFY stateChanged)
     Q_PROPERTY(bool downloading READ downloading NOTIFY stateChanged)
+    // 远端版本是否真的比本地新（QML 的「下载/安装」按钮据此禁用，避免重复安装同版本）
+    Q_PROPERTY(bool hasUpdate READ hasUpdate NOTIFY stateChanged)
     // 下载进度 0..100，总大小未知时为 -1
     Q_PROPERTY(int progress READ progress NOTIFY stateChanged)
     // 下载完成后安装包落盘路径
@@ -43,6 +45,7 @@ public:
     QVariantList history() const { return m_history; }
     bool checking() const { return m_checking; }
     bool downloading() const { return m_downloading; }
+    bool hasUpdate() const;
     int progress() const { return m_progress; }
     QString downloadedPath() const { return m_downloadedPath; }
 

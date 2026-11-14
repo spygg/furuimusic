@@ -176,8 +176,8 @@ HttpClient::Reply failure(const QString &message)
 bool hasNativeQrLogin(const QString &sourceId)
 {
     // 咪咕 2026-11 起也走内置扫码（passport.migu.cn 的 qrcWeb 接口），酷我走微信开放平台，一并算原生
-    // 汽水 2026-11：官方 passport/web 出码链路对浏览器常规头可直连，客户端内建「直接扫码」，
-    // 同样算原生（无需自建账号 API 服务即可登录，只是歌单同步仍未内置）
+    // 汽水 2026-11：官方 passport/web 出码链路对浏览器常规头可直连，客户端内建「直接扫码」；
+    // 2026-11-14 起歌单同步也内置直连（/luna/pc/me/playlist），两者都不需要自建服务
     return sourceId == QLatin1String("qq") || sourceId == QLatin1String("kugou")
            || sourceId == QLatin1String("migu") || sourceId == QLatin1String("kuwo")
            || sourceId == QLatin1String("qishui");
@@ -247,9 +247,9 @@ QString UserApi::statusOf(const QString &sourceId) const
                    .arg(SourceConfig::instance()->nameOf(sourceId));
     if (c.driver == QLatin1String("http") && !c.base.trimmed().isEmpty())
         return QStringLiteral("账号 API 服务：") + c.base;
-    // 有内置扫码的平台不该被说成「必须部署服务」，只是歌单同步还缺一套直连接口
+    // 有内置扫码、但既没配账号 API 服务也没有内置直连的平台，不该被说成「必须部署服务」
     if (hasNativeQrLogin(sourceId))
-        return QStringLiteral("未配置账号 API 服务：该平台可直接用内置方式登录，登录后的歌单同步尚未内置。");
+        return QStringLiteral("未配置账号 API 服务：该平台可直接用内置方式登录，登录后的歌单同步暂不可用。");
     // 酷我/汽水这类既没有可用登录链路、也没有账号接口的平台：让用户「改用网易云」没有意义。
     // 这里只讲账号接口，登录方式的解释交给 qrUnavailableReason，两段话不要互相重复
     return QStringLiteral("该平台未内置账号接口：歌单与收藏同步需要在设置里配置账号 API 服务。");
@@ -289,10 +289,9 @@ QString UserApi::loginUnavailableReason(const QString &sourceId) const
     }
     if (sourceId == QLatin1String("qishui")) {
         return QStringLiteral(
-            "汽水音乐现在已内置扫码登录（官方 passport 出码链路直连，无需配置账号 API 服务）："
-            "点「二维码」出码后用抖音 App 扫一扫即可登录。"
-            "仅密码 / 账号密码登录不可用；扫码确认后如需同步「我的歌单 / 收藏」，"
-            "再配置自建账号 API 服务（src/tools/account_api_server.py 或自建 qishui-api）。");
+            "汽水音乐已内置扫码登录（官方 passport 出码链路直连）与「我的歌单 / 收藏」同步"
+            "（用登录态 Cookie 直连 /luna/pc/me/playlist），两件事都不需要配置账号 API 服务。"
+            "仅密码 / 账号密码登录不可用；扫码确认后会自动同步，也可在官网登录页登录后导入 Cookie。");
     }
     return QStringLiteral("该平台暂无可用的应用内登录方式。");
 }
@@ -311,7 +310,7 @@ QString UserApi::qrUnavailableReason(const QString &sourceId) const
                               "QQ / 微博回调是 HTML 弹窗，需要内嵌浏览器，故未内置。") + apiHint;
     if (sourceId == QLatin1String("qishui"))
         // 汽水：官方 passport 出码链路已内建（出码/轮询走 api.qishui.com/passport/web/*），
-        // 扫码可用，无需再配置自建账号 API 服务（账号接口本身不提供扫码，仅用于歌单同步）
+        // 扫码可用；歌单同步另走内置直连账号端点，两者都不依赖自建服务
         return QStringLiteral("");
 
     return QStringLiteral("该平台未配置二维码登录接口，请在「设置」里配置实现了扫码端点的账号 API 服务。");
@@ -532,6 +531,10 @@ QJsonValue UserApi::businessRoot(const QString &sourceId, const QString &name,
                 ep.extra.value(QStringLiteral("messagePath")).toString(),
                 QStringLiteral("message"), QStringLiteral("msg")});
             if (msg.isEmpty()) msg = QStringLiteral("接口返回错误码 %1").arg(inner);
+            // 端点可以把「这个错误码用户该做什么」写进配置（例如汽水 PC 接口
+            // 要求设备签名头），比让用户对着一串英文错误码猜原因强。
+            const QString hint = ep.extra.value(QStringLiteral("codeHint")).toString();
+            if (!hint.isEmpty()) msg += hint;
             if (error) *error = SourceConfig::instance()->nameOf(sourceId) + QStringLiteral("：") + msg;
             return QJsonValue();
         }

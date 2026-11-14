@@ -37,15 +37,18 @@ echo.
 echo [sign] zipalign + apksigner (debug keystore)
 set "BT=%ANDROID_SDK_ROOT%\build-tools\35.0.0"
 if not exist "%BT%\apksigner.bat" set "BT=%ANDROID_SDK_ROOT%\build-tools\37.0.0"
-set "KS=%USERPROFILE%\.android\debug.keystore"
-if exist "%KS%" goto :haveKS
-echo [sign] generating temporary debug keystore
-if not exist "%ROOT%\build\android_qt6" mkdir "%ROOT%\build\android_qt6"
-keytool -genkeypair -v -keystore "%ROOT%\build\android_qt6\furui-debug.keystore" -alias furui -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=FuruiMusic Debug, OU=Local, O=Furui, C=CN" >nul || goto :fail
-set "KS=%ROOT%\build\android_qt6\furui-debug.keystore"
-set "KSALIAS=furui"
-goto :signAPK
-:haveKS
+rem Fixed signing identity shared with CI (base64 in src/platform/android-qt6).
+rem Generating a fresh random keystore per build makes in-app updates fail with
+rem "same signature already installed" / signature mismatch on the device.
+set "KS=%ROOT%\build\android_qt6\furui-release.keystore"
+if not exist "%KS%" (
+    echo [sign] restoring fixed debug keystore from repository
+    powershell -NoProfile -Command "[IO.File]::WriteAllBytes('%KS%', [Convert]::FromBase64String([IO.File]::ReadAllText('%SRC%\platform\android-qt6\furui-debug.keystore.b64')))"
+)
+if not exist "%KS%" (
+    echo [error] failed to restore signing keystore
+    goto :fail
+)
 set "KSALIAS=androiddebugkey"
 :signAPK
 set "UNSIGNED=%ROOT%\build\android_qt6\android-build\build\outputs\apk\release\android-build-release-unsigned.apk"

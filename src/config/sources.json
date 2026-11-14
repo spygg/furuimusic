@@ -1477,11 +1477,13 @@
       "driver": "qishui",
       "enabled": true,
       "_note": "真实汽水（抖音旗下）端点直连（用户选的路线）。实测匿名搜索 /luna/pc/search/track 返回 HTTP 200 空响应，需登录态 Cookie（设置里填抖音/汽水 Cookie）才可能返回数据；X-Helios/X-Medusa 签名为可选 config，未内置。搜索/歌单详情返回是双层嵌套 result_groups[].data[].entity.track_wrapper.track（歌单详情为 media_resources[].entity.track_wrapper.track），框架通用 JsonMapper 不展平子数组，故在 MusicSource 加了 driver=\"qishui\" 做展平解析。播放/歌词走 /luna/h5/seo_track（Web UA + 可选 Cookie），返回 LRC + 播放变体，但 seo_track 可能是 H5/HTML，resultPaths 按常见字段 best-effort，命中即取、不命中回退跨源；若实测为 HTML 需后续加解析。字段映射依据 guowenye/qishui-api 的 normalizers.js。",
-      "headers": {
-        "User-Agent": "LunaPC/3.0.0(290101097)",
-        "Referer": "https://www.qishui.com/",
-        "Cookie": "{cookie}"
-      },
+    "headers": {
+      "User-Agent": "LunaPC/3.0.0(290101097)",
+      "Referer": "https://www.qishui.com/",
+      "Cookie": "{cookie}",
+      "X-Helios": "{qishuiHelios}",
+      "X-Medusa": "{qishuiMedusa}"
+    },
       "endpoints": {
         "search": {
           "method": "GET",
@@ -1593,13 +1595,83 @@
         "_note": "汽水现已内置扫码登录：客户端直连官方 passport 端点（GET /passport/web/get_qrcode -> POST /passport/web/check_qrconnect -> GET /luna/pc/me?aid=386088），无需账号 API 服务即可「直接扫码」（出码后用抖音 App 扫一扫确认）。用户在「设置 → 网络 → 账号 API 服务」填了自建服务时，则走其 GET /auth/* -> POST /auth/me 契约。"
       },
       "userApi": {
-        "driver": "",
+        "driver": "direct",
         "base": "",
         "headers": {},
         "extraMethods": [
           "qrcode"
         ],
-        "_note": "汽水账号接口（userApiContract）同样由部署账号 API 服务提供（src/tools/account_api_server.py，或自行接 guowenye/qishui-api）后填 accountApiBase 即可用 /auth 契约同步歌单与收藏；扫码登录本身已内置，无需服务。"
+        "extra": {
+          "favoritePlaylistName": "我喜欢的",
+          "_note": "内置直连：用登录后保存的 sessionid Cookie 直接请求官方 PC 接口，无需部署第三方账号 API 服务。端点与字段依据 reference/qishui-api 的 qishuiClient.mePlaylists/authMe/playlistDetail，/luna/pc/me/playlist 返回 {playlists:[{id,title,url_cover,count_tracks}]}，url_cover 是 {urls:[前缀],uri} 对象，由 Json::coverUrlOf 拼出完整封面。收藏复用歌单列表里标题含「我喜欢的」那份，用 playlistSongs 端点拉曲目。"
+        },
+        "endpoints": {
+          "profile": {
+            "method": "GET",
+            "path": "https://api.qishui.com/luna/pc/me",
+            "params": {
+              "aid": "386088"
+            },
+            "fields": {
+              "uid": "my_info.id",
+              "nickname": "my_info.nickname",
+              "avatar": "my_info.avatar"
+            },
+            "extra": {
+              "codePath": "status_code",
+              "successValues": ["0"],
+              "messagePath": "status_info.status_msg",
+              "codeHint": "（汽水 PC 账号接口需要设备签名头，请在「设置」填 X-Helios / X-Medusa）"
+            }
+          },
+          "playlists": {
+            "method": "GET",
+            "path": "https://api.qishui.com/luna/pc/me/playlist",
+            "params": {
+              "aid": "386088",
+              "iid": "27960026095955",
+              "version_code": "30020100"
+            },
+            "root": "playlists",
+            "fields": {
+              "id": "id",
+              "title": "title",
+              "cover": "url_cover",
+              "count": "count_tracks"
+            },
+            "extra": {
+              "codePath": "status_code",
+              "successValues": ["0"],
+              "messagePath": "status_info.status_msg",
+              "codeHint": "（汽水 PC 账号接口需要设备签名头，请在「设置」填 X-Helios / X-Medusa）"
+            }
+          },
+          "playlistSongs": {
+            "method": "POST",
+            "path": "https://api.qishui.com/luna/playlist/detail",
+            "contentType": "json",
+            "jsonBody": {
+              "playlist_id": "{id}",
+              "count": "{limit}"
+            },
+            "root": "media_resources",
+            "fields": {
+              "id": "entity.track_wrapper.track.id",
+              "title": "entity.track_wrapper.track.name",
+              "artist": "entity.track_wrapper.track.artists[].name",
+              "album": "entity.track_wrapper.track.album.name",
+              "cover": "entity.track_wrapper.track.album.url_cover",
+              "duration": "entity.track_wrapper.track.duration",
+              "durationScale": 1
+            },
+            "extra": {
+              "codePath": "status_code",
+              "successValues": ["0"],
+              "messagePath": "status_info.status_msg",
+              "codeHint": "（汽水 PC 账号接口需要设备签名头，请在「设置」填 X-Helios / X-Medusa）"
+            }
+          }
+        }
       }
     }
   ],

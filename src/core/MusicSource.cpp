@@ -63,6 +63,15 @@ QVariantMap MusicSource::baseVars() const
     v.insert(QStringLiteral("code"), QString());
     v.insert(QStringLiteral("keyword"), QString());
     v.insert(QStringLiteral("id"), QString());
+    // 汽水 PC 账号接口（/luna/pc/me*）会校验设备签名头，缺失时一律回
+    // ERR_REQUEST_FORBIDDEN。与 reference/qishui-api 的 QISHUI_X_HELIOS /
+    // QISHUI_X_MEDUSA 对应，由设置页填写；留空时 buildUrl 会丢掉这两个 header。
+    if (m_desc.id == QLatin1String("qishui")) {
+        v.insert(QStringLiteral("qishuiHelios"),
+                 Settings::string(QStringLiteral("qishuiXHelios")));
+        v.insert(QStringLiteral("qishuiMedusa"),
+                 Settings::string(QStringLiteral("qishuiXMedusa")));
+    }
     if (m_desc.id == QLatin1String("kugou")) {
         Kugou::addDeviceVars(&v);
         Kugou::addAuthVars(&v, m_session.cookie);

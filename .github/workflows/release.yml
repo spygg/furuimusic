@@ -358,13 +358,16 @@ jobs:
           fi
           echo "未签名 APK: $unsigned"
           BT="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
-          KS="$RUNNER_TEMP/furui-debug.keystore"
-          # 公开 debug 身份，只用于让 APK 可安装，不是商店签名；不往仓库放二进制 keystore
-          keytool -genkeypair -v -keystore "$KS" -alias furui -keyalg RSA \
-            -keysize 2048 -validity 10000 -storepass android -keypass android \
-            -dname "CN=FuruiMusic Debug, OU=CI, O=Furui, C=CN" >/dev/null
+          KS="$RUNNER_TEMP/furui-release.keystore"
+          # Fixed debug signing identity checked in as base64. Generating a random
+          # keystore per CI run made every release APK carry a different signature,
+          # so the in-app updater could never replace an already installed build
+          # (device installer reported "same signature already installed").
+          # Public debug key only: used for installability, not a store signing key.
+          base64 -d src/platform/android-qt6/furui-debug.keystore.b64 > "$KS"
           "$BT/zipalign" -f -p 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
-          "$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --key-pass pass:android \
+          "$BT/apksigner" sign --ks "$KS" --ks-key-alias androiddebugkey \
+            --ks-pass pass:android --key-pass pass:android \
             --out "$ARTIFACT_NAME" "$RUNNER_TEMP/aligned.apk"
           "$BT/apksigner" verify --print-certs "$ARTIFACT_NAME"
           test -s "$ARTIFACT_NAME"

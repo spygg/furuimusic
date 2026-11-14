@@ -212,6 +212,26 @@ inline QString fillImageSize(const QString &url)
     return out;
 }
 
+// 封面字段可能是普通字符串，也可能是汽水 Luna 那种 {urls:[前缀], uri} 对象。
+// 通用映射只认字符串时，用户歌单/曲目的封面会整片空白，这里统一摊平。
+inline QString coverUrlOf(const QJsonValue &v, const QString &path)
+{
+    if (path.isEmpty()) return QString();
+    const QJsonValue cv = valueAt(v, path);
+    if (cv.isString()) return fillImageSize(cv.toString());
+    if (cv.isObject()) {
+        const QJsonObject o = cv.toObject();
+        const QJsonArray urls = o.value(QStringLiteral("urls")).toArray();
+        const QString prefix = urls.isEmpty() ? QString() : urls.at(0).toString();
+        const QString joined = prefix + o.value(QStringLiteral("uri")).toString();
+        if (!joined.isEmpty()) return fillImageSize(joined);
+        const QJsonArray list = o.value(QStringLiteral("url_list")).toArray();
+        if (!list.isEmpty()) return fillImageSize(list.at(0).toString());
+        return fillImageSize(str(o.value(QStringLiteral("url"))));
+    }
+    return fillImageSize(str(cv));
+}
+
 inline Song mapSong(const QJsonValue &v, const QVariantMap &fields, const QString &source)
 {
     Song s;
@@ -223,7 +243,7 @@ inline Song mapSong(const QJsonValue &v, const QVariantMap &fields, const QStrin
     // 没配 cover 字段时不能拿空路径去取值：stringAt 对空路径会 str(整个对象)，
     // 返回的其实是 name/title（歌名），封面就变成了一串中文，UI 只能当坏图丢掉。
     const QString coverPath = fields.value(QStringLiteral("cover")).toString();
-    s.cover    = coverPath.isEmpty() ? QString() : fillImageSize(stringAt(v, coverPath));
+    s.cover    = coverUrlOf(v, coverPath);
     s.albumId  = stringAt(v, fields.value(QStringLiteral("albumId")).toString());
     // 有些平台（QQ 搜索/榜单）响应里根本不给封面字段，只给专辑 mid，
     // 不给 coverTemplate 时网格里全是占位图。模板里的 {albumId} 用官方 CDN 实测可取到图。
@@ -265,7 +285,7 @@ inline Playlist mapPlaylist(const QJsonValue &v, const QVariantMap &fields, cons
     p.sourceId = stringAt(v, fields.value(QStringLiteral("id")).toString());
     p.title    = stringAt(v, fields.value(QStringLiteral("title")).toString());
     const QString coverPath = fields.value(QStringLiteral("cover")).toString();
-    p.cover    = coverPath.isEmpty() ? QString() : fillImageSize(stringAt(v, coverPath));
+    p.cover    = coverUrlOf(v, coverPath);
     p.owner    = stringAt(v, fields.value(QStringLiteral("owner")).toString());
     p.count    = stringAt(v, fields.value(QStringLiteral("count")).toString()).toInt();
     if (p.sourceId.isEmpty()) p.sourceId = QString::number(qHash(p.title), 16);
