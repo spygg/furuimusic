@@ -1,7 +1,11 @@
 {
-  "version": "1.4.6",
-  "desc": "新增\n- 账号密码登录升级为内嵌各平台官网真实登录页（网易云/QQ/酷狗/酷我/咪咕/汽水）：在真实页面完成登录，滑块、短信等人机验证都能正常通过，登录成功后自动导入 Cookie 并同步歌单；登录页自动只显示登录部分\n- Windows 内置浏览器新增页面内真实鼠标点击能力（WebView2 输入管线），酷我这类只认真实输入的站点也能自动弹开登录框\n\n修复\n- 网易云普通歌单只显示 10 首左右：官方老接口已降级为预览模式，改用 v3 接口按完整曲目 ID 列表批量补全，500 首以上的大歌单也能全量加载\n\n优化\n- 歌单曲目数量上限按平台能力放开：支持全量补全的平台按歌单真实曲目数拉取（上限 1000），其余平台维持原上限",
+  "version": "1.4.7",
+  "desc": "新增\n- 官网登录页打开即显示「扫码登录 / 手机号登录 / 账号登录」选项卡片，页面就绪后淡出过渡，不再先闪站点首页\n- 汽水音乐账号改为直连官方 /luna 接口读取个人资料与歌单；设置页可按需填写 PC 抓包得到的 X-Helios / X-Medusa 签名头\n\n修复\n- 网易云登录页残留顶部黑/红站点横幅、登录区不居中、横竖屏旋转后布局错乱：登录框位于同源 iframe 内，主文档样式覆盖不到，改为 iframe 内注入裁剪样式并按可视视口居中\n- Android 应用内更新安装报「同签名已安装」：CI 每次随机生成 debug keystore 导致各版本签名不同；本地与 CI 统一改用仓库内固定签名，安装前预检版本号与签名，并修正安装 Intent flags\n- QQ 音乐等平台登录入口被 iframe 裁剪逻辑抢跑导致点不开：裁剪限定只对网易云生效\n- 汽水歌单封面解析（url_cover 对象结构）\n\n其他\n- 酷我官网登录入口只认真实点击，仍需在过渡卡片出现后手动点一下「登录」\n- 汽水账号接口若返回 ERR_REQUEST_FORBIDDEN 属设备签名风控，可在设置页补签名头或改用 Cookie 导入",
   "history": [
+    {
+      "version": "1.4.6",
+      "desc": "新增\n- 账号密码登录升级为内嵌各平台官网真实登录页（网易云/QQ/酷狗/酷我/咪咕/汽水）：在真实页面完成登录，滑块、短信等人机验证都能正常通过，登录成功后自动导入 Cookie 并同步歌单；登录页自动只显示登录部分\n- Windows 内置浏览器新增页面内真实鼠标点击能力（WebView2 输入管线），酷我这类只认真实输入的站点也能自动弹开登录框\n\n修复\n- 网易云普通歌单只显示 10 首左右：官方老接口已降级为预览模式，改用 v3 接口按完整曲目 ID 列表批量补全，500 首以上的大歌单也能全量加载\n\n优化\n- 歌单曲目数量上限按平台能力放开：支持全量补全的平台按歌单真实曲目数拉取（上限 1000），其余平台维持原上限"
+    },
     {
       "version": "1.4.5",
       "desc": "修复\n- Linux 桌面构建链接失败：undefined reference to breakpad_getcontext。根因为 project() 只启用 C/CXX 未启用 ASM 语言，CMake 把 breakpad_getcontext.S 当「无法确定语言」的文件排除出构建；已在 CMakeLists 顶层 enable_language(ASM)，.S 正常编译后符号补齐"
@@ -40,9 +44,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.6/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.6/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.6/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.6/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.7/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.7/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.7/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.7/FuruiMusic-android-arm64-v8a.apk"
   }
 }
