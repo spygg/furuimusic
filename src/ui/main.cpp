@@ -28,6 +28,7 @@
 #include "../core/UserApi.h"
 #include "../core/Version.h"
 #include "GlyphImageProvider.h"
+#include "AndroidMediaSession.h"
 #include "PlatformAdapter.h"
 #include "ThemeManager.h"
 #ifdef FURUI_HAVE_WEBVIEW
@@ -119,6 +120,9 @@ int main(int argc, char *argv[])
     engine.addImageProvider(QStringLiteral("glyph"), new Furui::GlyphImageProvider);
     engine.rootContext()->setContextProperty(QStringLiteral("app"),
                                              Furui::AppController::instance());
+    // Android：把播放状态交给系统 MediaSession（通知栏/锁屏/耳机/车机控制），
+    // 播放时以媒体前台服务常驻，避免后台被回收；其他平台为空实现
+    Furui::AndroidMediaSession::install();
     engine.rootContext()->setContextProperty(QStringLiteral("platform"), &platform);
     engine.rootContext()->setContextProperty(QStringLiteral("theme"), &theme);
     // 内置浏览器：QML 侧统一的 WebView 外壳 + 平台原生 Cookie 读取

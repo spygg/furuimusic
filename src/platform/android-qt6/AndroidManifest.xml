@@ -17,6 +17,12 @@
     <!-- resizeableActivity：分屏/自由形态的前提，不给就是「分屏时整块黑屏」而不是自适应 -->
     <!-- 应用内下载更新 APK 后拉起系统安装器（Android 8+ 必须声明） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 后台播放：前台服务保证退到后台/锁屏后进程不被回收；
+         Android 14 起 mediaPlayback 类型必须配套 FOREGROUND_SERVICE_MEDIA_PLAYBACK，
+         Android 13 起通知需要 POST_NOTIFICATIONS（运行时权限，启动时向用户申请） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:name="org.qtproject.qt.android.bindings.QtApplication"
         android:hardwareAccelerated="true"
@@ -52,6 +58,13 @@
                 android:name="android.app.arguments"
                 android:value="-- %%INSERT_APP_ARGUMENTS%% --" />
         </activity>
+
+        <!-- 播放前台服务：常驻媒体通知 + MediaSession，供通知栏/锁屏/耳机/车机控制。
+             exported=false：只由本进程启动，外部应用不能拉起 -->
+        <service
+            android:name="cn.furui.music.MediaSessionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

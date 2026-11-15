@@ -157,6 +157,7 @@ set(CORE_FILES
 set(UI_FILES
     ui/main.cpp
     ui/PlatformAdapter.h ui/PlatformAdapter.cpp
+    ui/AndroidMediaSession.h ui/AndroidMediaSession.cpp
     ui/ThemeManager.h ui/ThemeManager.cpp
     ui/GlyphImageProvider.h ui/GlyphImageProvider.cpp
     ui/qml.qrc

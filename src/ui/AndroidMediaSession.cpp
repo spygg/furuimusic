@@ -1,0 +1,258 @@
+#include "AndroidMediaSession.h"
+
+#include "../core/HttpClient.h"
+#include "../core/PlayerController.h"
+#include "../core/Settings.h"
+
+#ifdef Q_OS_ANDROID
+#include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFileInfo>
+#include <QJniEnvironment>
+#include <QJniObject>
+#include <QMetaObject>
+#include <QOperatingSystemVersion>
+#include <QUrl>
+#include <jni.h>
+#endif
+
+namespace Furui {
+
+#ifdef Q_OS_ANDROID
+namespace {
+
+constexpr const char *kServiceClass = "cn/furui/music/MediaSessionService";
+
+// 与 MediaSessionService.java 中的 CMD_* 一一对应
+enum Command { CmdPlay = 1, CmdPause = 2, CmdNext = 3, CmdPrev = 4, CmdSeek = 5, CmdStop = 6 };
+
+AndroidMediaSession *g_instance = nullptr;
+bool g_serviceStarted = false;
+bool g_permissionRequested = false;
+
+// Android 13+ 的 POST_NOTIFICATIONS 是运行时权限，Qt 6.11 的 QPermission
+// 没有对应的封装类，只能直接向 Activity 申请。未授予时前台服务照常运行
+// （锁屏/车机控制来自 MediaSession），仅通知栏不显示条目。
+void requestNotificationPermission()
+{
+    if (g_permissionRequested)
+        return;
+    g_permissionRequested = true;
+    if (QOperatingSystemVersion::current() < QOperatingSystemVersion::Android13)
+        return;
+
+    QJniEnvironment env;
+    JNIEnv *jni = env.jniEnv();
+    if (!jni)
+        return;
+    // QtNative.activity() 在 Java 侧不是 public，但 JNI 按名称/签名查找不受可见性限制
+    QJniObject activity = QJniObject::callStaticObjectMethod(
+        "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
+    if (!activity.isValid() || !activity.object())
+        return;
+
+    jclass stringClass = jni->FindClass("java/lang/String");
+    if (!stringClass)
+        return;
+    jobjectArray permissions = jni->NewObjectArray(1, stringClass, nullptr);
+    jstring name = jni->NewStringUTF("android.permission.POST_NOTIFICATIONS");
+    jni->SetObjectArrayElement(permissions, 0, name);
+    jni->DeleteLocalRef(name);
+    jni->DeleteLocalRef(stringClass);
+
+    jclass activityClass = jni->FindClass("android/app/Activity");
+    if (activityClass) {
+        jmethodID request = jni->GetMethodID(activityClass, "requestPermissions",
+                                             "([Ljava/lang/String;I)V");
+        if (request)
+            jni->CallVoidMethod(activity.object(), request, permissions, jint(0x4652));
+        jni->DeleteLocalRef(activityClass);
+    }
+    jni->DeleteLocalRef(permissions);
+    if (jni->ExceptionCheck())
+        jni->ExceptionClear();
+}
+
+// Java 侧静态 native 方法：通知/锁屏/耳机/车机按键。
+// 服务回调可能来自 Binder 线程，先排队到 Qt 主线程再碰 PlayerController。
+void jniCommand(JNIEnv *, jclass, jint action, jlong position)
+{
+    AndroidMediaSession *self = g_instance;
+    if (!self)
+        return;
+    QMetaObject::invokeMethod(
+        self,
+        [action, position] { AndroidMediaSession::handleCommand(int(action), qint64(position)); },
+        Qt::QueuedConnection);
+}
+
+} // namespace
+
+void AndroidMediaSession::install()
+{
+    if (g_instance)
+        return;
+
+    QJniEnvironment env;
+    if (env.jniEnv()) {
+        // 注册 native 必须早于 Java 服务里的任何回调；install() 在 QML 加载前执行，
+        // 而服务只会在首次播放时启动，顺序天然满足。
+        jclass clazz = env.jniEnv()->FindClass(kServiceClass);
+        if (clazz) {
+            static const JNINativeMethod methods[] = {
+                { const_cast<char *>("onNativeCommand"), const_cast<char *>("(IJ)V"),
+                  reinterpret_cast<void *>(&jniCommand) }
+            };
+            env.jniEnv()->RegisterNatives(clazz, methods, 1);
+            env.jniEnv()->DeleteLocalRef(clazz);
+        }
+    }
+
+    g_instance = new AndroidMediaSession(QCoreApplication::instance());
+
+    // 冷启动时 PlayerController 可能已经恢复了上次的歌曲，那次 mediaChanged 发生在
+    // install() 连接信号之前，会错过；这里补推一次，避免通知/锁屏显示空标题。
+    PlayerController *player = PlayerController::instance();
+    if (!player->current().title.isEmpty()) {
+        g_instance->syncCover(player->current());
+        g_instance->pushMetadata();
+        g_instance->pushPlayback();
+        if (player->playing())
+            g_instance->ensureService();
+    }
+}
+
+AndroidMediaSession::AndroidMediaSession(QObject *parent) : QObject(parent)
+{
+    PlayerController *player = PlayerController::instance();
+
+    // 换歌：元数据 + 播放态一起推，服务尚未启动时顺手拉起
+    connect(player, &PlayerController::mediaChanged, this, [this] {
+        syncCover(PlayerController::instance()->current());
+        pushMetadata();
+        pushPlayback();
+        if (!PlayerController::instance()->current().title.isEmpty())
+            ensureService();
+    });
+
+    // 播放/暂停/播完：只需刷新播放态；开始播放时确保服务已在前台
+    connect(player, &PlayerController::stateChanged, this, [this] {
+        pushPlayback();
+        if (PlayerController::instance()->playing())
+            ensureService();
+    });
+}
+
+void AndroidMediaSession::syncCover(const Song &song)
+{
+    const QString cover = song.cover;
+    if (cover == m_coverRemote)
+        return;
+    m_coverRemote = cover;
+    m_coverPath.clear();
+    if (cover.isEmpty())
+        return;
+
+    // 已经是本地文件（下载目录里的内嵌封面/用户自选封面）就直接交给系统
+    if (!cover.startsWith(QLatin1String("http"))) {
+        m_coverPath = cover.startsWith(QLatin1String("file:")) ? QUrl(cover).toLocalFile() : cover;
+        return;
+    }
+
+    // 网络封面：下载到 cache 目录，文件名取 URL 摘要，避免同名冲突与非法字符。
+    // Java 侧只解码本地文件，不做网络请求。
+    const QString dir = Settings::filePath(QStringLiteral("cache"));
+    QDir().mkpath(dir);
+    const QString digest = QString::fromLatin1(
+        QCryptographicHash::hash(cover.toUtf8(), QCryptographicHash::Md5).toHex());
+    const QString local = dir + QStringLiteral("/cover_") + digest + QStringLiteral(".img");
+    if (QFileInfo(local).size() > 0) {
+        m_coverPath = local;
+        return;
+    }
+
+    const QString wanted = cover;
+    // 封面 CDN 部分会校验 Referer，带常规 UA 通常即可；失败就保持无封面，不影响播放
+    HttpClient::instance()->download(
+        QUrl(cover),
+        QVariantMap { { QStringLiteral("User-Agent"), QStringLiteral("Mozilla/5.0") } }, local,
+        [this, wanted, local](bool ok, const QString &) {
+            if (!ok || m_coverRemote != wanted)
+                return; // 下载期间已切歌，丢弃这次结果
+            m_coverPath = local;
+            pushMetadata(); // 重新推元数据，Java 侧解码后刷新通知/锁屏封面
+        });
+}
+
+void AndroidMediaSession::pushMetadata()
+{
+    const Song song = PlayerController::instance()->current();
+    const QJniObject title = QJniObject::fromString(song.title);
+    const QJniObject artist = QJniObject::fromString(song.artist);
+    const QJniObject album = QJniObject::fromString(song.album);
+    const QJniObject cover = QJniObject::fromString(m_coverPath);
+
+    QJniObject::callStaticMethod<void>(
+        kServiceClass, "updateMetadata",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V",
+        title.object<jstring>(), artist.object<jstring>(), album.object<jstring>(),
+        cover.object<jstring>(), jlong(song.duration));
+}
+
+void AndroidMediaSession::pushPlayback()
+{
+    PlayerController *player = PlayerController::instance();
+    QJniObject::callStaticMethod<void>(kServiceClass, "updatePlayback", "(ZJ)V",
+                                       jboolean(player->playing()), jlong(player->position()));
+}
+
+void AndroidMediaSession::ensureService()
+{
+    if (g_serviceStarted)
+        return;
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    if (!context.isValid())
+        return;
+    QJniObject::callStaticMethod<void>(kServiceClass, "start", "(Landroid/content/Context;)V",
+                                       context.object());
+    g_serviceStarted = true;
+    // 首次真正开始播放时才申请通知权限：此时用户刚点了播放，能理解弹窗用途
+    requestNotificationPermission();
+}
+
+void AndroidMediaSession::handleCommand(int action, qint64 position)
+{
+    PlayerController *player = PlayerController::instance();
+    switch (action) {
+    case CmdPlay:
+        if (!player->playing())
+            player->togglePause();
+        break;
+    case CmdPause:
+        if (player->playing())
+            player->togglePause();
+        break;
+    case CmdNext:
+        player->next();
+        break;
+    case CmdPrev:
+        player->previous();
+        break;
+    case CmdSeek:
+        player->seek(position);
+        break;
+    case CmdStop:
+        player->stop();
+        g_serviceStarted = false;
+        break;
+    default:
+        break;
+    }
+}
+#else
+void AndroidMediaSession::install() {}
+void AndroidMediaSession::handleCommand(int, qint64) {}
+#endif
+
+} // namespace Furui
