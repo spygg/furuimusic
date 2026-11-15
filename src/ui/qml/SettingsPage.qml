@@ -466,13 +466,13 @@ Item {
                             if (updater.downloading)
                                 return "正在下载更新 " + (updater.progress >= 0 ? updater.progress + "%" : "…")
                             if (updater.downloadedPath.length > 0) return "更新包已就绪：" + updater.downloadedPath
-                            if (updater.remoteVersion.length > 0
-                                && updater.remoteVersion !== app.version)
-                                return "发现新版本 v" + updater.remoteVersion
+                            // 只认 C++ 侧按点分版本号比较得出的结论：不能拿远端版本和本地版本做
+                            // 字符串不等判断，否则远端清单比本机旧（如本机 1.4.9、镜像缓存里的
+                            // 清单还是 1.4.8）时会误报「发现新版本 v1.4.8」
+                            if (updater.hasUpdate) return "发现新版本 v" + updater.remoteVersion
                             return "已是最新版本"
                         }
-                        color: (updater.remoteVersion.length > 0
-                                && updater.remoteVersion !== app.version) ? cPrimary : cSub
+                        color: updater.hasUpdate ? cPrimary : cSub
                         font.pixelSize: theme.fontSm
                         elide: Text.ElideMiddle
                     }
