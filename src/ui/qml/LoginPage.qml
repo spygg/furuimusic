@@ -51,9 +51,14 @@ Item {
     property bool webLoginActive: false
 
     // 选中了平台、该平台有官网登录页、本机还没登录 → 官网登录页就是默认视图，
-    // 直接打开，不再让用户先点一下「打开官网登录页」。所有平台一致处理
-    // （网易云/酷我/QQ/酷狗/咪咕/汽水），白纱+裁剪由 WebLoginView 统一收口。
+    // 直接打开，不再让用户先点一下「打开官网登录页」。其余平台一致处理
+    // （网易云/酷我/QQ/酷狗/咪咕），白纱+裁剪由 WebLoginView 统一收口。
     function openWebLoginDefault() {
+        // 汽水（抖音音乐）不走官网登录页：music.douyin.com 的登录框要抖音 App
+        // 扫码或抖音账号短信，登录层又是跨域 iframe，应用内 WebView 读不回
+        // sessionid；而内置的 passport 出码链路（api.qishui.com/passport/web/*）
+        // 扫码确认后就能直接登录，所以汽水保持 v1.4.6 的行为——选中即进扫码页。
+        if (root.selectedSource === "qishui") return
         if (root.webLoginAvailable && root.selectedSource.length > 0
                 && !root.loggedNow && !root.webLoginActive
                 && browser.loginUrl(root.selectedSource).length > 0) {
