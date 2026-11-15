@@ -11,7 +11,6 @@
 #include "HttpClient.h"
 #include "JsonMapper.h"
 #include "Library.h"
-#include "GdMusicSource.h"
 #include "ScriptSource.h"
 #include "Settings.h"
 
@@ -20,26 +19,20 @@ namespace Furui {
 static void tryScriptSources(const Song &song, const QString &quality,
                              CustomSourceManager::PlayableCallback cb)
 {
-    // 默认音源：GD音乐台（内置）先行；关闭或没解析到再交给用户导入的 LX 在线脚本音源
-    GdMusicSource::resolve(song, quality, [song, quality, cb](const Playable &gd) {
-        if (gd.ok) {
-            if (cb) cb(gd);
+    // 兜底交给在线 LX 脚本音源（用户导入或从仓库自动发现的）
+    ScriptSourceManager::instance()->resolve(song, quality, [cb](const Playable &p) {
+        if (p.ok) {
+            if (cb) cb(p);
             return;
         }
-        ScriptSourceManager::instance()->resolve(song, quality, [cb](const Playable &p) {
-            if (p.ok) {
-                if (cb) cb(p);
-                return;
-            }
-            Playable fail;
-            // 之前把脚本侧的具体原因吞掉了，界面只会显示「未找到替代音频」，
-            // 用户分不清是没导入音源、音源初始化失败还是服务端 404。这里原样透传。
-            fail.reason = p.reason;
-            fail.message = p.message.isEmpty()
-                ? QStringLiteral("自定义音源未找到可用的替代音频")
-                : QStringLiteral("自定义音源未找到可用的替代音频（%1）").arg(p.message);
-            if (cb) cb(fail);
-        });
+        Playable fail;
+        // 之前把脚本侧的具体原因吞掉了，界面只会显示「未找到替代音频」，
+        // 用户分不清是没导入音源、音源初始化失败还是服务端 404。这里原样透传。
+        fail.reason = p.reason;
+        fail.message = p.message.isEmpty()
+            ? QStringLiteral("自定义音源未找到可用的替代音频")
+            : QStringLiteral("自定义音源未找到可用的替代音频（%1）").arg(p.message);
+        if (cb) cb(fail);
     });
 }
 

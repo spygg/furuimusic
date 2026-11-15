@@ -187,13 +187,21 @@ Item {
                     Layout.preferredHeight: theme.touchMin
                     radius: 6
                     color: cPrimarySoft
+                    Text { anchors.centerIn: parent; text: "发现音源"; color: cPrimary; font.pixelSize: theme.fontSm }
+                    MouseArea { anchors.fill: parent; onClicked: app.rescanScriptSources() }
+                }
+                Rectangle {
+                    Layout.preferredWidth: 72
+                    Layout.preferredHeight: theme.touchMin
+                    radius: 6
+                    color: cPrimarySoft
                     Text { anchors.centerIn: parent; text: "全部检查"; color: cPrimary; font.pixelSize: theme.fontSm }
                     MouseArea { anchors.fill: parent; onClicked: app.checkAllScriptSources() }
                 }
             }
             Text {
                 Layout.fillWidth: true
-                text: "内置六音 / Huibq / Fish / 洛雪LX / 长青 / 幻音 / 星海等在线音源（LX 脚本协议，首次启动自动导入）。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方；也可自行导入其它脚本地址。"
+                text: "在线音源自动从 pdone/lx-music-source 仓库页面解析每日检测可用的脚本（LX 脚本协议），首次启动最多导入 8 个；也可自行导入其它脚本地址。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方。列表顺序即实际取链优先级（成功升权、失败降权）。"
                 color: cSub
                 font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap

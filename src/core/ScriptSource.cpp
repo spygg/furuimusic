@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <algorithm>
+#include <limits>
 #include <memory>
 
 #include "HttpClient.h"
@@ -20,43 +21,68 @@ namespace Furui {
 
 namespace {
 
-// 内置在线音源（LX 脚本协议），来自 github.com/skxingyu/lx_music- 整理的
-// pdone/lx-music-source 在线导入地址（README 测试可用至 2026-11-06）。
-// 同一脚本给多条镜像（加速站可达性随时变化，依次回退，成功即用）；
-// 仅首次启动预置下载，用户在设置页删除后不再补回（记入 builtinScriptRemoved）。
-// 注意：六音（sixyin）已从内置列表移除——脚本自身声明「已关闭，请去
-// www.sixyin.com 下载最新版」，且是 333 KB 的混淆代码，内置 JS 引擎解析时
-// 直接报「语法错误」，留着只会每次启动刷一条报错。
-struct BuiltinSource {
-    const char *name;
-    const char *mirrors[4];
+// 内置在线音源（LX 脚本协议）动态发现：
+// 直接解析 github.com/pdone/lx-music-source 仓库页面（README 原文 + 每日可用性
+// health-state.json），不再维护硬编码清单。README 的每个「### 名称」小节给出一份
+// latest.js 原始地址，健康状态用目录名标记 可用/异常/失效。
+// 同一脚本给多条镜像（加速站可达性随时变化，依次回退，成功即用）。
+// 仅首次启动 / 缺源时预置下载，用户在设置页删除后不再补回（记入 builtinScriptRemoved）。
+constexpr int kMaxSeedSources = 8;
+const char *kReadmeUrls[] = {
+    "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/README.md",
+    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/README.md",
+    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/README.md",
+    "https://raw.githubusercontent.com/pdone/lx-music-source/main/README.md",
 };
-const BuiltinSource kBuiltinSources[] = {
-    { u8"Huibq",  { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js",
-                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js",
-                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js",
-                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js" } },
-    { u8"Fish",   { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/fish/latest.js",
-                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/fish/latest.js",
-                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/fish/latest.js",
-                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/fish/latest.js" } },
-    { u8"洛雪LX", { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/lx/latest.js",
-                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/lx/latest.js",
-                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/lx/latest.js",
-                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/lx/latest.js" } },
-    { u8"长青",   { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/changqing/latest.js",
-                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/changqing/latest.js",
-                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/changqing/latest.js",
-                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/changqing/latest.js" } },
-    { u8"幻音",   { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/huanyin/latest.js",
-                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/huanyin/latest.js",
-                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/huanyin/latest.js",
-                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/huanyin/latest.js" } },
-    { u8"星海",   { "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/xinghai/latest.js",
-                    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/xinghai/latest.js",
-                    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/xinghai/latest.js",
-                    "https://raw.githubusercontent.com/pdone/lx-music-source/main/xinghai/latest.js" } },
+const char *kHealthUrls[] = {
+    "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/health-status/health-state.json",
+    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/health-status/health-state.json",
+    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/health-status/health-state.json",
+    "https://raw.githubusercontent.com/pdone/lx-music-source/health-status/health-state.json",
 };
+
+void fetchFirst(const QStringList &urls, int index,
+                std::function<void(bool, const QString &)> cb,
+                std::function<bool(const QString &)> accept)
+{
+    if (index >= urls.size()) {
+        if (cb) cb(false, QString());
+        return;
+    }
+    QVariantMap headers;
+    headers.insert(QStringLiteral("User-Agent"), QStringLiteral("FuruiMusic/1.0"));
+    headers.insert(QStringLiteral("Accept"), QStringLiteral("*/*"));
+    HttpClient::instance()->request(
+        QStringLiteral("GET"), QUrl(urls.at(index)), headers, QByteArray(),
+        [urls, index, cb, accept](const HttpClient::Reply &r) {
+            // 部分加速站会返回 200 + 反爬 HTML（例如 ghproxy.cn），必须校验内容，
+            // 否则第一条镜像就把后续可用镜像挡掉了。
+            if (r.ok && !r.body.trimmed().isEmpty()) {
+                const QString text = QString::fromUtf8(r.body);
+                if (!accept || accept(text)) {
+                    if (cb) cb(true, text);
+                    return;
+                }
+                qWarning("镜像内容不可用，继续下一条：%s",
+                         qUtf8Printable(urls.at(index)));
+            }
+            fetchFirst(urls, index + 1, cb, accept);
+        }, 20000, true);
+}
+
+QStringList mirrorUrlsForImpl(const QString &rawUrl)
+{
+    const QString host = QStringLiteral("raw.githubusercontent.com");
+    const int at = rawUrl.indexOf(host);
+    if (at < 0) return QStringList() << rawUrl;
+    // 保留 host 之后的完整路径：加速站的形态就是 <前缀>/raw.githubusercontent.com/<owner>/...
+    const QString suffix = rawUrl.mid(at);
+    return QStringList()
+        << QStringLiteral("https://ghproxy.cn/") + suffix
+        << QStringLiteral("https://gh-proxy.org/") + suffix
+        << QStringLiteral("https://ghproxy.net/") + suffix
+        << QStringLiteral("https://") + suffix;
+}
 
 QJsonArray stringsToJson(const QStringList &list)
 {
@@ -204,6 +230,67 @@ void ScriptSourceManager::load()
             item.status = QStringLiteral("disabled");
         if (!item.id.isEmpty() && !item.script.isEmpty()) m_items.insert(item.id, item);
     }
+    // 音源使用顺序 = 权重顺序。老库没有该键时按名称补一份，之后由取链结果动态调整。
+    const QStringList saved = Settings::get(QStringLiteral("scriptSourceOrder")).toStringList();
+    m_order.clear();
+    for (const QString &id : saved) {
+        if (m_items.contains(id) && !m_order.contains(id)) m_order << id;
+    }
+    QStringList rest = m_items.keys();
+    std::sort(rest.begin(), rest.end(), [this](const QString &a, const QString &b) {
+        return m_items.value(a).name < m_items.value(b).name;
+    });
+    for (const QString &id : rest) {
+        if (!m_order.contains(id)) m_order << id;
+    }
+}
+
+int ScriptSourceManager::rankOf(const QString &id) const
+{
+    const int index = m_order.indexOf(id);
+    return index < 0 ? std::numeric_limits<int>::max() : index;
+}
+
+QStringList ScriptSourceManager::orderedIds() const
+{
+    QStringList ids = m_items.keys();
+    std::sort(ids.begin(), ids.end(), [this](const QString &a, const QString &b) {
+        const int ra = rankOf(a);
+        const int rb = rankOf(b);
+        if (ra != rb) return ra < rb;
+        return m_items.value(a).name < m_items.value(b).name;
+    });
+    return ids;
+}
+
+void ScriptSourceManager::saveOrder()
+{
+    Settings::set(QStringLiteral("scriptSourceOrder"), m_order);
+}
+
+void ScriptSourceManager::promoteSource(const QString &id)
+{
+    if (id.isEmpty()) return;
+    const int index = m_order.indexOf(id);
+    if (index == 0) return;
+    if (index > 0) m_order.removeAt(index);
+    m_order.prepend(id);
+    saveOrder();
+}
+
+void ScriptSourceManager::demoteSource(const QString &id)
+{
+    if (id.isEmpty()) return;
+    const int index = m_order.indexOf(id);
+    if (index < 0) {
+        m_order << id;
+        saveOrder();
+        return;
+    }
+    // 只后移一位：一次失败（版权/临时 5xx）不该把音源直接沉底
+    if (index + 1 >= m_order.size()) return;
+    m_order.move(index, index + 1);
+    saveOrder();
 }
 
 ScriptSourceManager::Item *ScriptSourceManager::find(const QString &id)
@@ -221,21 +308,64 @@ QString ScriptSourceManager::scriptIdForUrl(const QString &url)
 
 bool ScriptSourceManager::isBuiltinUrl(const QString &url)
 {
+    // 兼容所有加速镜像：只要指向 pdone/lx-music-source 仓库里的 .js 就算内置发现源
     const QString trimmed = url.trimmed();
-    for (const BuiltinSource &b : kBuiltinSources)
-        for (const char *m : b.mirrors)
-            if (trimmed == QLatin1String(m)) return true;
-    return false;
+    return trimmed.contains(QLatin1String("pdone/lx-music-source/"))
+        && trimmed.endsWith(QLatin1String(".js"), Qt::CaseInsensitive);
+}
+
+QVector<ScriptSourceManager::DiscoveredSource>
+ScriptSourceManager::parseRepoPage(const QString &text)
+{
+    QVector<DiscoveredSource> out;
+    QSet<QString> seen;
+    static const QRegularExpression heading(
+        QStringLiteral("^#{2,4}\\s*([^\\r\\n#]+?)\\s*$"));
+    static const QRegularExpression link(
+        QStringLiteral("https?://[^\\s`\"'<>]+/latest\\.js"));
+    QString currentName;
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    for (const QString &raw : lines) {
+        const QString line = raw.trimmed();
+        const QRegularExpressionMatch hm = heading.match(line);
+        if (hm.hasMatch()) {
+            currentName = hm.captured(1).trimmed();
+            continue;
+        }
+        if (currentName.isEmpty()) continue;
+        const QRegularExpressionMatch lm = link.match(line);
+        if (!lm.hasMatch()) continue;
+        const QString url = lm.captured(0);
+        const QStringList parts = QUrl(url).path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        if (parts.size() < 2) continue;
+        const QString key = parts.at(parts.size() - 2);
+        if (key.isEmpty() || seen.contains(key)) continue;
+        seen.insert(key);
+        out.append({key, currentName, url});
+    }
+    return out;
+}
+
+QStringList ScriptSourceManager::mirrorUrlsFor(const QString &rawUrl)
+{
+    return mirrorUrlsForImpl(rawUrl.trimmed());
+}
+
+void ScriptSourceManager::rescanRepository()
+{
+    // 用户点「发现音源」：跳过 24h 节流，立即重新解析仓库页面
+    Settings::set(QStringLiteral("builtinSeedAt"), 0);
+    seedBuiltinSources();
 }
 
 void ScriptSourceManager::seedBuiltinSources()
 {
+    if (m_seeding) return;
     // 内置源自动预置要「安静且不折腾」：
     //   · 全程 silent，成功失败都不弹提示（失败原因留在音源条目的 errorMsg 里）；
-    //   · 失败源（脚本停更 / 镜像被墙 / 语法与内置 JS 引擎不兼容）不能每次启动
-    //     都重下 4 条镜像再报错——那就是纯粹的骚扰。已有一个可用源时最多每天
-    //     自动重试一次；一个都没有（例如冷启动没网）时 5 分钟后允许再试。
-    //   用户随时可以在设置页对单个音源手动「更新」。
+    //   · 失败源不能每次启动都重下再报错。已有一个可用源时最多每天自动重试一次；
+    //     一个都没有（例如冷启动没网）时 5 分钟后允许再试。
+    //   用户随时可以在设置页对单个音源手动「更新」，或点「发现音源」立即重扫仓库。
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     const qint64 lastSeed = Settings::get(QStringLiteral("builtinSeedAt")).toLongLong();
     bool haveAnyBuiltin = false;
@@ -246,43 +376,151 @@ void ScriptSourceManager::seedBuiltinSources()
     if (lastSeed > 0 && now - lastSeed < minGap)
         return;
     Settings::set(QStringLiteral("builtinSeedAt"), now);
+    m_seeding = true;
 
-    const QStringList removed = Settings::get(QStringLiteral("builtinScriptRemoved"))
-                                    .toStringList();
-    for (const BuiltinSource &b : kBuiltinSources) {
-        QStringList urls;
-        bool skip = false;
-        for (const char *m : b.mirrors) {
-            const QString u = QLatin1String(m);
-            urls << u;
-            if (removed.contains(u)) { skip = true; continue; }
-            // 已有可用条目（ok/pending/disabled）→ 该源已就位；error 条目是
-            // 上次回退链留下的坏镜像产物，本次清掉并重新走回退
-            const Item it = m_items.value(scriptIdForUrl(u));
-            if (it.id.isEmpty()) continue;
-            if (it.status == QLatin1String("error")) {
-                m_items.remove(it.id);
-                Library::instance()->removeScriptSource(it.id);
-            } else {
-                skip = true;
-            }
+    QStringList readmeUrls;
+    for (const char *u : kReadmeUrls) readmeUrls << QLatin1String(u);
+    QStringList healthUrls;
+    for (const char *u : kHealthUrls) healthUrls << QLatin1String(u);
+
+    QPointer<ScriptSourceManager> self(this);
+    // 1) 仓库页面（README 原文）→ 解析出当前在维护的音源清单
+    fetchFirst(readmeUrls, 0, [self, healthUrls](bool ok, const QString &page) {
+        ScriptSourceManager *mgr = self.data();
+        if (!ok || !mgr) {
+            qWarning("音源仓库发现：仓库页面获取失败，本次跳过");
+            if (mgr) mgr->m_seeding = false;
+            return;
         }
-        if (skip) continue;
-        // 依次回退：加速站可达性随时变化，某镜像成功后 item.url 固定为该镜像，
-        // 之后「更新」按钮继续用同一条；失败则试下一镜像。
-        importWithFallback(urls, 0);
-    }
+        const QVector<DiscoveredSource> found = parseRepoPage(page);
+        if (found.isEmpty()) {
+            qWarning("音源仓库发现：页面解析结果为空，本次跳过");
+            mgr->m_seeding = false;
+            return;
+        }
+        // 2) 每日可用性检测：只导入当天标记「可用」的源；取不到状态时按全部候选处理
+        fetchFirst(healthUrls, 0, [self, found](bool healthOk, const QString &json) {
+            ScriptSourceManager *mgr2 = self.data();
+            if (!mgr2) return;
+            QSet<QString> usable;
+            if (healthOk) {
+                const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+                if (doc.isObject()) {
+                    const QJsonObject sources =
+                        doc.object().value(QStringLiteral("sources")).toObject();
+                    for (auto it = sources.constBegin(); it != sources.constEnd(); ++it) {
+                        if (it.value().toString() == QStringLiteral("可用"))
+                            usable.insert(it.key());
+                    }
+                }
+            }
+            QVector<DiscoveredSource> chosen;
+            for (const DiscoveredSource &d : found) {
+                if (!usable.isEmpty() && !usable.contains(d.key)) continue;
+                chosen << d;
+            }
+            qInfo("音源仓库发现：解析 %d 个，健康可用 %d 个，候选 %d 个",
+                  int(found.size()), int(usable.size()), int(chosen.size()));
+            if (chosen.isEmpty()) {
+                mgr2->m_seeding = false;
+                return;
+            }
+            // 3) 历史验证较稳的源优先（仅排序偏好，不决定存在性），其余按页面顺序；
+            //    每个启用音源会常驻一个 JS 引擎，首次最多预置 kMaxSeedSources 个。
+            static const QStringList preferred = {
+                QStringLiteral("huibq"), QStringLiteral("fish"), QStringLiteral("lx"),
+                QStringLiteral("changqing"), QStringLiteral("huanyin"),
+                QStringLiteral("xinghai")};
+            std::stable_sort(chosen.begin(), chosen.end(),
+                             [](const DiscoveredSource &a, const DiscoveredSource &b) {
+                const int ra = preferred.indexOf(a.key);
+                const int rb = preferred.indexOf(b.key);
+                if (ra < 0 && rb < 0) return false;
+                if (ra < 0) return false;
+                if (rb < 0) return true;
+                return ra < rb;
+            });
+            if (chosen.size() > kMaxSeedSources) chosen.resize(kMaxSeedSources);
+            mgr2->seedDiscovered(chosen, [self]() {
+                if (self) self->m_seeding = false;
+            });
+        }, [](const QString &text) {
+            // 健康状态必须是含 sources 的 JSON
+            return text.contains(QStringLiteral("\"sources\""));
+        });
+    }, [](const QString &text) {
+        // README 必须真的包含脚本地址，避免把反爬 HTML 当成功
+        return text.contains(QStringLiteral("latest.js"));
+    });
 }
 
-void ScriptSourceManager::importWithFallback(const QStringList &urls, int index)
+void ScriptSourceManager::seedDiscovered(const QVector<DiscoveredSource> &list,
+                                          std::function<void()> done)
 {
-    if (index >= urls.size()) return;
+    const QStringList removed = Settings::get(QStringLiteral("builtinScriptRemoved"))
+                                    .toStringList();
+    QVector<QStringList> queue;
+    for (const DiscoveredSource &d : list) {
+        const QStringList urls = mirrorUrlsFor(d.url);
+        bool skip = false;
+        bool exists = false;
+        for (const QString &u : urls) {
+            if (removed.contains(u)) { skip = true; break; }
+            const QString id = scriptIdForUrl(u);
+            auto it = m_items.constFind(id);
+            if (it == m_items.constEnd()) continue;
+            if (it->status == QLatin1String("error")) {
+                // 上次回退链留下的坏镜像产物：清掉并重新走回退
+                m_items.remove(id);
+                Library::instance()->removeScriptSource(id);
+                continue;
+            }
+            exists = true;
+        }
+        if (skip || exists) continue;
+        queue << urls;
+    }
+    if (queue.isEmpty()) {
+        if (done) done();
+        return;
+    }
+
+    // 逐个导入：同时下载 + 初始化一堆脚本会把首次启动的网络和 CPU 打满
+    auto index = std::make_shared<int>(0);
+    auto chain = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> weak = chain;
+    QPointer<ScriptSourceManager> self(this);
+    *chain = [self, queue, index, weak, done]() {
+        auto step = weak.lock();
+        if (!step) return;
+        ScriptSourceManager *mgr = self.data();
+        if (!mgr) return;
+        if (*index >= queue.size()) {
+            if (done) done();
+            return;
+        }
+        const QStringList urls = queue.at((*index)++);
+        mgr->importWithFallback(urls, 0, [step]() { (*step)(); });
+    };
+    (*chain)();
+}
+
+void ScriptSourceManager::importWithFallback(const QStringList &urls, int index,
+                                             std::function<void()> done)
+{
+    if (index >= urls.size()) {
+        if (done) done();
+        return;
+    }
     QPointer<ScriptSourceManager> self(this);
     // silent：自动预置属于后台行为，成功失败都不弹提示（失败细节留在音源列表里）
-    importUrl(urls.at(index), [self, urls, index](bool ok, const QString &) {
-        if (ok || !self) return;
-        QTimer::singleShot(0, self.data(), [self, urls, index] {
-            if (self) self->importWithFallback(urls, index + 1);
+    importUrl(urls.at(index), [self, urls, index, done](bool ok, const QString &) {
+        if (ok || !self) {
+            if (done) done();
+            return;
+        }
+        QTimer::singleShot(0, self.data(), [self, urls, index, done] {
+            if (self) self->importWithFallback(urls, index + 1, done);
         });
     }, true);
 }
@@ -349,11 +587,8 @@ QVariantMap ScriptSourceManager::itemToVariant(const Item &item) const
 QVariantList ScriptSourceManager::items() const
 {
     QVariantList out;
-    QStringList ids = m_items.keys();
-    std::sort(ids.begin(), ids.end(), [this](const QString &a, const QString &b) {
-        return m_items.value(a).name < m_items.value(b).name;
-    });
-    for (const QString &id : ids) out << itemToVariant(m_items.value(id));
+    // 列表顺序 = 实际使用顺序（权重从高到低），用户能直观看到谁在优先取链
+    for (const QString &id : orderedIds()) out << itemToVariant(m_items.value(id));
     return out;
 }
 
@@ -639,6 +874,10 @@ void ScriptSourceManager::importUrl(const QString &url, DoneCallback cb, bool si
                 }
             }
             mgr->m_items.insert(item.id, item);
+            if (!mgr->m_order.contains(item.id)) {
+                mgr->m_order << item.id;
+                mgr->saveOrder();
+            }
             mgr->persist(item);
             emit mgr->changed();
             if (!silent)
@@ -708,6 +947,8 @@ void ScriptSourceManager::remove(const QString &id)
     m_starting.remove(id);
     m_waiters.remove(id);
     m_items.remove(id);
+    m_order.removeAll(id);
+    saveOrder();
     Library::instance()->removeScriptSource(id);
     emit changed();
 }
@@ -824,16 +1065,19 @@ void ScriptSourceManager::search(const QString &keyword, int limit, SongsCallbac
 
     // 先把还未初始化的源拉起来（首次搜索时脚本需要联网自检）
     QStringList notReady;
-    for (auto it = m_items.constBegin(); it != m_items.constEnd(); ++it) {
-        if (!it->enabled) continue;
-        QPointer<ScriptEngine> e = m_engines.value(it.key());
-        if (!e || !e->ready()) notReady << it.key();
+    for (const QString &id : orderedIds()) {
+        const Item item = m_items.value(id);
+        if (!item.enabled) continue;
+        QPointer<ScriptEngine> e = m_engines.value(id);
+        if (!e || !e->ready()) notReady << id;
     }
 
     auto run = [this, state, keyword, limit] {
-        for (auto it = m_items.constBegin(); it != m_items.constEnd(); ++it) {
-            if (!it->enabled) continue;
-            ScriptEngine *engine = m_engines.value(it.key()).data();
+        // 按权重顺序发起搜索：高质量音源的结果先进入列表
+        for (const QString &id : orderedIds()) {
+            const Item item = m_items.value(id);
+            if (!item.enabled) continue;
+            ScriptEngine *engine = m_engines.value(id).data();
             if (!engine || !engine->ready()) continue;
             for (const ScriptSourceInfo &src : engine->sources()) {
                 if (!src.actions.contains(QStringLiteral("search"))) continue;
@@ -844,8 +1088,8 @@ void ScriptSourceManager::search(const QString &keyword, int limit, SongsCallbac
                 info.insert(QStringLiteral("limit"), limit);
                 info.insert(QStringLiteral("type"), 1);
                 QPointer<ScriptEngine> guard(engine);
-                const QString scriptId = it.key();
-                const QString scriptName = it->name;
+                const QString scriptId = id;
+                const QString scriptName = item.name;
                 engine->callAction(src.key, QStringLiteral("search"), info,
                     [state, guard, scriptId, scriptName, src, limit](const ScriptActionResult &r) {
                         Q_UNUSED(guard);
@@ -955,17 +1199,19 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
     };
     auto addByKey = [this, &candidates, &pickQuality](const QString &key) {
         if (key.isEmpty()) return;
-        for (auto it = m_items.constBegin(); it != m_items.constEnd(); ++it) {
-            if (!it->enabled) continue;
-            for (const QJsonValue &v : it->sources) {
+        // 按权重顺序挑选同类音源：优先让最近取链成功的源先试
+        for (const QString &id : orderedIds()) {
+            const Item item = m_items.value(id);
+            if (!item.enabled) continue;
+            for (const QJsonValue &v : item.sources) {
                 const QJsonObject o = v.toObject();
                 if (o.value(QStringLiteral("key")).toString() != key) continue;
                 if (!jsonToStrings(o.value(QStringLiteral("actions"))).contains(QStringLiteral("musicUrl")))
                     continue;
                 bool dup = false;
                 for (const Candidate &c : candidates)
-                    if (c.engineId == it.key() && c.lxKey == key) { dup = true; break; }
-                if (!dup) candidates << Candidate{it.key(), key, pickQuality(o), it->name};
+                    if (c.engineId == id && c.lxKey == key) { dup = true; break; }
+                if (!dup) candidates << Candidate{id, key, pickQuality(o), item.name};
                 break;
             }
         }
@@ -1034,12 +1280,14 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
         ensureEngine(cand.engineId, [this, state, cand, step](bool ok) {
             if (!ok) {
                 state->failures << QStringLiteral("%1：初始化失败").arg(cand.name);
+                demoteSource(cand.engineId);
                 (*step)();
                 return;
             }
             ScriptEngine *engine = m_engines.value(cand.engineId).data();
             if (!engine || !engine->ready()) {
                 state->failures << QStringLiteral("%1：脚本未就绪").arg(cand.name);
+                demoteSource(cand.engineId);
                 (*step)();
                 return;
             }
@@ -1047,7 +1295,7 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
             info.insert(QStringLiteral("type"), cand.quality);
             info.insert(QStringLiteral("musicInfo"), musicInfoFor(state->song, cand.lxKey));
             engine->callAction(cand.lxKey, QStringLiteral("musicUrl"), info,
-                [state, cand, step](const ScriptActionResult &r) {
+                [this, state, cand, step](const ScriptActionResult &r) {
                     QString url;
                     if (r.ok) {
                         if (r.data.canConvert<QVariantMap>()) {
@@ -1058,6 +1306,8 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
                         }
                     }
                     if (!url.isEmpty()) {
+                        // 动态权重：成功的源升到最前，下次优先使用
+                        promoteSource(cand.engineId);
                         Playable p;
                         p.ok = true;
                         p.url = QUrl(url);
@@ -1070,6 +1320,7 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
                     QString reason = r.ok ? QStringLiteral("未返回音频地址") : r.error;
                     if (reason.trimmed().isEmpty()) reason = QStringLiteral("取链失败");
                     state->failures << QStringLiteral("%1：%2").arg(cand.name, reason.left(80));
+                    demoteSource(cand.engineId);
                     (*step)();
                 }, 20000);
         });

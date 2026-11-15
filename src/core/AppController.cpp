@@ -875,6 +875,8 @@ void AppController::onPlayerError(const QString &msg)
         return;
     }
     d->inFallback = true;
+    // 动态权重：已取到直链却播不出来的原平台先降权，下次优先选更稳的源
+    SourceManager::instance()->demoteSource(song.source);
     const quint64 gen = ++d->fallbackGen;
     // 跳过：原平台（它已失败）+ 本次换源流程里已经试过的候选源。
     const QStringList exclude = QStringList() << song.source << d->triedFallback.values();
@@ -1253,6 +1255,12 @@ void AppController::checkAllScriptSources()
 {
     ScriptSourceManager::instance()->checkAll();
     emit toast(QStringLiteral("正在检查音源…"));
+}
+
+void AppController::rescanScriptSources()
+{
+    ScriptSourceManager::instance()->rescanRepository();
+    emit toast(QStringLiteral("正在从仓库页面发现音源…"));
 }
 
 } // namespace Furui

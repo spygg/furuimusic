@@ -115,6 +115,10 @@ private:
     // 恢复续播时要跳到的时间点（毫秒）；媒体加载完成（LoadedMedia）后应用一次并清零。
     // 只在 restoreState 设置，用户切歌时会清掉，避免影响后续歌曲。
     qint64 m_pendingSeek = 0;
+    // 自动连播防重入：EndOfMedia / 进度兜底只允许排队一次下一首；
+    // 新歌加载完成前（m_suppressEnd）忽略旧曲残留的结束信号。
+    bool m_advancing = false;
+    bool m_suppressEnd = false;
     QTimer *m_saveTimer = nullptr;
 };
 

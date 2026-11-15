@@ -1,7 +1,11 @@
 {
-  "version": "1.4.12",
-  "desc": "修复\n- 检查更新会误报「发现新版本 v1.4.8」：设置页把远端版本号与本地版本做字符串不等判断，只要两者不相等就提示有新版本，本机版本比远端清单还新时（例：本机 1.4.9、镜像仍缓存 1.4.8 的清单）同样误报。现在统一改用按点分数字比较得到的结论，只有远端确实更高才提示",
+  "version": "1.4.13",
+  "desc": "改进\n- 在线音源改为解析 pdone/lx-music-source 仓库页面动态发现：读取仓库说明与每日可用性检测，首次启动最多导入 8 个当日可用的脚本；设置页新增「发现音源」可随时手动重扫\n- 音源顺序改为动态权重：取链成功升到最前，取链/播放失败后移一位，顺序跨启动保存，设置页按实际优先级展示\n\n优化\n- 移除内置「GD音乐台」音源，VIP 替代统一走在线脚本音源\n\n修复\n- 一首播完不会自动播放下一首：结束事件改为排队切歌并在接近结尾时兜底触发，避免在播放器结束回调里重建媒体源导致下一首起不来；单曲循环仍原地重播",
   "history": [
+    {
+      "version": "1.4.12",
+      "desc": "修复\n- 检查更新会误报「发现新版本 v1.4.8」：设置页把远端版本号与本地版本做字符串不等判断，只要两者不相等就提示有新版本，本机版本比远端清单还新时（例：本机 1.4.9、镜像仍缓存 1.4.8 的清单）同样误报。现在统一改用按点分数字比较得到的结论，只有远端确实更高才提示"
+    },
     {
       "version": "1.4.11",
       "desc": "改进\n- 账号页所有平台默认都进内置二维码登录，不再一选中平台就打开全屏官网登录页；内置扫码/密码被风控或接口失败后，提示条下方会出现「内置登录失败？改用官网登录页」入口\n\n修复\n- 切歌时先停掉上一首再解析新歌直链：之前解析的那几秒里上一首会继续响，听起来像「切歌没生效 / 新歌没缓冲」；现在新歌就绪前保持静音，换源前也会彻底停掉旧流"
@@ -64,9 +68,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.12/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.12/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.12/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.12/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.13/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.13/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.13/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.13/FuruiMusic-android-arm64-v8a.apk"
   }
 }

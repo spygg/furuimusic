@@ -127,7 +127,6 @@ set(CORE_FILES
     core/Library.h core/Library.cpp
     core/MusicSource.h core/MusicSource.cpp
     core/CustomSource.h core/CustomSource.cpp
-    core/GdMusicSource.h core/GdMusicSource.cpp
     core/ScriptEngine.h core/ScriptEngine.cpp
     core/ScriptSource.h core/ScriptSource.cpp
     core/3rd/quickjs/quickjs.c

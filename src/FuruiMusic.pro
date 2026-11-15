@@ -38,7 +38,6 @@ CORE_HEADERS += \
     core/Library.h \
     core/MusicSource.h \
     core/CustomSource.h \
-    core/GdMusicSource.h \
     core/ScriptEngine.h \
     core/ScriptSource.h \
     core/SourceManager.h \
@@ -66,7 +65,6 @@ CORE_SOURCES += \
     core/Library.cpp \
     core/MusicSource.cpp \
     core/CustomSource.cpp \
-    core/GdMusicSource.cpp \
     core/ScriptEngine.cpp \
     core/ScriptSource.cpp \
     core/3rd/quickjs/quickjs.c \

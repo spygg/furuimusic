@@ -1,7 +1,7 @@
 #pragma once
 // 福瑞音乐 - 自定义音源（VIP 歌曲替代链）
 // 三级：① 用户自建的合规 HTTP 接口；② 用户自己的本地音乐目录；
-//       ③ 内置默认音源 GD音乐台（gdMusicSource 可关）→ 用户导入的 LX 在线脚本音源。
+//       ③ 用户导入 / 从仓库自动发现的 LX 在线脚本音源。
 // 项目不提供绕过付费/DRM 的能力，请仅使用你拥有合法授权的内容。
 #include <QObject>
 #include <QVector>

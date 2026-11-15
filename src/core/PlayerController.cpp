@@ -20,6 +20,7 @@
 #include <QTimer>
 
 #include "HttpClient.h"
+#include <QDebug>
 #include "Settings.h"
 
 namespace Furui {
@@ -125,6 +126,17 @@ PlayerController::PlayerController(QObject *parent)
     connect(m_player, &QMediaPlayer::positionChanged, this, [this](qint64 pos) {
         updateLyric(pos);
         emit positionChanged();
+        // 兜底自动连播：部分后端（尤其在线流）在末尾不派发 EndOfMedia，
+        // 距结束 150ms 内且确实在播放时排队切下一首；m_advancing 保证只触发一次。
+        if (m_mode == 2 || m_advancing || m_suppressEnd) return;
+        const qint64 total = m_player->duration();
+        if (total <= 0 || pos < total - 150 || !playing()) return;   // 150ms 内视为已播完
+        m_advancing = true;
+        qInfo("进度兜底触发下一首：%s（%lld/%lld）",
+              qUtf8Printable(current().title), pos, total);
+        QTimer::singleShot(0, this, [this] {
+            if (m_advancing) next();
+        });
     });
     connect(m_player, &QMediaPlayer::durationChanged, this, [this](qint64) { emit stateChanged(); });
     connect(m_player, &QMediaPlayer::mediaStatusChanged, this,
@@ -135,6 +147,8 @@ PlayerController::PlayerController(QObject *parent)
             m_player->setPosition(m_pendingSeek);
             m_pendingSeek = 0;
         }
+        if (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia)
+            m_suppressEnd = false;
         if (status != QMediaPlayer::EndOfMedia) return;
         if (m_mode == 2) {
             // 单曲循环：原地重播，不重新联网解析地址
@@ -142,7 +156,15 @@ PlayerController::PlayerController(QObject *parent)
             m_player->play();
             return;
         }
-        next();
+        if (m_advancing || m_suppressEnd) return;
+        m_advancing = true;
+        qInfo("播放结束，排队下一首：%s（模式 %d，队列 %d，index %d）",
+              qUtf8Printable(current().title), m_mode, int(m_queue.size()), m_currentIndex);
+        // 不要在 FFmpeg/Android 正在分发 EndOfMedia 的调用栈里同步 stop + setSource：
+        // 旧实现这样做时新歌经常起不来，表现为「播完一首就停住」。
+        QTimer::singleShot(0, this, [this] {
+            if (m_advancing) next();
+        });
     });
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     connect(m_player, &QMediaPlayer::playbackStateChanged, this,
@@ -208,6 +230,9 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers)
         play.setScheme(QStringLiteral("https"));
     ++m_playGen;
     m_headerRetry = false;
+    m_advancing = false;
+    // 新源加载完成（LoadedMedia/BufferedMedia）前，忽略旧曲残留的结束信号
+    m_suppressEnd = true;
     m_headers = headers;
     m_currentUrl = play;
     // 平台的直链几乎都带防盗链：sources.json 里声明的 Referer/Cookie 必须随请求发出。
@@ -486,6 +511,8 @@ void PlayerController::setQueue(const QVector<Song> &songs, int index)
     m_queue = songs;
     m_currentIndex = qBound(-1, index, m_queue.size() - 1);
     m_pendingSeek = 0;   // 用户显式换歌/开新列表，不再套用续播位置
+    m_advancing = false;
+    m_suppressEnd = false;
     emit queueChanged();
     emit mediaChanged();
 }
@@ -545,6 +572,8 @@ void PlayerController::setCurrentIndex(int index)
     if (index < 0 || index >= m_queue.size()) return;
     m_currentIndex = index;
     m_pendingSeek = 0;
+    m_advancing = false;
+    m_suppressEnd = false;
     emit mediaChanged();
     emitRequest(index);
 }
@@ -558,6 +587,7 @@ void PlayerController::emitRequest(int index)
 void PlayerController::next()
 {
     if (m_queue.isEmpty()) return;
+    m_advancing = false;   // 本次推进开始；排队回调看到 false 就不会重复切歌
     int nextIndex = m_currentIndex;
     switch (m_mode) {
     case 2:  // 单曲循环：用户主动点下一首仍然切歌，循环由 EndOfMedia 处理
@@ -583,6 +613,8 @@ void PlayerController::next()
     }
     m_currentIndex = nextIndex;
     m_pendingSeek = 0;
+    qInfo("切到下一首：index %d / %d「%s」", nextIndex, int(m_queue.size()),
+          qUtf8Printable(m_queue.at(nextIndex).title));
     emit mediaChanged();
     emitRequest(nextIndex);
 }
@@ -590,6 +622,7 @@ void PlayerController::next()
 void PlayerController::previous()
 {
     if (m_queue.isEmpty()) return;
+    m_advancing = false;
     if (position() > 5000) { seek(0); return; }
     int prev = m_currentIndex - 1;
     if (prev < 0) prev = m_mode == 0 ? 0 : m_queue.size() - 1;

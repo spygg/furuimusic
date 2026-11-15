@@ -2,7 +2,8 @@
 // 福瑞音乐 - 在线 JS 音源管理（导入 / 更新 / 删除 / 启用禁用 / 状态 / 聚合）
 //
 // 只做三件事：管理脚本生命周期、持久化其能力声明、把脚本提供的
-// search / musicUrl / lyric 接到聚合搜索与播放；不内置任何第三方源。
+// search / musicUrl / lyric 接到聚合搜索与播放；不随安装包内置任何脚本，
+// 首次启动仅从公开仓库页面按需发现并导入。
 #include <QHash>
 #include <QJsonArray>
 #include <QObject>
@@ -44,6 +45,11 @@ public:
     void checkAll();
     void remove(const QString &id);
     void setEnabled(const QString &id, bool enabled);
+    // 手动重新解析仓库页面（忽略每日节流），用于发现仓库新增的音源
+    void rescanRepository();
+    // 动态权重：成功取链的源置顶，失败的源后移一位（顺序持久化到 scriptSourceOrder）。
+    void promoteSource(const QString &id);
+    void demoteSource(const QString &id);
 
     // 聚合入口
     void search(const QString &keyword, int limit, SongsCallback cb);
@@ -81,9 +87,24 @@ private:
 
     void load();
     void seedBuiltinSources();           // 首次启动预置内置在线音源（用户删除过的不再补回）
-    void importWithFallback(const QStringList &mirrorUrls, int index);
+    void importWithFallback(const QStringList &mirrorUrls, int index,
+                            std::function<void()> done = {});
+    struct DiscoveredSource {
+        QString key;     // 仓库目录名，健康状态用它标记
+        QString name;    // README 小节名
+        QString url;     // raw 脚本地址
+    };
+    // 解析仓库页面（README 原文）：按「### 名称」小节取第一条 latest.js 地址
+    static QVector<DiscoveredSource> parseRepoPage(const QString &text);
+    // 原始 raw 地址 -> 多条加速镜像（含原始地址本身）
+    static QStringList mirrorUrlsFor(const QString &rawUrl);
+    void seedDiscovered(const QVector<DiscoveredSource> &list, std::function<void()> done = {});
+    bool m_seeding = false;
     static QString scriptIdForUrl(const QString &url);
     static bool isBuiltinUrl(const QString &url);
+    int rankOf(const QString &id) const;
+    QStringList orderedIds() const;      // 按权重排好序的音源 id
+    void saveOrder();
     void persist(const Item &item);
     Item *find(const QString &id);
     void ensureEngine(const QString &id, std::function<void(bool)> cb);
@@ -97,6 +118,8 @@ private:
     static QString metaLine(const QString &script, const QString &key);
 
     QHash<QString, Item> m_items;
+    // 音源使用顺序（权重从高到低）：取链成功置顶、失败后移一位
+    QStringList m_order;
     QHash<QString, QPointer<ScriptEngine>> m_engines;
     QHash<QString, QVector<std::function<void(bool)>>> m_waiters;
     QSet<QString> m_starting;

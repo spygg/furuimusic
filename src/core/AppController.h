@@ -311,6 +311,8 @@ public:
     Q_INVOKABLE void setScriptSourceEnabled(const QString &id, bool enabled);
     Q_INVOKABLE void checkScriptSource(const QString &id);
     Q_INVOKABLE void checkAllScriptSources();
+    // 忽略每日节流，立即重新解析 pdone/lx-music-source 仓库页面发现音源
+    Q_INVOKABLE void rescanScriptSources();
     Q_INVOKABLE void openExternal(const QString &url);
     Q_INVOKABLE void quitApp();   // Android：从设置页「退出应用」直接退出
 

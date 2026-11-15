@@ -37,6 +37,8 @@ public:
                          const QString &quality, PlayableCallback cb);
     // 把成功播放的音源置顶：后续换源/自动换源优先尝试它。custom 始终置顶，无需排序。
     void promoteSource(const QString &id);
+    // 取链/播放失败：后移一位，降低后续优先度（顺序持久化，跨重启保持）。
+    void demoteSource(const QString &id);
     void lyric(const Song &song, StringCallback cb);
     void cover(const Song &song, StringCallback cb);
     void mv(const Song &song, MvCallback cb);

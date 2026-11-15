@@ -241,6 +241,7 @@ void SourceManager::resolve(const Song &song, const QString &quality, PlayableCa
 
     s->resolveUrl(song, quality, [this, song, quality, cb](const Playable &original) {
         if (original.ok) { if (cb) cb(original); return; }
+        demoteSource(song.source);   // 原平台取链失败 → 动态降权
         if (!Settings::boolean(QStringLiteral("vipSubstitute"), true)) {
             if (cb) cb(original);
             return;
@@ -310,8 +311,9 @@ void SourceManager::tryCrossSource(const Song &song, const QString &quality,
                 r.message = QStringLiteral("原曲不可播放，已自动换源到 %1").arg(r.substituteSource);
                 promoteSource(matched.source);   // 解析阶段换源成功也置顶，保持"成功源第一位"
                 if (cb) cb(r);
-            } else if (cb) {
-                cb(original);
+            } else {
+                demoteSource(matched.source);    // 换源候选也取链失败 → 降权
+                if (cb) cb(original);
             }
         });
     });
@@ -323,6 +325,22 @@ void SourceManager::promoteSource(const QString &id)
         return;     // 自定义音源永远优先，无需排序
     m_sourceOrder.removeAll(id);
     m_sourceOrder.prepend(id);
+    Settings::set(QStringLiteral("sourceOrder"), m_sourceOrder.join(QLatin1Char(',')));
+}
+
+void SourceManager::demoteSource(const QString &id)
+{
+    if (id.isEmpty() || id == QLatin1String("custom"))
+        return;     // 自定义音源永远优先，无需排序
+    const int index = m_sourceOrder.indexOf(id);
+    if (index < 0) {
+        m_sourceOrder.append(id);
+        Settings::set(QStringLiteral("sourceOrder"), m_sourceOrder.join(QLatin1Char(',')));
+        return;
+    }
+    // 一次失败（版权/临时 5xx）只后移一位，避免直接沉底导致好源被长期冷落
+    if (index + 1 >= m_sourceOrder.size()) return;
+    m_sourceOrder.move(index, index + 1);
     Settings::set(QStringLiteral("sourceOrder"), m_sourceOrder.join(QLatin1Char(',')));
 }
 
@@ -380,6 +398,7 @@ void SourceManager::resolveAlternate(const Song &song, const QStringList &exclud
                     promoteSource(id);
                     if (cb) cb(r);
                 } else {
+                    demoteSource(id);            // 本候选取链失败 → 降权后再试下一个
                     (*attempt)(next);
                 }
             });
