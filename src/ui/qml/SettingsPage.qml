@@ -478,7 +478,9 @@ Item {
                             // 字符串不等判断，否则远端清单比本机旧（如本机 1.4.9、镜像缓存里的
                             // 清单还是 1.4.8）时会误报「发现新版本 v1.4.8」
                             if (updater.hasUpdate) return "发现新版本 v" + updater.remoteVersion
-                            return "已是最新版本"
+                            // 「拿到清单且确实不新」与「一条清单都没拉到」要分开显示，
+                            // 否则断网时也会写「已是最新版本」
+                            return updater.lastResult.length > 0 ? updater.lastResult : "已是最新版本"
                         }
                         color: updater.hasUpdate ? cPrimary : cSub
                         font.pixelSize: theme.fontSm

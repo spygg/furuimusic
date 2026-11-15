@@ -1,6 +1,8 @@
 // 福瑞音乐 - 在线检测更新（参照洛雪音乐 version.json 机制）
 // 清单的唯一事实来源是 src/version.json；publish/version.json 只是为已发布的老客户端
 // 保留的兼容副本，由 CI 校验两者内容一致（见 .github/workflows/release.yml）。
+// 注意：CDN（jsDelivr）对 main 分支的缓存滞后可达数小时，甚至各节点版本不一致，
+// 所以这里先用 GitHub API 拿最新 tag，再按 tag 取清单，并取所有镜像里最大的版本号。
 #include "UpdateChecker.h"
 
 #include "AppController.h"
@@ -11,9 +13,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QIODevice>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
 #include <QStandardPaths>
@@ -31,22 +31,33 @@ namespace Furui {
 
 namespace {
 
-// 多镜像依次尝试：先拉 src/version.json（清单主路径），四个 CDN 全失败时再退回
-// publish/version.json 兼容副本。顺序上把 GitHub raw + 三个 jsDelivr 节点放在同一路径内，
-// 避免老仓库分支还没同步 src/version.json 时新版客户端直接判定「无更新信息」。
-QStringList versionMirrors()
+// 清单拉取的两级来源见 probeLatestRelease()：这一级是 GitHub API，不走任何 CDN
+QString latestReleaseApiUrl()
+{
+    return QStringLiteral("https://api.github.com/repos/spygg/furuimusic/releases/latest");
+}
+
+// 某个 ref（不可变 tag 或 main）下的清单地址。
+// jsDelivr 对 @main 这类可变分支的缓存各节点进度不一致（实测同一时刻分别返回
+// 1.4.13 / 1.4.12 / 1.4.9），所以拿到 tag 就用 tag 取清单：不可变 ref 不会串到旧缓存。
+QStringList manifestUrls(const QString &ref)
 {
     static const char *const paths[] = {"src/version.json", "publish/version.json"};
-    QStringList mirrors;
+    QStringList urls;
     for (const char *path : paths) {
         const QString p = QString::fromLatin1(path);
-        mirrors << QStringLiteral("https://raw.githubusercontent.com/spygg/furuimusic/main/") + p
-                << QStringLiteral("https://cdn.jsdelivr.net/gh/spygg/furuimusic@main/") + p
-                << QStringLiteral("https://fastly.jsdelivr.net/gh/spygg/furuimusic@main/") + p
-                << QStringLiteral("https://gcore.jsdelivr.net/gh/spygg/furuimusic@main/") + p;
+        const QString raw = QStringLiteral("https://raw.githubusercontent.com/spygg/furuimusic/%1/").arg(ref) + p;
+        urls << raw
+             << QStringLiteral("https://ghfast.top/") + raw
+             << QStringLiteral("https://cdn.jsdelivr.net/gh/spygg/furuimusic@%1/").arg(ref) + p
+             << QStringLiteral("https://fastly.jsdelivr.net/gh/spygg/furuimusic@%1/").arg(ref) + p
+             << QStringLiteral("https://gcore.jsdelivr.net/gh/spygg/furuimusic@%1/").arg(ref) + p;
     }
-    return mirrors;
+    return urls;
 }
+
+// 单条清单最多等 8s：10 个地址是并行发的，整体上限也就是这一个超时
+constexpr int kManifestTimeoutMs = 8000;
 
 // CI（.github/workflows/release.yml）上传到 Release 的产物命名，下载直链按它拼
 QString releaseAssetFor(const QString &platformKey)
@@ -186,6 +197,14 @@ bool androidInstallApk(const QString &path)
 
 } // namespace
 
+// 一轮检查的并行拉取状态：pending 归零时用 best 出结论
+struct UpdateChecker::FetchState {
+    int pending = 0;
+    QString apiVersion;     // API 给出的 tag（仅 API 路径有值）
+    QString bestVersion;    // 已拿到的最高版本
+    QJsonObject best;       // 与 bestVersion 对应的清单
+};
+
 UpdateChecker *UpdateChecker::instance()
 {
     static UpdateChecker inst;
@@ -214,8 +233,78 @@ void UpdateChecker::checkForUpdates()
         return;
     m_checking = true;
     m_progress = 0;
+    m_lastResult.clear();
     emit stateChanged();
-    fetchMirror(0);
+    probeLatestRelease();
+}
+
+void UpdateChecker::probeLatestRelease()
+{
+    // 第一级：GitHub API 的 /releases/latest 不走 CDN，tag 就是当前最新发布版本
+    QVariantMap headers;
+    headers.insert(QStringLiteral("User-Agent"), QStringLiteral("FuruiMusic"));
+    headers.insert(QStringLiteral("Accept"), QStringLiteral("application/vnd.github+json"));
+    HttpClient::instance()->request(QStringLiteral("GET"), QUrl(latestReleaseApiUrl()), headers,
+                                    QByteArray(),
+                                    [this](const HttpClient::Reply &r) {
+        QString tag;
+        if (r.ok)
+            tag = r.json.object().value(QLatin1String("tag_name")).toString().trimmed();
+        if (tag.startsWith(QLatin1Char('v')))
+            tag.remove(0, 1);
+        if (!tag.isEmpty()) {
+            fetchManifests(tag, tag);
+            return;
+        }
+        // API 限流或不可达：退回 main 分支多镜像；由 finishCheck 取其中最大版本
+        fetchManifests(QStringLiteral("main"), QString());
+    }, kManifestTimeoutMs);
+}
+
+void UpdateChecker::fetchManifests(const QString &ref, const QString &apiVersion)
+{
+    const QStringList urls = manifestUrls(ref);
+    auto state = std::make_shared<FetchState>();
+    state->pending = urls.size();
+    state->apiVersion = apiVersion;
+    for (const QString &url : urls) {
+        // 并行拉全部镜像后取最高版本：只要有一个节点是旧缓存（或者镜像没同步），
+        // 也不会像以前那样「第一个返回合法 JSON 就采纳」把结果带偏
+        HttpClient::instance()->request(QStringLiteral("GET"), QUrl(url), QVariantMap(), QByteArray(),
+                                        [this, state](const HttpClient::Reply &r) {
+            const QString v = r.ok ? r.json.object().value(QLatin1String("version")).toString()
+                                   : QString();
+            if (!v.isEmpty()
+                && (state->bestVersion.isEmpty() || compareVersion(state->bestVersion, v) < 0)) {
+                state->bestVersion = v;
+                state->best = r.json.object();
+            }
+            if (--state->pending > 0)
+                return;
+            finishCheck(state);
+        }, kManifestTimeoutMs);
+    }
+}
+
+void UpdateChecker::finishCheck(const std::shared_ptr<FetchState> &state)
+{
+    if (!state->bestVersion.isEmpty()) {
+        applyManifest(state->best);
+        return;
+    }
+    if (!state->apiVersion.isEmpty()) {
+        // 清单一条都没拉到，但 API 已经明确了最新 tag：至少要让用户知道有更新
+        QJsonObject fallback;
+        fallback.insert(QStringLiteral("version"), state->apiVersion);
+        applyManifest(fallback);
+        return;
+    }
+    // 以前这里回退到打包进 APK 的 version.json，它与本地版本同源，必然谎报「已是最新」；
+    // 网络失败就必须如实说拿不到更新信息
+    m_checking = false;
+    m_lastResult = QStringLiteral("无法获取更新信息（网络不可达或全部镜像失败）");
+    emit stateChanged();
+    emit checkFinished(false, m_lastResult);
 }
 
 bool UpdateChecker::applyManifest(const QJsonObject &obj)
@@ -240,35 +329,10 @@ bool UpdateChecker::applyManifest(const QJsonObject &obj)
     for (auto it = dl.constBegin(); it != dl.constEnd(); ++it)
         m_downloads.insert(it.key(), it.value().toString());
     const bool hasUpdate = compareVersion(localVersion(), remote) < 0;
+    m_lastResult = hasUpdate ? QString() : QStringLiteral("已是最新版本");
     emit stateChanged();
-    emit checkFinished(hasUpdate, hasUpdate ? QString() : QStringLiteral("已是最新版本"));
+    emit checkFinished(hasUpdate, hasUpdate ? QString() : m_lastResult);
     return true;
-}
-
-void UpdateChecker::fetchMirror(int index)
-{
-    const QStringList mirrors = versionMirrors();
-    if (index >= mirrors.size()) {
-        // 远端全不可达：用编译进 qrc 的 src/version.json 兜底。本地清单与版本号同源，
-        // 结果必然是「已是最新版本」，比把离线误报成「无法获取更新信息」更如实。
-        QFile f(QStringLiteral(":/config/version.json"));
-        if (f.open(QIODevice::ReadOnly)
-            && applyManifest(QJsonDocument::fromJson(f.readAll()).object()))
-            return;
-        m_checking = false;
-        emit stateChanged();
-        emit checkFinished(false, QStringLiteral("无法获取更新信息（网络不可达或全部镜像失败）"));
-        return;
-    }
-    HttpClient::instance()->request(QStringLiteral("GET"), QUrl(mirrors.at(index)), QVariantMap(),
-                                    QByteArray(),
-                                    [this, index](const HttpClient::Reply &r) {
-        if (!r.ok || r.json.object().value(QLatin1String("version")).toString().isEmpty()) {
-            fetchMirror(index + 1);
-            return;
-        }
-        applyManifest(r.json.object());
-    });
 }
 
 QString UpdateChecker::downloadUrlFor(const QString &version) const

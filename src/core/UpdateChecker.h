@@ -1,7 +1,8 @@
 #pragma once
 // 福瑞音乐 - 在线检测更新（参照洛雪音乐 version.json 机制）
 // 流程：
-//   1) 从多个镜像依次拉取 src/version.json（失败才回退 publish/version.json 兼容副本）；
+//   1) 先问 GitHub API /releases/latest 拿最新 tag（不走 CDN），再按该不可变 tag
+//      并行拉多镜像清单并取最大版本号；API 不可达时才退回 main 分支多镜像；
 //   2) 与本地版本号比较，有新版本时通知 QML（设置页弹层 + 全局 Toast）；
 //   3) 用户同意后从 GitHub Releases 直接下载当前平台的安装包
 //      （Windows: FuruiMusic-windows-x64.zip / Android: FuruiMusic-android-arm64-v8a.apk），
@@ -13,6 +14,7 @@
 #include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
+#include <memory>
 
 namespace Furui {
 
@@ -34,6 +36,9 @@ class UpdateChecker : public QObject {
     Q_PROPERTY(int progress READ progress NOTIFY stateChanged)
     // 下载完成后安装包落盘路径
     Q_PROPERTY(QString downloadedPath READ downloadedPath NOTIFY stateChanged)
+    // 检查结论的补充说明：无更新时是「已是最新版本」，拉取失败时是失败原因，检查中为空。
+    // 「拉不到清单」和「确实是最新」以前在界面上都显示成「已是最新版本」，必须区分开
+    Q_PROPERTY(QString lastResult READ lastResult NOTIFY stateChanged)
 
 public:
     static UpdateChecker *instance();
@@ -48,6 +53,7 @@ public:
     bool hasUpdate() const;
     int progress() const { return m_progress; }
     QString downloadedPath() const { return m_downloadedPath; }
+    QString lastResult() const { return m_lastResult; }
 
     // 拉取 version.json 并与本地版本比较；结果经 checkFinished 通知
     Q_INVOKABLE void checkForUpdates();
@@ -64,7 +70,12 @@ signals:
     void downloadFailed(const QString &error);
 
 private:
-    void fetchMirror(int index);
+    // 一轮检查里并行拉取清单的共享状态（定义在 .cpp）
+    struct FetchState;
+
+    void probeLatestRelease();
+    void fetchManifests(const QString &ref, const QString &apiVersion);
+    void finishCheck(const std::shared_ptr<FetchState> &state);
     bool applyManifest(const QJsonObject &obj);
     QString downloadUrlFor(const QString &version) const;
     QString targetPath() const;
@@ -77,6 +88,7 @@ private:
     bool m_downloading = false;
     int m_progress = 0;
     QString m_downloadedPath;
+    QString m_lastResult;
 };
 
 } // namespace Furui
