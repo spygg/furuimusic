@@ -14,6 +14,11 @@
         <!-- %%INSERT_LOCAL_LIBS%% -->
     </array>
 
+    <!-- 本文件会覆盖 Qt 打包模板里的同名 res/values/libs.xml，所以必须同时兼容
+         各 Qt 版本运行时的必需资源项：Qt 6.8 的 QtLoader.getStaticInitClasses()
+         会直接 getString("static_init_classes") 且不判 0，缺失就在 Activity.onCreate
+         抛 Resources$NotFoundException 秒崩；Qt 6.11 已不需要该项，留着也无副作用。 -->
+    <string name="static_init_classes"><!-- %%INSERT_INIT_CLASSES%% --></string>
     <string name="use_local_qt_libs"><!-- %%USE_LOCAL_QT_LIBS%% --></string>
     <string name="bundle_local_qt_libs"><!-- %%BUNDLE_LOCAL_QT_LIBS%% --></string>
     <string name="system_libs_prefix"><!-- %%SYSTEM_LIBS_PREFIX%% --></string>

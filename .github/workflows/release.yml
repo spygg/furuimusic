@@ -370,6 +370,12 @@ jobs:
             --ks-pass pass:android --key-pass pass:android \
             --out "$ARTIFACT_NAME" "$RUNNER_TEMP/aligned.apk"
           "$BT/apksigner" verify --print-certs "$ARTIFACT_NAME"
+          # 启动崩溃回归守卫：src/platform/android-qt6/res/values/libs.xml 会覆盖 Qt
+          # 打包模板，一旦丢了 static_init_classes，Qt 6.8 运行时的 QtLoader 在
+          # Activity.onCreate 里 getString(0) 直接抛 Resources$NotFoundException（1.4.8
+          # 就是这样一启动就崩）。这里在产物上复检，缺了就中断发布。
+          "$BT/aapt2" dump resources "$ARTIFACT_NAME" | grep -q 'static_init_classes' \
+            || { echo "::error::APK 缺少 static_init_classes 资源，Qt 6.8 运行时会启动崩溃"; exit 1; }
           test -s "$ARTIFACT_NAME"
           ls -la "$ARTIFACT_NAME"
 
