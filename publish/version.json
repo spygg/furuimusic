@@ -1,7 +1,11 @@
 {
-  "version": "1.4.8",
-  "desc": "新增\n- Android 播放前台服务 + MediaSession：通知栏、锁屏、耳机线控、车机都能控制播放/暂停/上下曲/拖动进度，退到后台或锁屏后不再被系统回收\n- 通知栏与锁屏显示专辑封面：联网封面自动下载并缓存到本地，切歌即时更新\n\n修复\n- Android 返回键失效：现在从任意页面都能正常逐级返回\n- 横屏/分屏下播放页控件被裁切，音量条滚到底也看不到\n- 分屏、平板、车机等非手机尺寸下的布局自适应与状态栏/导航栏安全区避让（Android 15 edge-to-edge）\n\n其他\n- 通知权限（Android 13+）在首次播放时向用户申请，拒绝后仍可在系统设置中开启",
+  "version": "1.4.9",
+  "desc": "修复\n- Android 版一启动就崩溃（白屏后直接退出）：应用包内的 res/values/libs.xml 会覆盖 Qt 打包模板，缺了 Qt 6.8 运行时必需的 static_init_classes 资源，Activity.onCreate 直接抛 Resources$NotFoundException。已补齐该资源；本地用 Qt 6.11 构建不带这项检查，所以之前的本地测试没能暴露，现已改为在打包后校验资源\n\n其他\n- 1.4.8 的 Android 前台服务 / MediaSession / 通知与锁屏专辑封面在本版正常可用",
   "history": [
+    {
+      "version": "1.4.8",
+      "desc": "新增\n- Android 播放前台服务 + MediaSession：通知栏、锁屏、耳机线控、车机都能控制播放/暂停/上下曲/拖动进度，退到后台或锁屏后不再被系统回收\n- 通知栏与锁屏显示专辑封面：联网封面自动下载并缓存到本地，切歌即时更新\n\n修复\n- Android 返回键失效：现在从任意页面都能正常逐级返回\n- 横屏/分屏下播放页控件被裁切，音量条滚到底也看不到\n- 分屏、平板、车机等非手机尺寸下的布局自适应与状态栏/导航栏安全区避让（Android 15 edge-to-edge）\n\n其他\n- 通知权限（Android 13+）在首次播放时向用户申请，拒绝后仍可在系统设置中开启"
+    },
     {
       "version": "1.4.7",
       "desc": "新增\n- 官网登录页打开即显示「扫码登录 / 手机号登录 / 账号登录」选项卡片，页面就绪后淡出过渡，不再先闪站点首页\n- 汽水音乐账号改为直连官方 /luna 接口读取个人资料与歌单；设置页可按需填写 PC 抓包得到的 X-Helios / X-Medusa 签名头\n\n修复\n- 网易云登录页残留顶部黑/红站点横幅、登录区不居中、横竖屏旋转后布局错乱：登录框位于同源 iframe 内，主文档样式覆盖不到，改为 iframe 内注入裁剪样式并按可视视口居中\n- Android 应用内更新安装报「同签名已安装」：CI 每次随机生成 debug keystore 导致各版本签名不同；本地与 CI 统一改用仓库内固定签名，安装前预检版本号与签名，并修正安装 Intent flags\n- QQ 音乐等平台登录入口被 iframe 裁剪逻辑抢跑导致点不开：裁剪限定只对网易云生效\n- 汽水歌单封面解析（url_cover 对象结构）\n\n其他\n- 酷我官网登录入口只认真实点击，仍需在过渡卡片出现后手动点一下「登录」\n- 汽水账号接口若返回 ERR_REQUEST_FORBIDDEN 属设备签名风控，可在设置页补签名头或改用 Cookie 导入"
@@ -48,9 +52,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.8/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.8/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.8/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.8/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.9/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.9/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.9/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.9/FuruiMusic-android-arm64-v8a.apk"
   }
 }
