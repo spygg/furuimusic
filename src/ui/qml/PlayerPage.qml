@@ -36,6 +36,9 @@ Item {
     // 但窗口可能只剩一个竖长条，按屏幕方向会错判成横屏双栏。
     readonly property bool wide: (root.width >= root.height ? root.width >= 520
                                                             : root.width >= 760)
+    // 竖屏分屏/窄矮窗口：页面高度只剩 250dp 上下时，封面+歌词会把进度和控件顶出可视区
+    // （底部标签栏再把它们盖住）。这种高度下让封面/歌词让位，保证播放控件始终可点。
+    readonly property bool compactTiny: !root.wide && root.height < 420
     readonly property bool isDark: theme.dark
 
     // 本页专用文字色：浅色主题用深墨（压在白纱背景上），深色主题用浅墨
@@ -258,12 +261,14 @@ Item {
             anchors.bottomMargin: 14
             visible: root.wide
 
-            // 封面边长：由「左列宽度」和「扣除信息区后的剩余高度」共同决定，避免小窗口把按钮挤出去
-            // 预留 216 = 标题区 56 + 进度 34 + 控件 72 + 两段间距，使矮横屏（车机分屏常只有 300~400 高）
-            // 也能整列放下，而不是把播放按钮推出可视区
+            // 封面边长：由「左列宽度」和「扣除信息区后的剩余高度」共同决定，避免小窗口把按钮挤出去。
+            // 预留 236 = 标题区 ~89 + 进度 34 + 控件两行（控制行 + 常驻音量行，实测 ~94）+ 间距 12，
+            // 使矮横屏（车机分屏常只有 300~500 高）也能整列放下，而不是把音量行推出可视区
             readonly property bool shortRow: height < 420
-            readonly property real coverSide: Math.max(84, Math.min(width * 0.40,
-                                                                  height - 216, 390))
+            // 短屏（手机横屏 336dp 高）里封面再占 84 会把最后的音量行挤出可视区，
+            // 下限收到 60；其余高度按可用高度反推，保证整列放得下。
+            readonly property real coverSide: Math.max(widePane.shortRow ? 60 : 84,
+                                                       Math.min(width * 0.40, height - 236, 390))
 
             RowLayout {
                 anchors.fill: parent
@@ -317,7 +322,10 @@ Item {
 
                             Loader {
                                 width: parent.width
-                                height: widePane.shortRow ? 72 : 86
+                                // 宽屏控件块含「控制行 + 常驻音量行」两行，实测约 94 高；
+                                // 写死 72/86 会让音量行溢出 Loader 自身高度，被外层 Flickable 裁掉，
+                                // 横屏滚到底也看不到音量条。按内容实际高度给位。
+                                height: item ? item.implicitHeight : (widePane.shortRow ? 72 : 86)
                                 sourceComponent: controlsComp
                             }
                         }
@@ -338,8 +346,8 @@ Item {
         Item {
             id: compactPane
             anchors.fill: parent
-            anchors.margins: 18
-            anchors.topMargin: 58
+            anchors.margins: root.compactTiny ? 12 : 18
+            anchors.topMargin: root.compactTiny ? 72 : 58
             visible: !root.wide
 
             ColumnLayout {
@@ -354,12 +362,22 @@ Item {
                     sourceComponent: metaComp
                 }
 
+                // 极矮窗口里封面/歌词让位后，用这个占位把进度与控件压到底部
+                Item {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    visible: root.compactTiny
+                }
+
                 // 封面 ↔ 歌词：左右滑动切换（lx 的 PagerView 交互）
                 SwipeView {
                     id: pager
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.minimumHeight: 140
+                    // 最小高度不能给太大：竖屏分屏（约 400dp 高）里固定的元信息/进度/控件
+                    // 已占满大部分高度，再把这里卡到 140 会把整行控件顶到可视区外。
+                    Layout.minimumHeight: 80
+                    visible: !root.compactTiny
                     clip: true
 
                     // 第 1 页：封面居中，边长随页高自适应
@@ -384,7 +402,8 @@ Item {
                 // 页点指示器：当前页高亮主色
                 Item {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 14
+                    Layout.preferredHeight: root.compactTiny ? 0 : 14
+                    visible: !root.compactTiny
                     Row {
                         anchors.centerIn: parent
                         spacing: 6
@@ -625,6 +644,8 @@ Item {
 
             Text {
                 width: parent.width
+                // 极矮窗口里省掉艺人行，把高度让给进度与控件
+                visible: !root.compactTiny
                 text: root.hasSong
                       ? (app.currentArtist.length > 0 ? app.currentArtist : "未知艺人")
                       : "在曲库或歌单里选一首开始"
@@ -748,16 +769,32 @@ Item {
     Component {
         id: controlsComp
         Column {
+            id: controlsCol
             anchors.fill: parent
             spacing: 10
 
+            // 控制行是 5 枚触控按钮 + 1 个主按钮。360dp 手机按 48dp 触控位 + 12 间距
+            // 需要 358dp，扣掉页面左右留白后放不下，最右的音量按钮会被裁掉。
+            // 这里按可用宽度反推按钮尺寸与间距，窄屏自动收小，宽屏保持 48dp。
+            readonly property int ctrlPlayW: root.wide ? 64 : 58
+            readonly property int ctrlBtn: {
+                var avail = Math.max(0, width - ctrlPlayW)
+                var gapTarget = root.wide ? 18 : 12
+                var byWidth = Math.floor((avail - gapTarget * 5) / 5)
+                return Math.max(34, Math.min(theme.touchMin, byWidth))
+            }
+            readonly property int ctrlGap: {
+                var avail = Math.max(0, width - ctrlPlayW - ctrlBtn * 5)
+                return Math.max(2, Math.min(root.wide ? 18 : 12, Math.floor(avail / 5)))
+            }
+
             Row {
                 anchors.horizontalCenter: parent.horizontalCenter
-                spacing: root.wide ? 18 : 12
+                spacing: controlsCol.ctrlGap
 
                 // 收藏
                 Item {
-                    width: theme.touchMin; height: theme.touchMin
+                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
                     Rectangle {
                         anchors.fill: parent
                         radius: height / 2
@@ -782,7 +819,7 @@ Item {
                 }
 
                 Item {
-                    width: theme.touchMin; height: theme.touchMin
+                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
                     GlyphIcon {
                         anchors.centerIn: parent
                         name: "prev"
@@ -800,7 +837,7 @@ Item {
 
                 // 主按钮：单色圆盘（深色主题为白盘），按下回弹
                 Rectangle {
-                    width: root.wide ? 64 : 58
+                    width: controlsCol.ctrlPlayW
                     height: width
                     radius: width / 2
                     color: root.ink
@@ -823,7 +860,7 @@ Item {
                 }
 
                 Item {
-                    width: theme.touchMin; height: theme.touchMin
+                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
                     GlyphIcon {
                         anchors.centerIn: parent
                         name: "next"
@@ -841,7 +878,7 @@ Item {
 
                 // 播放模式：图标随模式变化（顺序 / 循环 / 单曲 / 随机）
                 Item {
-                    width: theme.touchMin; height: theme.touchMin
+                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
                     Rectangle {
                         anchors.fill: parent
                         radius: height / 2
@@ -867,7 +904,7 @@ Item {
                 // 音量：窄屏收成控制行里的一枚按钮，点开垂直滑块弹层；
                 // 宽屏下方已有常驻音量滑条，这里不再重复显示
                 Item {
-                    width: theme.touchMin; height: theme.touchMin
+                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
                     visible: !root.wide
                     Rectangle {
                         anchors.fill: parent

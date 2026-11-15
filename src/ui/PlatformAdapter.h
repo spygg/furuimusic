@@ -2,6 +2,7 @@
 // 福瑞音乐 - 平台适配层
 // 只暴露“平台是什么、目录在哪、能力是否具备”，页面不写平台条件编译。
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QUrl>
 
@@ -15,7 +16,9 @@ class PlatformAdapter : public QObject {
     Q_PROPERTY(bool isDesktop READ isDesktop CONSTANT)
     // 平板/手机区分：仅移动平台有意义，桌面恒为 false。用来决定手机横屏是否允许
     // 切到桌面壳——手机（非平板）一律强制移动壳，平板按窗口宽度判定。
-    Q_PROPERTY(bool isTablet READ isTablet)
+    // 物理尺寸要等平台初始化后才可读，带 NOTIFY 才能让 QML 的绑定在启动后重算
+    // （否则 QQmlExpression 会报 "depends on non-bindable properties"）。
+    Q_PROPERTY(bool isTablet READ isTablet NOTIFY formFactorChanged)
     Q_PROPERTY(QString platformName READ platformName CONSTANT)
     Q_PROPERTY(QString dataDir READ dataDir CONSTANT)
     Q_PROPERTY(QString downloadsDir READ downloadsDir CONSTANT)
@@ -111,12 +114,17 @@ public:
 signals:
     void insetsChanged();
     void touchPrimaryChanged();
+    // isTablet 依赖屏幕物理尺寸，启动后（或切换主屏时）补发一次，驱动 QML 重新判定外壳
+    void formFactorChanged();
 
 private:
     qreal m_insetLeft = 0;
     qreal m_insetTop = 0;
     qreal m_insetRight = 0;
     qreal m_insetBottom = 0;
+    // 已接上 safeAreaMarginsChanged 的窗口：Qt 的 UniqueConnection 不支持 lambda，
+    // 这里自己记一个，避免每次 refreshInsets 重复 connect
+    QPointer<QQuickWindow> m_safeAreaWindow;
 };
 
 } // namespace Furui

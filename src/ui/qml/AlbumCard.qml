@@ -134,7 +134,8 @@ Item {
                     }
                 }
 
-                // hover 时浮现的播放按钮
+                // hover 时浮现的播放按钮；触屏设备（手机/车机/平板）没有 hover，
+                // 直接常显，否则卡片上看不到「可播放」的视觉提示
                 Rectangle {
                     width: 36
                     height: 36
@@ -143,7 +144,7 @@ Item {
                     anchors.bottom: parent.bottom
                     anchors.margins: 8
                     color: root.accent
-                    opacity: hover.hovered ? 1 : 0
+                    opacity: (hover.hovered || platform.isMobile) ? 1 : 0
                     Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
                     Text {
                         anchors.centerIn: parent

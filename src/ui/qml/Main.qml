@@ -13,17 +13,6 @@ ApplicationWindow {
     minimumHeight: platform.minimumWindowHeight
     title: app.appName + (platform.isMobile ? "" : " - " + platform.platformName)
 
-    // 返回键 / Esc 兜底：焦点可能落在页面内任意子控件（输入框、按钮）上，
-    // 外壳自己挂的 Keys 收不到时事件会冒泡到窗口这一层，这里再转给外壳处理，
-    // 顺序仍是「队列面板 → 播放页 → 首页」逐级回退
-    Keys.onReleased: function(event) {
-        if (event.key === Qt.Key_Back || event.key === Qt.Key_Escape) {
-            const item = shell.item
-            if (item && item.handleBack && item.handleBack())
-                event.accepted = true
-        }
-    }
-
     // 桌面端去掉系统边框，标题栏与拉伸热区由 QML 自绘；移动端保持系统窗口
     flags: platform.framelessSupported
            ? (Qt.Window | Qt.FramelessWindowHint)
@@ -37,7 +26,10 @@ ApplicationWindow {
     // 重建、滚动位置与在播高亮全丢。改为「进入窄阈值 + 离开宽阈值」的滞后带 + 去抖。
     readonly property int compactEnterWidth: 760
     readonly property int compactLeaveWidth: 830
-    property bool compact: false
+    // 手机（非平板）始终用移动壳；这里提前算出来，让冷启动第一次装载就是正确外壳。
+    // 否则手机上会先按桌面壳建一整棵页面树、再在 Component.onCompleted 里销毁重建。
+    readonly property bool forceMobileShell: platform.isMobile && !platform.isTablet
+    property bool compact: forceMobileShell
     // 用 visibility 而不是平台查询，最大化状态变化时才能自动刷新
     readonly property bool maximized: win.visibility === Window.Maximized
                       || win.visibility === Window.FullScreen
@@ -72,7 +64,7 @@ ApplicationWindow {
         // 手机（非平板）横竖屏一律用移动壳：手机横屏宽度常越过 760 阈值，若按宽度
         // 判定会窜到桌面壳，在窄高屏上布局极不合理。平板（含车机矮宽屏）仍按窗口宽度
         // 判定（横屏用桌面壳，用户已确认平板横屏体验正常）。
-        var forceMobile = platform.isMobile && !platform.isTablet
+        var forceMobile = win.forceMobileShell
         var nextCompact = forceMobile ? true
                 : (win.compact
                    ? win.width <= win.compactLeaveWidth
@@ -86,7 +78,7 @@ ApplicationWindow {
         platform.refreshInsets(win)
     }
 
-    property string shellSource: "MainDesktop.qml"
+    property string shellSource: forceMobileShell ? "MainMobile.qml" : "MainDesktop.qml"
 
     Loader {
         id: shell
@@ -99,9 +91,32 @@ ApplicationWindow {
         anchors.topMargin: platform.insetTop
         anchors.bottomMargin: platform.insetBottom
         source: win.shellSource
+        // Qt 只把按键派发给 activeFocusItem，焦点为空时事件直接被丢弃（不是发给 contentItem），
+        // 所以外壳自己持有焦点；页面里的输入框被点按时仍会正常抢走焦点。
+        focus: true
+        // 返回键 / Esc 兜底：焦点落在页面内任意子控件时，事件沿父链冒泡到 Loader，
+        // 这里再转给外壳处理，顺序仍是「队列面板 → 播放页 → 首页」逐级回退。
+        // 不能挂在 ApplicationWindow 上：Window 不是 Item，Keys 是无效的附加属性。
+        Keys.onReleased: function(event) {
+            if (event.key === Qt.Key_Back || event.key === Qt.Key_Escape) {
+                const item = shell.item
+                if (item && item.handleBack && item.handleBack())
+                    event.accepted = true
+            }
+        }
         onLoaded: {
             ++swaps
             win.syncShellState()
+        }
+    }
+
+    // 页面切走时会主动清掉输入框焦点（见 MainMobile），此时 activeFocusItem 变空，
+    // 返回键就没人接收了。这里把焦点还回外壳，保证「键盘收起后按返回仍能逐级回退」。
+    Connections {
+        target: win
+        function onActiveFocusItemChanged() {
+            if (!win.activeFocusItem && win.visible)
+                shell.forceActiveFocus()
         }
     }
 

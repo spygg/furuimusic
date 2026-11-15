@@ -4,6 +4,8 @@
 #include "core/QtCompat.h"
 
 #include <QGuiApplication>
+#include <QMargins>
+#include <QPointer>
 #include <QQuickWindow>
 #include <QScreen>
 #include <QTimer>
@@ -20,7 +22,11 @@ PlatformAdapter::PlatformAdapter(QObject *parent) : QObject(parent)
 {
     // 输入设备列表要等平台插件初始化完才可靠（车机触摸屏常晚于窗口创建被枚举），
     // 启动后补一次广播，让 QML 里对 touchPrimary 的绑定重新求值。
-    QTimer::singleShot(1200, this, [this] { emit touchPrimaryChanged(); });
+    // isTablet 依赖屏幕物理尺寸，同样要等平台就绪，一并补发。
+    QTimer::singleShot(1200, this, [this] {
+        emit touchPrimaryChanged();
+        emit formFactorChanged();
+    });
 }
 
 bool PlatformAdapter::isMobile() const
@@ -151,10 +157,36 @@ void PlatformAdapter::closeWindow(QQuickWindow *window)
 void PlatformAdapter::refreshInsets(QQuickWindow *window)
 {
     qreal l = 0, t = 0, r = 0, b = 0;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+    // Android 15 起 targetSdk 35 的应用被强制 edge-to-edge：窗口与屏幕可用区都是整屏，
+    // 下面「窗口几何 - availableGeometry」恒为 0，状态栏就会压到界面上。
+    // Qt 6.9+ 的 safeAreaMargins() 由平台直接上报系统栏/刘海占位（已转设备无关像素，
+    // 且扣除了窗口自身偏移），窗口本来就没铺到系统栏时它返回 0，不会二次留白。
+    if (window) {
+        const QMargins safe = window->safeAreaMargins();
+        if (!safe.isNull()) {
+            l = qMax(0, safe.left());
+            t = qMax(0, safe.top());
+            r = qMax(0, safe.right());
+            b = qMax(0, safe.bottom());
+        }
+        // 安全区是异步上报的（旋转、系统栏显隐都会变），只在尺寸变化时刷新会漏掉。
+        // 每个窗口只接一次；QPointer 防止窗口销毁后回调野指针。
+        if (window != m_safeAreaWindow) {
+            m_safeAreaWindow = window;
+            QPointer<QQuickWindow> guard(window);
+            QObject::connect(window, &QWindow::safeAreaMarginsChanged, this,
+                             [this, guard] {
+                                 if (guard)
+                                     refreshInsets(guard);
+                             });
+        }
+    }
+#endif
     // QWindow::geometry() 和 QScreen 的几何都是设备无关像素，直接同单位相减。
     // 早先在这里把窗口乘了 dpr（以为 QScreen 是物理像素），dpr=2 的手机上右/下安全区
     // 被算成屏幕的一半，Loader 内缩后整个界面只剩左上 1/4。
-    if (window && window->screen()) {
+    if (l == 0 && t == 0 && r == 0 && b == 0 && window && window->screen()) {
         // 只在「窗口铺屏」时计算：桌面浮窗被拖到任务栏上时也确实压到了可用区外，
         // 但那种情况该让用户移动窗口，而不是界面凭空缩进去一条
         const bool fillsScreen = isMobile() || window->visibility() == QWindow::Maximized
