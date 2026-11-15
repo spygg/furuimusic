@@ -1,7 +1,11 @@
 {
-  "version": "1.4.10",
-  "desc": "修复\n- 汽水音乐选中平台后自动打开官网登录页、在应用内登录不成功的问题：汽水的登录层在跨域 iframe 里，抖音账号/扫码的登录态读不回 sessionid。现在汽水恢复 v1.4.6 的行为——选中即进内置扫码页，用抖音 App 扫一扫即可登录，扫码确认后自动同步歌单\n\n其他\n- 网易云 / QQ / 酷狗 / 酷我 / 咪咕仍保持「选中平台即打开官网登录页」",
+  "version": "1.4.11",
+  "desc": "改进\n- 账号页所有平台默认都进内置二维码登录，不再一选中平台就打开全屏官网登录页；内置扫码/密码被风控或接口失败后，提示条下方会出现「内置登录失败？改用官网登录页」入口\n\n修复\n- 切歌时先停掉上一首再解析新歌直链：之前解析的那几秒里上一首会继续响，听起来像「切歌没生效 / 新歌没缓冲」；现在新歌就绪前保持静音，换源前也会彻底停掉旧流",
   "history": [
+    {
+      "version": "1.4.10",
+      "desc": "修复\n- 汽水音乐选中平台后自动打开官网登录页、在应用内登录不成功的问题：汽水的登录层在跨域 iframe 里，抖音账号/扫码的登录态读不回 sessionid。现在汽水恢复 v1.4.6 的行为——选中即进内置扫码页，用抖音 App 扫一扫即可登录，扫码确认后自动同步歌单\n\n其他\n- 网易云 / QQ / 酷狗 / 酷我 / 咪咕仍保持「选中平台即打开官网登录页」"
+    },
     {
       "version": "1.4.9",
       "desc": "修复\n- Android 版一启动就崩溃（白屏后直接退出）：应用包内的 res/values/libs.xml 会覆盖 Qt 打包模板，缺了 Qt 6.8 运行时必需的 static_init_classes 资源，Activity.onCreate 直接抛 Resources$NotFoundException。已补齐该资源；本地用 Qt 6.11 构建不带这项检查，所以之前的本地测试没能暴露，现已改为在打包后校验资源\n\n其他\n- 1.4.8 的 Android 前台服务 / MediaSession / 通知与锁屏专辑封面在本版正常可用"
@@ -56,9 +60,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.10/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.10/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.10/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.10/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.11/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.11/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.11/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.11/FuruiMusic-android-arm64-v8a.apk"
   }
 }
