@@ -1,7 +1,11 @@
 {
-  "version": "1.4.9",
-  "desc": "修复\n- Android 版一启动就崩溃（白屏后直接退出）：应用包内的 res/values/libs.xml 会覆盖 Qt 打包模板，缺了 Qt 6.8 运行时必需的 static_init_classes 资源，Activity.onCreate 直接抛 Resources$NotFoundException。已补齐该资源；本地用 Qt 6.11 构建不带这项检查，所以之前的本地测试没能暴露，现已改为在打包后校验资源\n\n其他\n- 1.4.8 的 Android 前台服务 / MediaSession / 通知与锁屏专辑封面在本版正常可用",
+  "version": "1.4.10",
+  "desc": "修复\n- 汽水音乐选中平台后自动打开官网登录页、在应用内登录不成功的问题：汽水的登录层在跨域 iframe 里，抖音账号/扫码的登录态读不回 sessionid。现在汽水恢复 v1.4.6 的行为——选中即进内置扫码页，用抖音 App 扫一扫即可登录，扫码确认后自动同步歌单\n\n其他\n- 网易云 / QQ / 酷狗 / 酷我 / 咪咕仍保持「选中平台即打开官网登录页」",
   "history": [
+    {
+      "version": "1.4.9",
+      "desc": "修复\n- Android 版一启动就崩溃（白屏后直接退出）：应用包内的 res/values/libs.xml 会覆盖 Qt 打包模板，缺了 Qt 6.8 运行时必需的 static_init_classes 资源，Activity.onCreate 直接抛 Resources$NotFoundException。已补齐该资源；本地用 Qt 6.11 构建不带这项检查，所以之前的本地测试没能暴露，现已改为在打包后校验资源\n\n其他\n- 1.4.8 的 Android 前台服务 / MediaSession / 通知与锁屏专辑封面在本版正常可用"
+    },
     {
       "version": "1.4.8",
       "desc": "新增\n- Android 播放前台服务 + MediaSession：通知栏、锁屏、耳机线控、车机都能控制播放/暂停/上下曲/拖动进度，退到后台或锁屏后不再被系统回收\n- 通知栏与锁屏显示专辑封面：联网封面自动下载并缓存到本地，切歌即时更新\n\n修复\n- Android 返回键失效：现在从任意页面都能正常逐级返回\n- 横屏/分屏下播放页控件被裁切，音量条滚到底也看不到\n- 分屏、平板、车机等非手机尺寸下的布局自适应与状态栏/导航栏安全区避让（Android 15 edge-to-edge）\n\n其他\n- 通知权限（Android 13+）在首次播放时向用户申请，拒绝后仍可在系统设置中开启"
@@ -52,9 +56,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.9/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.9/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.9/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.9/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.10/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.10/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.10/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.10/FuruiMusic-android-arm64-v8a.apk"
   }
 }
