@@ -222,6 +222,9 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers)
     // 策略：先按地址直连（多数直链不需要头）；如果播放器报错，errorOccurred
     // 里会调用 fetchWithHeaders() 带 headers 下载到缓存后改播本地文件。
     Q_UNUSED(req);
+    // 换源前先把旧流彻底停掉：setSource 是异步的，新源首帧就绪前部分后端仍在
+    // 输出上一路音频，听感上就是「切歌了还在放老歌」。
+    m_player->stop();
     m_player->setSource(play);
 #else
     m_player->setMedia(QMediaContent(req));

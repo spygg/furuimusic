@@ -802,7 +802,11 @@ void AppController::refreshAccounts() { syncAccountModel(); }
 void AppController::resolveAndPlay(const Song &song)
 {
     if (song.title.isEmpty()) return;
-    // 开始一首新歌：重置播放失败的换源状态，记录当前歌（供失败换源复用）。
+    // 开始一首新歌：先停掉上一首。取链是异步的（多源轮询 + 失败换源），这一小段
+    // 如果不停，上一首会继续响，用户看到的就是「点了下一首、界面已经切了，声音
+    // 还是老歌」；停住后新直链回来再 playUrl，宁可短暂静音也不留旧歌的尾音。
+    PlayerController::instance()->stop();
+    // 重置播放失败的换源状态，记录当前歌（供失败换源复用）。
     d->currentSong = song;
     d->triedFallback.clear();
     d->inFallback = false;
