@@ -50,23 +50,16 @@ Item {
     // 放进可滚动的卡片里会盖住卡片外的内容，所以只让它铺满账号页这一整块
     property bool webLoginActive: false
 
-    // 选中了平台、该平台有官网登录页、本机还没登录 → 官网登录页就是默认视图，
-    // 直接打开，不再让用户先点一下「打开官网登录页」。其余平台一致处理
-    // （网易云/酷我/QQ/酷狗/咪咕），白纱+裁剪由 WebLoginView 统一收口。
-    function openWebLoginDefault() {
-        // 汽水（抖音音乐）不走官网登录页：music.douyin.com 的登录框要抖音 App
-        // 扫码或抖音账号短信，登录层又是跨域 iframe，应用内 WebView 读不回
-        // sessionid；而内置的 passport 出码链路（api.qishui.com/passport/web/*）
-        // 扫码确认后就能直接登录，所以汽水保持 v1.4.6 的行为——选中即进扫码页。
-        if (root.selectedSource === "qishui") return
-        if (root.webLoginAvailable && root.selectedSource.length > 0
-                && !root.loggedNow && !root.webLoginActive
-                && browser.loginUrl(root.selectedSource).length > 0) {
-            // 先让 WebView2 后端知道「下一个 WebView 的首帧要先蒙白纱」：
-            // 官网首页会先渲染再被裁剪，中间那一瞬用户会看到导航/播放器闪过去。
-            browser.setLoginVeil(true)
-            root.webLoginActive = true
-        }
+    // 官网登录页只在用户主动点入口时打开：内置二维码是首选方式（不依赖 WebView、
+    // 也不用在站点自己的页面里过滑块/风控），官网登录页留作内置方式失败后的兜底。
+    // WebView 是原生子窗口，白纱+裁剪由 WebLoginView 统一收口。
+    function openWebLoginPage() {
+        if (!root.webLoginAvailable || root.selectedSource.length === 0) return
+        if (browser.loginUrl(root.selectedSource).length === 0) return
+        // 先让 WebView2 后端知道「下一个 WebView 的首帧要先蒙白纱」：
+        // 官网首页会先渲染再被裁剪，中间那一瞬用户会看到导航/播放器闪过去。
+        browser.setLoginVeil(true)
+        root.webLoginActive = true
     }
 
     function refreshCounts() {
@@ -119,18 +112,18 @@ Item {
 
     onMethodChanged: {
         root.ensureCaptcha()
-        // 用户点了某个 Tab 说明他想在本地表单操作；若覆盖层没开着（比如被手动
-        // 关掉过），点「密码」Tab 时再拉起官网登录页——本地表单提交会被风控，
-        // 只有官网页面过得了滑块/短信验证
-        root.openWebLoginDefault()
     }
 
     function updateMethods() {
         root.methods = root.selectedSource.length > 0 ? app.loginMethods(root.selectedSource) : []
         // 登录结果回来时也会调这里刷新，别把用户切到一半的 Tab 强行弹回第一个：
-        // 只有当前方式已经不在列表里（换平台 / 方式被移除）才回退到首个可用方式。
+        // 只有当前方式已经不在列表里（换平台 / 方式被移除）才回退。
+        // 回退优先落到内置二维码：扫码不碰账号密码，也就不会触发密码登录的
+        // 风控；官网登录页只在内置方式失败后由提示条上的入口打开。
         if (root.methods.indexOf(root.method) < 0)
-            root.method = root.methods.length > 0 ? root.methods[0] : ""
+            root.method = root.methods.indexOf("qrcode") >= 0
+                          ? "qrcode"
+                          : (root.methods.length > 0 ? root.methods[0] : "")
         root.apiStatus = root.selectedSource.length > 0
                         ? app.accountApiStatus(root.selectedSource) : ""
         if (root.selectedSource.length > 0)
@@ -141,8 +134,8 @@ Item {
         // 换平台时把上一个平台的失败原因清掉，否则会挂在新平台卡片底下误导人
         root.hint = ""
         root.hintError = false
-        // 换平台回到该平台自己的默认方式（酷狗/咪咕=二维码，网易云=密码）。
-        // 清空后 updateMethods() 会落到第一个方式；而登录结果回来时的
+        // 换平台回到内置二维码（所有平台一致）；没有二维码方式才落回第一个方式。
+        // 清空后 updateMethods() 会落到二维码；而登录结果回来时的
         // updateMethods() 不清空，用户当前选的 Tab 得以保留。
         root.method = ""
         root.updateMethods()
@@ -151,9 +144,6 @@ Item {
         // 覆盖层里的 WebView 只加载初始 sourceId 的 URL，换平台必须重建
         // （active false→true 销毁原生窗口再新建），否则还停留在上一个平台的页面
         root.webLoginActive = false
-        // 该平台有官网登录页且未登录的话，覆盖层直接打开（所有平台一致），
-        // 不用再点一下「打开官网登录页」
-        root.openWebLoginDefault()
     }
 
     Component.onCompleted: {
@@ -866,10 +856,10 @@ Item {
                     }
 
                     // ---- 密码 / 帐号登录 ----
-                    // 主路径是「平台官网的真实登录页」：自建表单在本地拼账号密码，服务端看到
-                    // 的是陌生设备，网易云回 8821、酷狗要人机校验，重试只会加重风控。官网页面
-                    // 本身能过滑块/短信验证，所以这里把官网登录页嵌进来，登录态由平台原生
-                    // CookieManager 读回后自动导入。本地表单只留给拿不到 WebView 的构建。
+                    // 默认视图是内置二维码（见 updateMethods 的 qrcode 优先），
+                    // 这一块是兜底：内置登录失败后由提示条上的入口打开官网登录页。
+                    // 官网页面能过滑块/短信验证，登录态由平台原生 CookieManager
+                    // 读回后自动导入；本地表单只留给拿不到 WebView 的构建。
                     ColumnLayout {
                         Layout.fillWidth: true
                         visible: root.hasPassword
@@ -918,8 +908,8 @@ Item {
                                 MouseArea {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
-                                    // 关掉覆盖层后想再打开，或自动打开被站点拖住时手动兜底
-                                    onClicked: root.webLoginActive = true
+                                    // 官网登录页是兜底入口：内置扫码失败、或本地表单被风控时用
+                                    onClicked: root.openWebLoginPage()
                                 }
                             }
                             Text {
@@ -1270,6 +1260,32 @@ Item {
                             color: root.hintError ? theme.danger : cSub
                             font.pixelSize: 11
                             wrapMode: Text.Wrap
+                        }
+                    }
+
+                    // 内置方式失败后的唯一兜底：只有内置扫码/密码报错时才出现，
+                    // 不抢占默认视图。官网页面能过滑块/短信验证，登录态由平台
+                    // CookieManager 读回后自动导入。
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: theme.touchMin
+                        radius: height / 2
+                        visible: root.hintError && !root.loggedNow
+                                 && root.hint.indexOf("同步") !== 0
+                                 && root.webLoginAvailable
+                                 && browser.loginUrl(root.selectedSource).length > 0
+                        color: Qt.rgba(cPrimary.r, cPrimary.g, cPrimary.b, 0.10)
+                        Text {
+                            anchors.centerIn: parent
+                            text: "内置登录失败？改用官网登录页"
+                            color: cPrimary
+                            font.pixelSize: 12
+                            font.bold: true
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.openWebLoginPage()
                         }
                     }
                 }
