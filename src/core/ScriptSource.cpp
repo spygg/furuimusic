@@ -27,7 +27,7 @@ namespace {
 // latest.js 原始地址，健康状态用目录名标记 可用/异常/失效。
 // 同一脚本给多条镜像（加速站可达性随时变化，依次回退，成功即用）。
 // 仅首次启动 / 缺源时预置下载，用户在设置页删除后不再补回（记入 builtinScriptRemoved）。
-constexpr int kMaxSeedSources = 8;
+// 页面里解析到的音源全部导入，健康状态只用于排序，不再作为筛选条件。
 const char *kReadmeUrls[] = {
     "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/README.md",
     "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/README.md",
@@ -414,25 +414,24 @@ void ScriptSourceManager::seedBuiltinSources()
                     }
                 }
             }
-            QVector<DiscoveredSource> chosen;
-            for (const DiscoveredSource &d : found) {
-                if (!usable.isEmpty() && !usable.contains(d.key)) continue;
-                chosen << d;
-            }
-            qInfo("音源仓库发现：解析 %d 个，健康可用 %d 个，候选 %d 个",
-                  int(found.size()), int(usable.size()), int(chosen.size()));
+            QVector<DiscoveredSource> chosen = found;
+            qInfo("音源仓库发现：解析 %d 个，健康可用 %d 个，全部导入",
+                  int(found.size()), int(usable.size()));
             if (chosen.isEmpty()) {
                 mgr2->m_seeding = false;
                 return;
             }
-            // 3) 历史验证较稳的源优先（仅排序偏好，不决定存在性），其余按页面顺序；
-            //    每个启用音源会常驻一个 JS 引擎，首次最多预置 kMaxSeedSources 个。
+            // 排序只影响取链优先级（列表顺序即优先级）：当天「可用」的排前面，
+            // 其次历史验证较稳的源，其余按页面顺序；不据此剔除任何源。
             static const QStringList preferred = {
                 QStringLiteral("huibq"), QStringLiteral("fish"), QStringLiteral("lx"),
                 QStringLiteral("changqing"), QStringLiteral("huanyin"),
                 QStringLiteral("xinghai")};
             std::stable_sort(chosen.begin(), chosen.end(),
-                             [](const DiscoveredSource &a, const DiscoveredSource &b) {
+                             [&usable](const DiscoveredSource &a, const DiscoveredSource &b) {
+                const bool ua = usable.isEmpty() || usable.contains(a.key);
+                const bool ub = usable.isEmpty() || usable.contains(b.key);
+                if (ua != ub) return ua;
                 const int ra = preferred.indexOf(a.key);
                 const int rb = preferred.indexOf(b.key);
                 if (ra < 0 && rb < 0) return false;
@@ -440,7 +439,6 @@ void ScriptSourceManager::seedBuiltinSources()
                 if (rb < 0) return true;
                 return ra < rb;
             });
-            if (chosen.size() > kMaxSeedSources) chosen.resize(kMaxSeedSources);
             mgr2->seedDiscovered(chosen, [self]() {
                 if (self) self->m_seeding = false;
             });

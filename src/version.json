@@ -1,7 +1,11 @@
 {
-  "version": "1.4.14",
-  "desc": "修复\n- 检查更新在旧版本上误报「已是最新版本」：以前拿到第一个返回合法 JSON 的镜像就采纳，而 jsDelivr 对 main 分支的缓存各节点滞后且不一致（实测同一时刻分别返回 1.4.13 / 1.4.12 / 1.4.9），国内网络下 raw.githubusercontent 又常不可达，于是读到旧缓存就判定为最新。现在先向 GitHub API 的 releases/latest 取最新 tag（不走 CDN），再按该不可变 tag 并行拉取清单并取最高版本号\n- 全部镜像不可达时不再回退到打包进安装包的清单（它与本地版本同源，必然显示「已是最新」），改为如实提示「无法获取更新信息」",
+  "version": "1.4.15",
+  "desc": "改进\n- 在线音源不再限制导入数量：解析仓库页面得到的音源全部导入（此前首次只导入当日可用的前 8 个）；当日可用与历史稳定的源排在列表前面，其余源照常可用，取链失败仍会自动降权换源",
   "history": [
+    {
+      "version": "1.4.14",
+      "desc": "修复\n- 检查更新在旧版本上误报「已是最新版本」：以前拿到第一个返回合法 JSON 的镜像就采纳，而 jsDelivr 对 main 分支的缓存各节点滞后且不一致（实测同一时刻分别返回 1.4.13 / 1.4.12 / 1.4.9），国内网络下 raw.githubusercontent 又常不可达，于是读到旧缓存就判定为最新。现在先向 GitHub API 的 releases/latest 取最新 tag（不走 CDN），再按该不可变 tag 并行拉取清单并取最高版本号\n- 全部镜像不可达时不再回退到打包进安装包的清单（它与本地版本同源，必然显示「已是最新」），改为如实提示「无法获取更新信息」"
+    },
     {
       "version": "1.4.13",
       "desc": "改进\n- 在线音源改为解析 pdone/lx-music-source 仓库页面动态发现：读取仓库说明与每日可用性检测，首次启动最多导入 8 个当日可用的脚本；设置页新增「发现音源」可随时手动重扫\n- 音源顺序改为动态权重：取链成功升到最前，取链/播放失败后移一位，顺序跨启动保存，设置页按实际优先级展示\n\n优化\n- 移除内置「GD音乐台」音源，VIP 替代统一走在线脚本音源\n\n修复\n- 一首播完不会自动播放下一首：结束事件改为排队切歌并在接近结尾时兜底触发，避免在播放器结束回调里重建媒体源导致下一首起不来；单曲循环仍原地重播"
@@ -72,9 +76,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.14/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.14/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.14/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.14/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.15/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.15/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.15/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.15/FuruiMusic-android-arm64-v8a.apk"
   }
 }

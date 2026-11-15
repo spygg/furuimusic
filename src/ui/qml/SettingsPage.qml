@@ -201,7 +201,7 @@ Item {
             }
             Text {
                 Layout.fillWidth: true
-                text: "在线音源自动从 pdone/lx-music-source 仓库页面解析每日检测可用的脚本（LX 脚本协议），首次启动最多导入 8 个；也可自行导入其它脚本地址。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方。列表顺序即实际取链优先级（成功升权、失败降权）。"
+                text: "在线音源自动从 pdone/lx-music-source 仓库页面解析全部脚本（LX 脚本协议），首次启动全部导入、当日可用的排在前面；也可自行导入其它脚本地址。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方。列表顺序即实际取链优先级（成功升权、失败降权）。"
                 color: cSub
                 font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap
