@@ -223,8 +223,15 @@ inline QString coverUrlOf(const QJsonValue &v, const QString &path)
         const QJsonObject o = cv.toObject();
         const QJsonArray urls = o.value(QStringLiteral("urls")).toArray();
         const QString prefix = urls.isEmpty() ? QString() : urls.at(0).toString();
-        const QString joined = prefix + o.value(QStringLiteral("uri")).toString();
-        if (!joined.isEmpty()) return fillImageSize(joined);
+        QString joined = prefix + o.value(QStringLiteral("uri")).toString();
+        if (!joined.isEmpty()) {
+            // 汽水 Luna 的 url_cover 除了 {urls:[前缀],uri} 还带 template_prefix：
+            // 只拼前缀+uri 会 400 Bad Request，必须补上图片模板后缀才会出图。
+            const QString tpl = o.value(QStringLiteral("template_prefix")).toString();
+            if (!tpl.isEmpty())
+                joined += QStringLiteral("~") + tpl + QStringLiteral("-resize:480:480.jpeg");
+            return fillImageSize(joined);
+        }
         const QJsonArray list = o.value(QStringLiteral("url_list")).toArray();
         if (!list.isEmpty()) return fillImageSize(list.at(0).toString());
         return fillImageSize(str(o.value(QStringLiteral("url"))));

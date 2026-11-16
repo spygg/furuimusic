@@ -27,6 +27,11 @@ public:
     void stop();
     void next();
     void previous();
+    // 队列推进（不做推荐）：AppController 取到推荐歌并插入队列后调用，
+    // 或在推荐取不到时作为兜底继续走原队列。
+    void playNextInQueue();
+    // 把推荐歌插到当前歌后面（当前 index+1），保持正在播放的这首歌不中断。
+    void insertAfterCurrent(const QVector<Song> &songs);
     void seek(qint64 ms);
     void setVolume(int value);       // 0..100
     void toggleMute();               // 静音并在再点一次时回到静音前的档位
@@ -87,9 +92,14 @@ signals:
     void errorOccurred(const QString &message);
     // 换歌时由 AppController 负责解析新的播放地址（含 VIP 替代链）后回调 playUrl
     void requestPlay(const Song &song);
+    // 需要一首「推荐续播」：汽水漫游开启，或顺序播放走到队列末尾时发出。
+    // AppController 取到推荐歌后 insertAfterCurrent + playNextInQueue；取不到就
+    // playNextInQueue 兜底（顺序播放末尾则停止）。
+    void recommendationNeeded();
 
 private:
     explicit PlayerController(QObject *parent = nullptr);
+    void advance(bool allowRecommend);
     void updateLyric(qint64 pos);
     void emitRequest(int index);
     // Qt 6 无法给 QMediaPlayer 注入请求头：防盗链直链在直连失败后，

@@ -411,49 +411,46 @@ Item {
 
             Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
 
-            // 汽水音乐 PC 账号接口的设备签名头（可选）。
-            // 官方 /luna/pc/me* 系列带风控：缺签名时一律回 ERR_REQUEST_FORBIDDEN，
-            // 表现为「登录成功了，但我的歌单是空的」。与 reference/qishui-api 的
-            // QISHUI_X_HELIOS / QISHUI_X_MEDUSA 一致，值从 PC 客户端抓包取得。
+            // 汽水音乐账号同步：资料/歌单/收藏已改走免签名的 web 接口族
+            // （/luna/me、/luna/me/playlist、/luna/playlist/detail），不再需要手工填
+            // X-Helios / X-Medusa。旧版本这里有两个签名输入框，现已移除；若本地
+            // settings.ini 里还留着 qishuiXHelios/qishuiXMedusa，也不会再被账号接口使用。
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 6
                 Text {
-                    text: "汽水音乐 · 账号接口签名（可选）"
+                    text: "汽水音乐 · 账号同步"
                     color: cText
                     font.pixelSize: theme.fontMd
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: "汽水官方 PC 接口会校验设备签名。未填写时扫码/官网登录能成功，但「我的歌单」可能为空；"
-                          + "填入从 PC 客户端抓到的 X-Helios / X-Medusa 后重新点「同步全部账号」即可。留空不影响搜索与播放。"
+                    text: "汽水的资料、歌单与收藏已改走免签名的 web 账号接口，登录后点「同步全部账号」即可，"
+                          + "无需再填 X-Helios / X-Medusa。若同步仍失败，请重新登录汽水后再试。"
                     color: cSub
                     font.pixelSize: theme.fontSm
                     wrapMode: Text.Wrap
                 }
-                TextField {
-                    id: qishuiHeliosField
+                RowLayout {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: theme.touchMin
-                    placeholderText: "X-Helios"
-                    color: cText
-                    font.pixelSize: 12
-                    leftPadding: 8
-                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
-                    Component.onCompleted: text = app.setting("qishuiXHelios", "")
-                    onEditingFinished: app.setSetting("qishuiXHelios", text.trim())
-                }
-                TextField {
-                    id: qishuiMedusaField
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: theme.touchMin
-                    placeholderText: "X-Medusa"
-                    color: cText
-                    font.pixelSize: 12
-                    leftPadding: 8
-                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
-                    Component.onCompleted: text = app.setting("qishuiXMedusa", "")
-                    onEditingFinished: app.setSetting("qishuiXMedusa", text.trim())
+                    spacing: 8
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+                        Text { text: "汽水漫游"; color: cText; font.pixelSize: 13 }
+                        Text {
+                            Layout.fillWidth: true
+                            text: "播放汽水歌曲时，下一首改由汽水的相似歌曲推荐决定（队列播到末尾也会自动续上）；"
+                                  + "关闭后仍按原播放队列切歌"
+                            color: cSub
+                            font.pixelSize: theme.fontSm
+                            wrapMode: Text.Wrap
+                        }
+                    }
+                    Switch {
+                        checked: app.qishuiRoam
+                        onToggled: app.setSetting("qishuiRoam", checked)
+                    }
                 }
             }
 

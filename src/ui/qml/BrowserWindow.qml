@@ -197,8 +197,10 @@ Item {
         }
     }
 
-    // 登录模式：轮询平台原生 Cookie 存储。MUSIC_U 是 HttpOnly，
+    // 登录模式：轮询平台原生 Cookie 存储。MUSIC_U / sessionid 这类是 HttpOnly，
     // document.cookie 读不到，所以必须走 BrowserController 的 C++/JNI 接口。
+    // 判定交给 browser.looksLoggedIn：它按平台读取 WebLoginSpec 里声明的 Cookie 名
+    // （网易云 MUSIC_U、汽水 sessionid/sessionid_ss/sid_tt），不再写死 MUSIC_U。
     Timer {
         interval: 1500
         repeat: true
@@ -207,7 +209,8 @@ Item {
             const view = webLoader.item
             if (!view || !view.url || view.url.length === 0) return
             const cookie = browser.cookiesForUrl(view.url.toString())
-            if (cookie.indexOf("MUSIC_U=") < 0) return
+            if (cookie.length === 0) return
+            if (!browser.looksLoggedIn(root.sourceId, cookie)) return
             running = false
             app.loginByCookie(root.sourceId, cookie)
             browser.close()

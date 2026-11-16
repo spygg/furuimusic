@@ -109,7 +109,7 @@ private:
     void kuwoWxExchange(const QString &code);
     // 酷我登录结果的统一收口：解析 data.cookies → 落库 → 补资料
     void finishKuwoLogin(const HttpClient::Reply &r, const QString &okMessage);
-    // 汽水：登录闭环在汽水服务端（passport/web/* 出码 + check_qrconnect 轮询 + /luna/pc/me 换
+    // 汽水：登录闭环在汽水服务端（passport/web/* 出码 + check_qrconnect 轮询 + /luna/me 换
     // session），客户端只跑出码 → 轮询 → 拿 sessionid → 换账号；未配置自建账号 API 服务时
     // 直接走官方 endpoint，无需任何外部服务即可「直接扫码」登录。
     // 与 src/tools/qishui_login_flow_test.py 的探针链路保持一致。

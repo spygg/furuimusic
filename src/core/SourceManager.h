@@ -41,6 +41,8 @@ public:
     // 取链/播放失败：后移一位，降低后续优先度（顺序持久化，跨重启保持）。
     void demoteSource(const QString &id);
     void lyric(const Song &song, LyricCallback cb);
+    // 「下一首 / 音乐推荐」：以当前歌曲为种子取相似歌曲（目前汽水已实现）。
+    void related(const Song &song, int limit, SongsCallback cb);
     void cover(const Song &song, StringCallback cb);
     void mv(const Song &song, MvCallback cb);
     void mvList(const QString &sourceId, const QString &area, int limit, int offset,

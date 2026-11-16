@@ -299,7 +299,7 @@ void AuthManager::startQrLogin(const QString &sourceId)
         return;
     }
     // 汽水：登录闭环走官方 passport 出码链路（secsdk 设备签名由服务端完成），
-    // 客户端按 GET /passport/web/* → GET /luna/pc/me 直接跑；也可配置自建账号 API 服务走其 /auth 契约。
+    // 客户端按 GET /passport/web/* → GET /luna/me（web 参数，免签名）直接跑；也可配置自建账号 API 服务走其 /auth 契约。
     if (sourceId == QLatin1String("qishui")) {
         cancelQrLogin();
         startQishuiQr();
@@ -1931,6 +1931,16 @@ void AuthManager::loginByCookie(const QString &sourceId, const QString &rawCooki
     };
 
     if (sourceId != QLatin1String("netease")) {
+        // 汽水：官网/网页登录导入的 Cookie 也顺手补一下资料（/luna/me 免签名，可直接读）。
+        // 拿不到资料就按原样落库——网络抖动不能当成登录失败。
+        if (sourceId == QLatin1String("qishui")) {
+            UserApi::instance()->verify(sourceId, cookie,
+                [commit](const UserProfile &p) {
+                    if (p.ok) commit(p.uid, p.nickname, p.avatar);
+                    else commit(QString(), QString(), QString());
+                });
+            return;
+        }
         commit(QString(), QString(), QString());
         return;
     }
@@ -2625,12 +2635,13 @@ void AuthManager::loginKuwoPhone(const QString &phone, const QString &smsCode)
 }
 
 // ---- 汽水音乐：扫码登录（官方 passport 直连 / 可配置走自建账号 API 服务）----
-// 2026-11 实测：汽水官方的出码/轮询/换 session 端点（passport/web/*，再换 luna/pc/me 拉账号）其实就是
+// 2026-11 实测：汽水官方的出码/轮询/换 session 端点（passport/web/*，再换 luna/me 拉账号）其实就是
 // 普通浏览器形态的 passport 接口，带浏览器常规头即可直接拿到二维码与轮询链路，客户端不需要字节
 // secsdk 设备签名。因此未配置自建账号 API 服务时，客户端即可「直接扫码」登录：
 //   1) GET  https://api.qishui.com/passport/web/get_qrcode/ -> {data:{token,qrcode,...}}
 //   2) POST https://api.qishui.com/passport/web/check_qrconnect/ -> {data:{status, auth:{sessionid}}}
-//   3) GET  https://api.qishui.com/luna/pc/me?aid=386088          -> {data:{my_info:{uid,...}}}
+//   3) GET  https://api.qishui.com/luna/me?...device_platform=web  -> {my_info:{id,nickname,...}}
+//      （/luna/pc/me 需要 bdms.node 逐请求签名，已不再使用）
 // 与 src/tools/qishui_login_flow_test.py 的探针链路保持一致；用户在「设置 → 网络 → 账号 API 服务」
 // 填了自建服务时，才走其 GET /auth/qrcode -> POST /auth/qrcode/status -> POST /auth/me 契约。
 void AuthManager::startQishuiQr()
@@ -2949,19 +2960,25 @@ void AuthManager::finishQishuiLogin(const QString &sessionId)
     QString nick;
     QString avatar;
     if (m_qsBase.isEmpty()) {
-        // 官方直连链路：GET /luna/pc/me?aid=386088，Cookie 带上 sessionid
+        // 官方直连链路：GET /luna/me?aid=386088&device_platform=web&channel=pc_web。
+        // 不能用 /luna/pc/me：那一族要求官方 bdms.node 逐请求生成的 X-Helios/X-Medusa，
+        // 缺签名一律 1000006 ERR_REQUEST_FORBIDDEN；/luna/me 带同一 sessionid 即可取资料。
         HttpClient::instance()->request(
             QStringLiteral("GET"),
-            QUrl(QStringLiteral("https://api.qishui.com/luna/pc/me") + QStringLiteral("?aid=386088")),
+            QUrl(QStringLiteral("https://api.qishui.com/luna/me")
+                 + QStringLiteral("?aid=386088&device_platform=web&channel=pc_web")),
             qishuiPassportHeaders(cookie), QByteArray(),
             [this, sourceId, sessionId, uid, nick, avatar, cookie](const HttpClient::Reply &r) mutable {
             if (r.ok) {
                 QJsonObject root = Json::rootOf(r.json).toObject();
                 const QJsonObject data = root.contains(QStringLiteral("data"))
                                              ? root.value(QStringLiteral("data")).toObject() : root;
+                // 自建服务用 {data:{profile}}, 汽水 web 用 {my_info:{...}}
                 const QJsonObject profile = data.contains(QStringLiteral("profile"))
                                                 ? data.value(QStringLiteral("profile")).toObject()
-                                                : data;
+                                                : (data.contains(QStringLiteral("my_info"))
+                                                       ? data.value(QStringLiteral("my_info")).toObject()
+                                                       : data);
                 uid = Json::firstString(profile, {QStringLiteral("uid"), QStringLiteral("user_id"),
                                                   QStringLiteral("id")});
                 nick = Json::firstString(profile, {QStringLiteral("nickname"),
@@ -2969,6 +2986,12 @@ void AuthManager::finishQishuiLogin(const QString &sessionId)
                                                    QStringLiteral("name")});
                 avatar = Json::firstString(profile, {QStringLiteral("avatar"),
                                                      QStringLiteral("avatar_url")});
+                // 汽水的头像是 {uri,urls:[...]} 对象，取第一张，别让资料卡空着
+                if (avatar.isEmpty())
+                    avatar = Json::firstString(profile, {
+                        QStringLiteral("larger_avatar_url.urls[0]"),
+                        QStringLiteral("medium_avatar_url.urls[0]"),
+                        QStringLiteral("avatar_url.urls[0]")});
                 cookie = Json::firstString(data, {QStringLiteral("cookie"),
                                                   QStringLiteral("cookies")});
             }

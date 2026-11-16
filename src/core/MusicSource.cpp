@@ -13,6 +13,7 @@
 #include "JsonMapper.h"
 #include "KugouProtocol.h"
 #include "Settings.h"
+#include <QRegularExpression>
 
 namespace Furui {
 
@@ -63,9 +64,10 @@ QVariantMap MusicSource::baseVars() const
     v.insert(QStringLiteral("code"), QString());
     v.insert(QStringLiteral("keyword"), QString());
     v.insert(QStringLiteral("id"), QString());
-    // 汽水 PC 账号接口（/luna/pc/me*）会校验设备签名头，缺失时一律回
+    // 汽水 PC 接口（/luna/pc/*，搜索/取流）会校验设备签名头，缺失时一律回
     // ERR_REQUEST_FORBIDDEN。与 reference/qishui-api 的 QISHUI_X_HELIOS /
-    // QISHUI_X_MEDUSA 对应，由设置页填写；留空时 buildUrl 会丢掉这两个 header。
+    // QISHUI_X_MEDUSA 对应；账号同步已改走免签名的 web 接口，不再读这两个值。
+    // 留空时 buildUrl 会丢掉这两个 header，endpoint 里也能用空串覆盖掉。
     if (m_desc.id == QLatin1String("qishui")) {
         v.insert(QStringLiteral("qishuiHelios"),
                  Settings::string(QStringLiteral("qishuiXHelios")));
@@ -445,6 +447,16 @@ void MusicSource::playlistDetail(const QString &id, int limit, int offset, Songs
     requestDetailSongs(ep, v, limit, offset, cb);
 }
 
+// 「下一首 / 音乐推荐」：目前只有汽水有免签名的相似歌曲接口；其他平台回调空列表，
+// 由调用方（AppController）回退到原来的队列顺序，不影响其他音源的下一首行为。
+void MusicSource::related(const Song &song, int limit, SongsCallback cb)
+{
+    if (m_desc.driver == QLatin1String("qishui") && !song.sourceId.isEmpty()) {
+        return qishuiRelated(song.sourceId, limit, cb);
+    }
+    if (cb) cb(QVector<Song>());
+}
+
 void MusicSource::rankDetail(const QString &id, int limit, int offset, SongsCallback cb)
 {
     const Endpoint ep = m_desc.endpoints.value(QStringLiteral("rankDetail"));
@@ -528,11 +540,50 @@ void MusicSource::resolveUrl(const Song &song, const QString &quality, PlayableC
     });
 }
 
+// 汽水 KRC 歌词正文："[25240,1800]<0,240,0>Je <240,250,0>me <490,480,0>souviens ...\n[...]"  —— 首段
+// "[startMs,dur]" 是本行起播时间（毫秒）；"<>" 包住的是逐词时间标记，剥掉后就是歌词文本。
+// 播放器侧统一吃 "[mm:ss.xx]text"（标准 LRC）行（PlayerController::parseLrc），
+// 这里把 KRC 转成那一格式；不像 KRC 的行原样保留（兼容普通 LRC/纯文本）。
+inline QString qishuiKrcToLrc(const QString &content)
+{
+    static const QRegularExpression krcStart(
+        QRegularExpression(QStringLiteral("^\\[(\\d{1,6}),\\d+\\]")));
+    static const QRegularExpression mark(
+        QRegularExpression(QStringLiteral("<[^<>]*>")));
+    QStringList out;
+    const QStringList lines = content.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (QString line : lines) {
+        line.remove(QLatin1Char('\r'));
+        QString text = line;
+        QRegularExpressionMatch m = krcStart.match(line);
+        if (m.hasMatch()) {
+            text = line.mid(m.capturedEnd(0));
+            text.replace(mark, QStringLiteral(""));
+            text = text.trimmed();
+            if (text.isEmpty()) continue;
+            const qint64 startMs = m.captured(1).toLongLong();
+            const int secs = int(startMs / 1000);
+            const int min = secs / 60;
+            const int s = secs % 60;
+            const int ms = int(startMs % 1000);
+            QString t = QString::number(min) + QLatin1Char(':') + QString::number(s).rightJustified(2, QLatin1Char('0'))
+                        + QLatin1Char('.') + QString::number(ms).rightJustified(3, QLatin1Char('0'));
+            out << (QStringLiteral("[") + t + QStringLiteral("]") + text);
+            continue;
+        }
+        text = text.trimmed();
+        if (!text.isEmpty()) out << text;
+    }
+    return out.isEmpty() ? QString() : out.join(QLatin1Char('\n'));
+}
+
+inline QString qishuiKrcToLrc(const QString &content);
+
 void MusicSource::lyric(const Song &song, LyricCallback cb)
 {
     const Endpoint ep = m_desc.endpoints.value(QStringLiteral("lyric"));
     if (!ep.valid()) { if (cb) cb(QString(), QString()); return; }
-    call(ep, songVars(song, QStringLiteral("standard")), [ep, cb](const HttpClient::Reply &r) {
+    call(ep, songVars(song, QStringLiteral("standard")), [this, ep, cb](const HttpClient::Reply &r) {
         QString out;
         if (r.ok) out = Json::firstString(Json::rootOf(r.json), ep.resultPaths);
         if (out.isEmpty() && !r.body.isEmpty() && r.json.isEmpty())
@@ -541,6 +592,11 @@ void MusicSource::lyric(const Song &song, LyricCallback cb)
         QString trans;
         if (r.ok && !ep.transPaths.isEmpty())
             trans = Json::firstString(Json::rootOf(r.json), ep.transPaths).trimmed();
+        // 汽水歌词 type="krc"：正文是 "[startMs,dur]<offset,dur>text…" 这种带标记的格式，
+        // 转成播放器统一吃的 "[mm:ss.xx]text"（标准 LRC）行后再交给 parseLrc。
+        if (m_desc.driver == QLatin1String("qishui") && r.ok) {
+            out = qishuiKrcToLrc(out);
+        }
         if (cb) cb(out, trans);
     });
 }
@@ -717,7 +773,7 @@ inline QJsonArray qishuiCollectItems(const QJsonValue &root)
     if (items.isEmpty()) {
         const QStringList keys = {QStringLiteral("data"), QStringLiteral("playlists"),
                                   QStringLiteral("media_resources"), QStringLiteral("list"),
-                                  QStringLiteral("results")};
+                                  QStringLiteral("items"), QStringLiteral("results")};
         for (const QString &k : keys) {
             const QJsonArray a = Json::arrayAt(root, k);
             if (a.isEmpty()) continue;
@@ -751,7 +807,7 @@ inline Song qishuiTrackToSong(const QJsonValue &t, const QString &source)
     s.artist   = Json::stringAt(t, QStringLiteral("artists[].name"));
     const QJsonValue album = Json::valueAt(t, QStringLiteral("album"));
     s.album  = Json::stringAt(album, QStringLiteral("name"));
-    s.cover  = Json::stringAt(album, QStringLiteral("url_cover"));
+    s.cover  = Json::coverUrlOf(album, QStringLiteral("url_cover"));
     const double dur = Json::stringAt(t, QStringLiteral("duration")).toDouble();
     s.duration = dur > 0 ? qint64(dur) : 0;
     if (s.sourceId.isEmpty())
@@ -777,18 +833,12 @@ inline QJsonValue qishuiUnwrapPlaylist(const QJsonValue &v)
 
 // 汽水封面字段兼容两种形态：
 //   - 字符串（多数歌单详情/搜索）；
-//   - {uri, urls:[prefix,...]} 对象（发现流 discover/mix 的 url_cover，需 prefix+uri 拼接）。
+//   - {uri, urls:[prefix,...], template_prefix} 对象（发现流 discover/mix 的 url_cover）。
+// 对象形态必须补 template_prefix 模板后缀，否则 CDN 一律 400，交给 Json::coverUrlOf 统一处理。
 inline QString qishuiCoverOf(const QJsonValue &p)
 {
-    QJsonValue cv = Json::valueAt(p, QStringLiteral("url_cover"));
-    if (cv.isString()) return cv.toString();
-    if (cv.isObject()) {
-        const QJsonObject o = cv.toObject();
-        const QString uri = o.value(QStringLiteral("uri")).toString();
-        const QJsonArray urls = o.value(QStringLiteral("urls")).toArray();
-        const QString prefix = urls.isEmpty() ? QString() : urls.at(0).toString();
-        if (!prefix.isEmpty() || !uri.isEmpty()) return prefix + uri;
-    }
+    const QString cover = Json::coverUrlOf(p, QStringLiteral("url_cover"));
+    if (!cover.isEmpty()) return cover;
     return Json::stringAt(p, QStringLiteral("cover_url"));
 }
 
@@ -851,6 +901,36 @@ void MusicSource::qishuiPlaylistDetail(const QString &id, int limit, int offset,
                 if (!t.isNull() && !Json::stringAt(t, QStringLiteral("id")).isEmpty()
                     && !Json::stringAt(t, QStringLiteral("name")).isEmpty())
                     out << qishuiTrackToSong(t, m_desc.id);
+            }
+        }
+        if (cb) cb(out);
+    });
+}
+
+// GET /luna/track/related：items[].entity.track_wrapper.track，和歌单详情同一套 track 结构。
+// 用 qishuiCollectItems 兜住 items/list 等容器差异，再用 qishuiUnwrapTrack 展平。
+void MusicSource::qishuiRelated(const QString &trackId, int limit, SongsCallback cb)
+{
+    const Endpoint ep = m_desc.endpoints.value(QStringLiteral("related"));
+    if (!ep.valid()) {
+        if (cb) cb(QVector<Song>());
+        return;
+    }
+    QVariantMap v = baseVars();
+    v.insert(QStringLiteral("id"), trackId);
+    v.insert(QStringLiteral("limit"), QString::number(limit));
+    call(ep, v, [this, cb](const HttpClient::Reply &r) {
+        QVector<Song> out;
+        if (r.ok) {
+            const QJsonValue root = Json::rootOf(r.json);
+            const QJsonArray items = qishuiCollectItems(root);
+            for (const QJsonValue &d : items) {
+                const QJsonValue t = qishuiUnwrapTrack(d);
+                if (t.isNull()) continue;
+                if (Json::stringAt(t, QStringLiteral("id")).isEmpty()
+                    || Json::stringAt(t, QStringLiteral("name")).isEmpty())
+                    continue;
+                out << qishuiTrackToSong(t, m_desc.id);
             }
         }
         if (cb) cb(out);

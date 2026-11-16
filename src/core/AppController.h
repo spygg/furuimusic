@@ -117,6 +117,8 @@ class AppController : public QObject {
     Q_PROPERTY(QString quality READ quality NOTIFY settingsChanged)
     Q_PROPERTY(bool vipSubstituteEnabled READ vipSubstituteEnabled NOTIFY settingsChanged)
     Q_PROPERTY(bool autoToggleSource READ autoToggleSource NOTIFY settingsChanged)
+    // 汽水漫游：开启后播到汽水果时，下一首由汽水推荐流决定（队列只作兜底）
+    Q_PROPERTY(bool qishuiRoam READ qishuiRoam NOTIFY settingsChanged)
     Q_PROPERTY(QString searchType READ searchType NOTIFY settingsChanged)
     Q_PROPERTY(bool openApiEnabled READ openApiEnabled NOTIFY settingsChanged)
     Q_PROPERTY(QString openApiAddress READ openApiAddress NOTIFY settingsChanged)
@@ -187,6 +189,7 @@ public:
     QString quality() const;
     bool vipSubstituteEnabled() const;
     bool autoToggleSource() const;
+    bool qishuiRoam() const;
     QString searchType() const;
     bool openApiEnabled() const;
     QString openApiAddress() const;
@@ -353,6 +356,9 @@ signals:
 private:
     void setStatus(const QString &text);
     void resolveAndPlay(const Song &song);
+    // PlayerController 需要一首「推荐续播」：按当前汽水果取相似歌曲插到当前歌后面；
+    // 取不到 / 非汽水果则走原队列（顺序播放末尾则停止）。
+    void onRecommendationNeeded();
     // 播放（已取到直链但播不出来）失败：逐源换源重试，成功源置顶。d->inFallback 防重入。
     void onPlayerError(const QString &msg);
     void openMv(const Song &song);

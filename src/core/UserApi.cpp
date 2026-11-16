@@ -177,7 +177,7 @@ bool hasNativeQrLogin(const QString &sourceId)
 {
     // 咪咕 2026-11 起也走内置扫码（passport.migu.cn 的 qrcWeb 接口），酷我走微信开放平台，一并算原生
     // 汽水 2026-11：官方 passport/web 出码链路对浏览器常规头可直连，客户端内建「直接扫码」；
-    // 2026-11-14 起歌单同步也内置直连（/luna/pc/me/playlist），两者都不需要自建服务
+    // 2026-11-14 起歌单同步也内置直连（/luna/me/playlist，web 参数免签名），两者都不需要自建服务
     return sourceId == QLatin1String("qq") || sourceId == QLatin1String("kugou")
            || sourceId == QLatin1String("migu") || sourceId == QLatin1String("kuwo")
            || sourceId == QLatin1String("qishui");
@@ -295,7 +295,7 @@ QString UserApi::loginUnavailableReason(const QString &sourceId) const
     if (sourceId == QLatin1String("qishui")) {
         return QStringLiteral(
             "汽水音乐已内置扫码登录（官方 passport 出码链路直连）与「我的歌单 / 收藏」同步"
-            "（用登录态 Cookie 直连 /luna/pc/me/playlist），两件事都不需要配置账号 API 服务。"
+            "（用登录态 Cookie 直连 /luna/me/playlist 等 web 账号接口），两件事都不需要配置账号 API 服务。"
             "仅密码 / 账号密码登录不可用；扫码确认后会自动同步，也可在官网登录页登录后导入 Cookie。");
     }
     return QStringLiteral("该平台暂无可用的应用内登录方式。");

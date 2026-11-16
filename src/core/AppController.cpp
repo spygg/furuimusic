@@ -246,6 +246,8 @@ struct AppController::Impl {
     QSet<QString> triedFallback;
     bool inFallback = false;
     quint64 fallbackGen = 0;
+    // 推荐请求在途：连点下一首时只允许有一个 /luna/track/related 请求
+    bool recommendPending = false;
 };
 
 AppController *AppController::s_instance = nullptr;
@@ -301,6 +303,8 @@ AppController::AppController(QObject *parent)
     });
     connect(player, &PlayerController::requestPlay, this,
             [this](const Song &song) { resolveAndPlay(song); });
+    connect(player, &PlayerController::recommendationNeeded, this,
+            [this] { onRecommendationNeeded(); });
 
     AuthManager *auth = AuthManager::instance();
     connect(auth, &AuthManager::toast, this, [this](const QString &msg) { emit toast(msg); });
@@ -486,6 +490,8 @@ QString AppController::quality() const { return d->quality; }
 bool AppController::vipSubstituteEnabled() const { return d->vipSubstitute; }
 bool AppController::autoToggleSource() const
 { return Settings::boolean(QStringLiteral("autoToggleSource"), true); }
+bool AppController::qishuiRoam() const
+{ return Settings::boolean(QStringLiteral("qishuiRoam"), false); }
 QString AppController::searchType() const { return d->searchType; }
 bool AppController::openApiEnabled() const { return OpenApiServer::instance()->running(); }
 QString AppController::openApiAddress() const { return OpenApiServer::instance()->address(); }
@@ -1137,6 +1143,60 @@ void AppController::playMvPrev()
 void AppController::togglePause() { PlayerController::instance()->togglePause(); }
 void AppController::next() { PlayerController::instance()->next(); }
 void AppController::previous() { PlayerController::instance()->previous(); }
+
+// 推荐续播：PlayerController 只在「汽水漫游已开且当前是汽水果」或「顺序播放走到
+// 队列末尾」时发出这个请求，所以这里不需要再判断播放模式。
+// 取到推荐后插在当前歌后面再推进，保证当前这首不会被重复解析/打断。
+void AppController::onRecommendationNeeded()
+{
+    PlayerController *player = PlayerController::instance();
+    const Song seed = player->current();
+    if (d->recommendPending) return;   // 上一个推荐请求还没回来，别叠加成多个请求
+
+    // 种子必须是汽水果：其他平台没有免签名的相似歌曲接口，直接走原队列逻辑。
+    if (seed.source != QLatin1String("qishui") || seed.sourceId.isEmpty()) {
+        player->playNextInQueue();
+        return;
+    }
+
+    d->recommendPending = true;
+    setStatus(QStringLiteral("正在按「%1」获取汽水推荐…").arg(seed.title));
+    SourceManager::instance()->related(seed, 12, [this, seed](const QVector<Song> &list) {
+        d->recommendPending = false;
+        PlayerController *p = PlayerController::instance();
+        // 请求期间用户可能已经手动切歌：种子已经不是当前歌时丢弃这批推荐，
+        // 不能把「上一首的相似歌」塞进用户正在听的歌后面。
+        if (p->current().uid != seed.uid) return;
+
+        // 去重：跳过种子本身和队列里已有的歌（uid = "source:sourceId"），最多插 10 首。
+        QSet<QString> known;
+        known.insert(seed.uid);
+        for (const Song &s : p->queue()) known.insert(s.uid);
+        QVector<Song> picked;
+        for (const Song &s : list) {
+            if (picked.size() >= 10) break;
+            if (s.uid.isEmpty() || s.title.isEmpty() || known.contains(s.uid)) continue;
+            known.insert(s.uid);
+            picked << s;
+        }
+
+        if (picked.isEmpty()) {
+            // 没拿到推荐（未登录 / 网络失败 / 全被去重掉）：退回原队列。
+            // 顺序播放的末尾会在这里自然停住，不会卡死也不会重播当前歌。
+            setStatus(QStringLiteral("汽水推荐不可用，继续按队列播放"));
+            p->playNextInQueue();
+            return;
+        }
+
+        Logger::write(QStringLiteral("I"),
+                      QStringLiteral("汽水漫游：按「%1」取到 %2 首推荐")
+                              .arg(seed.title).arg(picked.size()));
+        p->insertAfterCurrent(picked);
+        setStatus(QStringLiteral("汽水漫游：已加入 %1 首推荐").arg(picked.size()));
+        // 等队列变更信号处理完再推进，界面先看到队列里多出来的推荐歌
+        QTimer::singleShot(0, this, [p] { p->playNextInQueue(); });
+    });
+}
 void AppController::seek(qint64 positionMs) { PlayerController::instance()->seek(positionMs); }
 void AppController::setVolume(int value) { PlayerController::instance()->setVolume(value); }
 void AppController::toggleMute() { PlayerController::instance()->toggleMute(); }

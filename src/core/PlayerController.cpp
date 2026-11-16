@@ -586,8 +586,32 @@ void PlayerController::emitRequest(int index)
 
 void PlayerController::next()
 {
+    advance(true);
+}
+
+void PlayerController::playNextInQueue()
+{
+    advance(false);
+}
+
+// allowRecommend=true（用户点下一首 / 播完自动切歌）时：
+//   1) 汽水漫游开启且当前是汽水果 → 交给 AppController 按当前歌取推荐；
+//   2) 顺序播放走到队列末尾 → 也交给 AppController 取推荐续上。
+// allowRecommend=false 只用于「推荐已经插好，继续推进」和「推荐失败后的兜底」，
+// 避免同一次切歌反复请求推荐。
+void PlayerController::advance(bool allowRecommend)
+{
     if (m_queue.isEmpty()) return;
     m_advancing = false;   // 本次推进开始；排队回调看到 false 就不会重复切歌
+
+    const Song cur = current();
+    if (allowRecommend && cur.source == QLatin1String("qishui") && !cur.sourceId.isEmpty()) {
+        if (Settings::boolean(QStringLiteral("qishuiRoam"), false)) {
+            emit recommendationNeeded();
+            return;
+        }
+    }
+
     int nextIndex = m_currentIndex;
     switch (m_mode) {
     case 2:  // 单曲循环：用户主动点下一首仍然切歌，循环由 EndOfMedia 处理
@@ -604,7 +628,15 @@ void PlayerController::next()
         }
         break;
     case 0:  // 顺序播放
-        if (m_currentIndex + 1 >= m_queue.size()) { stop(); return; }
+        if (m_currentIndex + 1 >= m_queue.size()) {
+            // 队列播完：先问上层要一首推荐续上，取不到再停
+            if (allowRecommend) {
+                emit recommendationNeeded();
+                return;
+            }
+            stop();
+            return;
+        }
         nextIndex = m_currentIndex + 1;
         break;
     default: // 列表循环
@@ -617,6 +649,15 @@ void PlayerController::next()
           qUtf8Printable(m_queue.at(nextIndex).title));
     emit mediaChanged();
     emitRequest(nextIndex);
+}
+
+void PlayerController::insertAfterCurrent(const QVector<Song> &songs)
+{
+    if (songs.isEmpty()) return;
+    const int at = m_currentIndex < 0
+            ? m_queue.size() : qMin(m_currentIndex + 1, m_queue.size());
+    for (int i = 0; i < songs.size(); ++i) m_queue.insert(at + i, songs.at(i));
+    emit queueChanged();
 }
 
 void PlayerController::previous()

@@ -407,9 +407,20 @@ void SourceManager::resolveAlternate(const Song &song, const QStringList &exclud
     (*attempt)(0);
 }
 
-void SourceManager::lyric(const Song &song, LyricCallback cb)
+// 「下一首 / 音乐推荐」：把请求转给它所属的平台适配器；没有 implemented 的平台
+// 直接回调空列表，AppController 会退回原队列顺序。
+void SourceManager::related(const Song &song, int limit, SongsCallback cb)
 {
     MusicSource *s = source(song.source);
+    if (!s) {
+        if (cb) cb(QVector<Song>());
+        return;
+    }
+    s->related(song, limit, std::move(cb));
+}
+
+void SourceManager::lyric(const Song &song, LyricCallback cb)
+{    MusicSource *s = source(song.source);
     if (!s) { CustomSourceManager::instance()->lyric(song, cb); return; }
     s->lyric(song, [song, cb](const QString &text, const QString &trans) {
         if (!text.trimmed().isEmpty()) { if (cb) cb(text, trans); return; }

@@ -43,6 +43,9 @@ public:
     // rank 拉取失败/被反爬时回退用，保证未登录也能按平台展示默认歌单（洛雪式）。
     QVector<Playlist> defaultBoards() const;
     void playlistDetail(const QString &id, int limit, int offset, SongsCallback cb);
+    // 「下一首 / 音乐推荐」：以一首歌为种子取相似歌曲（汽水 /luna/track/related）。
+    // 没有该能力的平台直接回调空列表，调用方按原队列逻辑兜底。
+    void related(const Song &song, int limit, SongsCallback cb);
     // 榜单详情：配置了 rankDetail 端点的平台走专属接口（如 QQ musicu GetDetail、
     // 酷狗 v3/rank/song），未配置的平台回退 playlistDetail（榜单 id 兼容歌单 id）。
     void rankDetail(const QString &id, int limit, int offset, SongsCallback cb);
@@ -99,6 +102,8 @@ private:
     void qishuiSearchPlaylists(const QString &keyword, int limit, int offset, PlaylistsCallback cb);
     // 汽水推荐/发现歌单：POST /luna/discover/mix，免登录，结构 inner_block[].resources[].entity.playlist
     void qishuiRank(int limit, int offset, PlaylistsCallback cb);
+    // 汽水「下一首」：GET /luna/track/related?track_id=…，items[].entity.track_wrapper.track
+    void qishuiRelated(const QString &trackId, int limit, SongsCallback cb);
 
     SourceDesc m_desc;
     Account m_session;
