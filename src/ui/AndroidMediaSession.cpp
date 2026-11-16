@@ -12,6 +12,7 @@
 #include <QJniEnvironment>
 #include <QJniObject>
 #include <QMetaObject>
+#include <QMutex>
 #include <QOperatingSystemVersion>
 #include <QUrl>
 #include <jni.h>
@@ -30,6 +31,7 @@ enum Command { CmdPlay = 1, CmdPause = 2, CmdNext = 3, CmdPrev = 4, CmdSeek = 5,
 AndroidMediaSession *g_instance = nullptr;
 bool g_serviceStarted = false;
 bool g_permissionRequested = false;
+QMutex g_commandMutex;
 
 // Android 13+ 的 POST_NOTIFICATIONS 是运行时权限，Qt 6.11 的 QPermission
 // 没有对应的封装类，只能直接向 Activity 申请。未授予时前台服务照常运行
@@ -75,16 +77,20 @@ void requestNotificationPermission()
 }
 
 // Java 侧静态 native 方法：通知/锁屏/耳机/车机按键。
-// 服务回调可能来自 Binder 线程，先排队到 Qt 主线程再碰 PlayerController。
+//
+// 这里刻意【同步直接调用】handleCommand，不走 QueuedConnection 投递到 Qt 事件循环。
+// 原因：锁屏息屏时 Qt 主线程事件循环会被系统挂起数秒（实测收到 onPause/onPlay 后
+// 要 5 秒才被处理），用户点暂停/播放会觉得「毫无反应」。媒体按键必须即时响应。
+// QMediaPlayer 的 play/pause/seek 在 Android 底层是线程安全的 Binder 调用；
+// handleCommand 内发出的 Qt 信号由 AutoConnection 自动排队到接收者线程，不会
+// 在被占用的线程里直接执行槽函数。命令本身用 g_commandMutex 串行化，避免
+// 连点时多线程同时操作播放器。
 void jniCommand(JNIEnv *, jclass, jint action, jlong position)
 {
-    AndroidMediaSession *self = g_instance;
-    if (!self)
+    if (!g_instance)
         return;
-    QMetaObject::invokeMethod(
-        self,
-        [action, position] { AndroidMediaSession::handleCommand(int(action), qint64(position)); },
-        Qt::QueuedConnection);
+    QMutexLocker lock(&g_commandMutex);
+    AndroidMediaSession::handleCommand(int(action), qint64(position));
 }
 
 } // namespace

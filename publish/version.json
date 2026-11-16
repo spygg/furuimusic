@@ -1,7 +1,11 @@
 {
-  "version": "1.4.20",
-  "desc": "修复\n- 播放失败自动换源：所有音源都切换过仍播不出来时不再停在失败状态，自动播放下一首；取链阶段所有音源（含 VIP 替代 / 跨源）都失败时同样自动续播\n- 自动跳歌防循环：连续失败数达到队列长度就停下并提示，中途有歌正常播放会重置计数，避免列表循环里失败歌被反复跳过又绕回起点\n",
+  "version": "1.4.21",
+  "desc": "修复\n- 锁屏界面 / 通知栏 / 耳机线控点击播放、暂停无反应：媒体按键命令原本经 Qt 事件循环排队处理，息屏时该事件循环被系统挂起约 5 秒才响应，用户误以为点击无效；改为在 JNI 回调线程同步执行媒体命令，即时响应，并用互斥锁串行化避免连点竞态\n",
   "history": [
+    {
+      "version": "1.4.20",
+      "desc": "修复\n- 播放失败自动换源：所有音源都切换过仍播不出来时不再停在失败状态，自动播放下一首；取链阶段所有音源（含 VIP 替代 / 跨源）都失败时同样自动续播\n- 自动跳歌防循环：连续失败数达到队列长度就停下并提示，中途有歌正常播放会重置计数，避免列表循环里失败歌被反复跳过又绕回起点\n"
+    },
     {
       "version": "1.4.19",
       "desc": "修复\n- 汽水歌词取不到：/luna/h5/seo_track 返回的 lyric 是对象（content 为 KRC 正文，时间戳标记格式为 \"[startMs,dur]<offset,dur>text\"），resultPaths 补上 lyric.content，并把 KRC 转成播放器统一的 [mm:ss.xx] 标准 LRC；此前汽水歌（含推荐续播进来的歌）全部显示「暂无歌词」\n新增\n- 汽水漫游：设置页新增开关。开启后播放汽水歌曲时，「下一首」改由汽水的相似歌曲推荐决定（以当前歌为种子取 /luna/track/related，免签名 web 接口，登录后效果更好）：推荐歌自动去重后插到当前歌后面接着播，一次最多 10 首\n- 顺序播放走到队列末尾时也会自动取汽水推荐续上，不再直接停止；非汽水歌曲仍按原逻辑结束\n其他\n- 关闭「汽水漫游」后行为与之前一致：仍按原播放队列切歌"
@@ -96,9 +100,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.20/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.20/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.20/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.20/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.21/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.21/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.21/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.21/FuruiMusic-android-arm64-v8a.apk"
   }
 }
