@@ -1,7 +1,15 @@
 {
-  "version": "1.4.15",
-  "desc": "改进\n- 在线音源不再限制导入数量：解析仓库页面得到的音源全部导入（此前首次只导入当日可用的前 8 个）；当日可用与历史稳定的源排在列表前面，其余源照常可用，取链失败仍会自动降权换源",
+  "version": "1.4.17",
+  "desc": "改进\n- 歌词有翻译轨时默认显示翻译：网易云 / QQ / 咪咕的歌词接口会带翻译轨，播放页每行原文下方渲染小号翻译行，与原句按时间戳对齐（容差 1.2 秒）；没有翻译轨的歌保持原样\n- 汽水音乐登录改为官网登录：官方 passport 扫码接口实测是「抖音 App 身份验证」用途，手机确认后不下发登录态（轮询永远显示未确认），已下线该方式；登录页「官网登录」打开抖音授权页，登录成功自动导入\n- Android 官网登录页竖屏适配：抖音授权页是无 viewport 的桌面宽布局，此前竖屏首载左右被裁（旋转一次屏幕才恢复）；现在按可视宽度整页等比缩放，登录框完整居中显示，并自动点开登录入口\n\n修复\n- 歌词翻译与原文整体错位：网易云歌词原文开头自带两行带真实时间戳的 Credit 行（标题/作词），旧合并算法在时间戳对不上时无条件消耗翻译行，导致翻译从第 3 行起全部对不上（实测 40 行合并 0 行）；现在对不上时不消耗翻译行，40 行全部对齐\n- 浅色主题下官网登录页 / 内置浏览器的网页区与页面背景同为纯白、边界看不清：补 1px 描边",
   "history": [
+    {
+      "version": "1.4.16",
+      "desc": "改进\n- 在线音源导入改为多镜像回退：README 每个音源小节给出的原始地址与全部加速链接都会收进回退链，并补齐 gh-proxy.org / ghfast.top / gh.llkk.cc / github.moeyy.xyz / ghproxy.net / ghp.ci / gh.api.99988866.xyz / ghproxy.cc / ghproxy.cn 等加速站；某条下载失败自动换下一条，内容校验不通过也会跳过，不再被某一个失效镜像卡住\n- 脚本已落库但初始化失败时不再换镜像重复下载，避免音源列表堆出重复条目\n\n修复\n- 汽水音乐扫码后手机显示成功、应用一直停在等待扫码：确认登录后官方把登录态放在 data.auth.sessionid（并不保证下发 Set-Cookie），此前只认 Cookie 导致读不到，现在两条来源都解析\n- 汽水扫码轮询改为 5 秒一次；服务端按请求频次限流（error_code=7 访问太频繁）时自动退避到 15 秒，二维码不再因此被判过期\n- 扫码提示改为「汽水音乐 App 扫一扫」：该二维码是汽水域名的扫码链接，抖音 App 扫会直接提示失败"
+    },
+    {
+      "version": "1.4.15",
+      "desc": "改进\n- 在线音源不再限制导入数量：解析仓库页面得到的音源全部导入（此前首次只导入当日可用的前 8 个）；当日可用与历史稳定的源排在列表前面，其余源照常可用，取链失败仍会自动降权换源"
+    },
     {
       "version": "1.4.14",
       "desc": "修复\n- 检查更新在旧版本上误报「已是最新版本」：以前拿到第一个返回合法 JSON 的镜像就采纳，而 jsDelivr 对 main 分支的缓存各节点滞后且不一致（实测同一时刻分别返回 1.4.13 / 1.4.12 / 1.4.9），国内网络下 raw.githubusercontent 又常不可达，于是读到旧缓存就判定为最新。现在先向 GitHub API 的 releases/latest 取最新 tag（不走 CDN），再按该不可变 tag 并行拉取清单并取最高版本号\n- 全部镜像不可达时不再回退到打包进安装包的清单（它与本地版本同源，必然显示「已是最新」），改为如实提示「无法获取更新信息」"
@@ -76,9 +84,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.15/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.15/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.15/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.15/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.17/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.17/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.17/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.17/FuruiMusic-android-arm64-v8a.apk"
   }
 }
