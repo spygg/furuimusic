@@ -3,8 +3,14 @@
 #include "../core/HttpClient.h"
 #include "../core/PlayerController.h"
 #include "../core/Settings.h"
+#ifdef Q_OS_ANDROID
+#include "../core/AppController.h"
+#endif
 
 #ifdef Q_OS_ANDROID
+// QNativeInterface::QAndroidApplication 的真实头文件（Qt 6.9+ 才有前向路径，
+// 6.8.3 没有；与 UpdateChecker.cpp 保持一致，显式 include 以保证兼容）。
+#include <QtCore/qcoreapplication_platform.h>
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -76,6 +82,33 @@ void requestNotificationPermission()
         jni->ExceptionClear();
 }
 
+// 前台播放时保持屏幕常亮：用官方推荐的 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON，
+// 无需 WAKE_LOCK 权限，系统会在窗口销毁时自动清理。关闭开关或暂停播放时清掉 flag。
+// playing 由调用方传入，是否启用读设置（keepScreenOn，默认开）。
+//
+// 注意：Qt 的事件循环跑在 qtMainLoopThread，不是 Android 的 UI 线程；Window.addFlags()
+// 会触发 view layout 更新，必须从 Android UI 线程调用，否则抛 CalledFromWrongThreadException
+// 且 flag 不生效。这里用 runOnAndroidMainThread 把 JNI 操作切到 UI 线程。
+void applyKeepScreenOn(bool playing)
+{
+    const bool enabled = playing
+                         && Settings::boolean(QStringLiteral("keepScreenOn"), true);
+    QNativeInterface::QAndroidApplication::runOnAndroidMainThread([enabled]() {
+        QJniObject activity = QJniObject::callStaticObjectMethod(
+            "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
+        if (!activity.isValid() || !activity.object())
+            return;
+        QJniObject window = activity.callObjectMethod("getWindow", "()Landroid/view/Window;");
+        if (!window.isValid() || !window.object())
+            return;
+        // WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON = 0x00000080
+        if (enabled)
+            window.callMethod<void>("addFlags", "(I)V", jint(0x80));
+        else
+            window.callMethod<void>("clearFlags", "(I)V", jint(0x80));
+    });
+}
+
 // Java 侧静态 native 方法：通知/锁屏/耳机/车机按键。
 //
 // 这里刻意【同步直接调用】handleCommand，不走 QueuedConnection 投递到 Qt 事件循环。
@@ -127,6 +160,8 @@ void AndroidMediaSession::install()
         if (player->playing())
             g_instance->ensureService();
     }
+    // 冷启动就常在播放（续播）：补一次常亮状态，避免要等下一次 stateChanged
+    applyKeepScreenOn(player->playing());
 }
 
 AndroidMediaSession::AndroidMediaSession(QObject *parent) : QObject(parent)
@@ -142,11 +177,18 @@ AndroidMediaSession::AndroidMediaSession(QObject *parent) : QObject(parent)
             ensureService();
     });
 
-    // 播放/暂停/播完：只需刷新播放态；开始播放时确保服务已在前台
+    // 播放/暂停/播完：刷新播放态、同步屏幕常亮；开始播放时确保服务已在前台
     connect(player, &PlayerController::stateChanged, this, [this] {
+        const bool playing = PlayerController::instance()->playing();
         pushPlayback();
-        if (PlayerController::instance()->playing())
+        applyKeepScreenOn(playing);
+        if (playing)
             ensureService();
+    });
+
+    // 设置页切换「播放时常亮」后立即生效（不必等下一次播放/暂停）
+    connect(AppController::instance(), &AppController::settingsChanged, this, [this] {
+        applyKeepScreenOn(PlayerController::instance()->playing());
     });
 }
 

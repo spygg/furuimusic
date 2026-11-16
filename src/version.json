@@ -1,7 +1,11 @@
 {
-  "version": "1.4.21",
-  "desc": "修复\n- 锁屏界面 / 通知栏 / 耳机线控点击播放、暂停无反应：媒体按键命令原本经 Qt 事件循环排队处理，息屏时该事件循环被系统挂起约 5 秒才响应，用户误以为点击无效；改为在 JNI 回调线程同步执行媒体命令，即时响应，并用互斥锁串行化避免连点竞态\n",
+  "version": "1.4.22",
+  "desc": "修复\n- 搜索时播放栏遮挡搜索结果：曲库页进入搜索态后自动隐藏迷你播放条/底部播放栏，给搜索结果和软键盘腾出空间；清空搜索即恢复\n新增\n- 播放时屏幕常亮（设置页开关，仅移动端、默认开）：前台播放时保持屏幕不熄灭，暂停或关闭开关立即恢复；用系统 FLAG_KEEP_SCREEN_ON，无需额外权限\n- 搜索结果「加入队列」升级为开关：已在队列中的歌按钮变成高亮「✓」，再点即移除；按 uid 去重，连点不会重复入队\n",
   "history": [
+    {
+      "version": "1.4.21",
+      "desc": "修复\n- 锁屏界面 / 通知栏 / 耳机线控点击播放、暂停无反应：媒体按键命令原本经 Qt 事件循环排队处理，息屏时该事件循环被系统挂起约 5 秒才响应，用户误以为点击无效；改为在 JNI 回调线程同步执行媒体命令，即时响应，并用互斥锁串行化避免连点竞态\n"
+    },
     {
       "version": "1.4.20",
       "desc": "修复\n- 播放失败自动换源：所有音源都切换过仍播不出来时不再停在失败状态，自动播放下一首；取链阶段所有音源（含 VIP 替代 / 跨源）都失败时同样自动续播\n- 自动跳歌防循环：连续失败数达到队列长度就停下并提示，中途有歌正常播放会重置计数，避免列表循环里失败歌被反复跳过又绕回起点\n"
@@ -100,9 +104,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.21/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.21/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.21/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.21/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.22/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.22/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.22/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.22/FuruiMusic-android-arm64-v8a.apk"
   }
 }

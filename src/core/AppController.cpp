@@ -75,6 +75,7 @@ QVariant SongListModel::data(const QModelIndex &index, int role) const
     case BadgeRole:     return s.vip ? QStringLiteral("VIP") : QString();
     case SourceIdRole:  return s.sourceId;
     case FavoriteRole:  return Library::instance()->isFavorite(s.uid);
+    case InQueueRole:   return m_queueUids.contains(s.uid);
     default:            return QVariant();
     }
 }
@@ -85,8 +86,17 @@ QHash<int, QByteArray> SongListModel::roleNames() const
         {UidRole, "uid"}, {TitleRole, "title"}, {ArtistRole, "artist"}, {AlbumRole, "album"},
         {DurationRole, "duration"}, {CoverRole, "cover"}, {SourceRole, "source"},
         {SourceNameRole, "sourceName"}, {VipRole, "vip"}, {BadgeRole, "badge"},
-        {SourceIdRole, "sourceId"}, {FavoriteRole, "favorite"}
+        {SourceIdRole, "sourceId"}, {FavoriteRole, "favorite"}, {InQueueRole, "inQueue"}
     };
+}
+
+void SongListModel::setQueueUids(const QSet<QString> &uids)
+{
+    if (m_queueUids == uids) return;
+    m_queueUids = uids;
+    if (m_songs.isEmpty()) return;
+    // 整表刷新 inQueue 列（uid→bool，无副作用），QML 侧 SongRow 的「＋/✓」据此切换
+    emit dataChanged(index(0, 0), index(m_songs.size() - 1, 0), {InQueueRole});
 }
 
 void SongListModel::setSongs(const QVector<Song> &songs)
@@ -251,6 +261,8 @@ struct AppController::Impl {
     int consecutiveFailures = 0;
     // 推荐请求在途：连点下一首时只允许有一个 /luna/track/related 请求
     bool recommendPending = false;
+    // 曲库页搜索框是否有内容：外壳据此隐藏播放栏，给搜索结果/软键盘让位
+    bool searchActive = false;
 };
 
 AppController *AppController::s_instance = nullptr;
@@ -402,7 +414,16 @@ void AppController::setStatus(const QString &text)
 }
 
 void AppController::syncQueueModel()
-{ m_queue->setSongs(PlayerController::instance()->queue()); }
+{
+    const QVector<Song> songs = PlayerController::instance()->queue();
+    m_queue->setSongs(songs);
+    // 让搜索结果等列表知道哪些歌已在队列里，「＋」按钮据此切成「✓」
+    QSet<QString> uids;
+    uids.reserve(songs.size());
+    for (const Song &s : songs)
+        if (!s.uid.isEmpty()) uids.insert(s.uid);
+    m_results->setQueueUids(uids);
+}
 
 void AppController::syncAccountModel()
 {
@@ -502,6 +523,8 @@ bool AppController::autoToggleSource() const
 { return Settings::boolean(QStringLiteral("autoToggleSource"), true); }
 bool AppController::qishuiRoam() const
 { return Settings::boolean(QStringLiteral("qishuiRoam"), false); }
+bool AppController::keepScreenOn() const
+{ return Settings::boolean(QStringLiteral("keepScreenOn"), true); }
 QString AppController::searchType() const { return d->searchType; }
 bool AppController::openApiEnabled() const { return OpenApiServer::instance()->running(); }
 QString AppController::openApiAddress() const { return OpenApiServer::instance()->address(); }
@@ -550,6 +573,16 @@ QString AppController::loginUnavailableReason(const QString &sourceId) const
 
 void AppController::setSearchType(const QString &type)
 { setSetting(QStringLiteral("searchType"), type); }
+
+bool AppController::searchActive() const
+{ return d->searchActive; }
+
+void AppController::setSearchActive(bool value)
+{
+    if (d->searchActive == value) return;
+    d->searchActive = value;
+    emit searchActiveChanged();
+}
 
 void AppController::cancelPendingSearch()
 {
@@ -979,7 +1012,19 @@ void AppController::addResultToQueue(int index)
 {
     const QVector<Song> &songs = m_results->songs();
     if (index < 0 || index >= songs.size()) return;
-    PlayerController::instance()->addQueue(QVector<Song>() << songs.at(index));
+    const Song &s = songs.at(index);
+    PlayerController *p = PlayerController::instance();
+    // 按 uid 去重：已在队列里就移除（按钮变回「＋」），否则追加。
+    // 这样 SongRow 的「＋/✓」是真正的开关，连点也不会堆出多份同一首歌。
+    const QVector<Song> &q = p->queue();
+    for (int i = 0; i < q.size(); ++i) {
+        if (!s.uid.isEmpty() && q.at(i).uid == s.uid) {
+            p->removeQueue(i);
+            emit toast(QStringLiteral("已从播放队列移除"));
+            return;
+        }
+    }
+    p->addQueue(QVector<Song>() << s);
     emit toast(QStringLiteral("已加入播放队列"));
 }
 

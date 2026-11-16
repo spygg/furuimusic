@@ -132,6 +132,17 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
+                visible: platform.isMobile
+                Text { Layout.fillWidth: true; text: "播放时屏幕常亮"; color: cText; font.pixelSize: 13 }
+                Switch {
+                    checked: app.keepScreenOn
+                    onToggled: app.setSetting("keepScreenOn", checked)
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
                 Text { Layout.fillWidth: true; text: "开放 API"; color: cText; font.pixelSize: 13 }
                 Switch {
                     checked: app.openApiEnabled

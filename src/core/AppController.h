@@ -4,6 +4,7 @@
 // 所有方法都是同步返回 / 异步发信号，内部网络请求不阻塞 UI 线程。
 #include <QAbstractListModel>
 #include <QObject>
+#include <QSet>
 #include <QVariant>
 #include <QVariantList>
 
@@ -18,7 +19,7 @@ public:
     enum Roles {
         UidRole = Qt::UserRole + 1, TitleRole, ArtistRole, AlbumRole, DurationRole,
         CoverRole, SourceRole, SourceNameRole, VipRole, BadgeRole, SourceIdRole,
-        FavoriteRole
+        FavoriteRole, InQueueRole
     };
     Q_ENUM(Roles)
     explicit SongListModel(QObject *parent = nullptr);
@@ -32,9 +33,12 @@ public:
     void setCover(const QString &uid, const QString &cover);
     const QVector<Song> &songs() const { return m_songs; }
     void clear();
+    // 「已在播放队列」状态：uid 集合由门面在队列变化时统一灌入；
+    // 搜索结果行据此把「＋」切成「✓」，让用户看得出哪些已加入过。
+    void setQueueUids(const QSet<QString> &uids);
 private:
     QVector<Song> m_songs;
-    QString m_sourceNames; // 占位，保持 ABI 稳定
+    QSet<QString> m_queueUids;
 };
 
 class PlaylistListModel : public QAbstractListModel {
@@ -119,6 +123,10 @@ class AppController : public QObject {
     Q_PROPERTY(bool autoToggleSource READ autoToggleSource NOTIFY settingsChanged)
     // 汽水漫游：开启后播到汽水果时，下一首由汽水推荐流决定（队列只作兜底）
     Q_PROPERTY(bool qishuiRoam READ qishuiRoam NOTIFY settingsChanged)
+    // 播放时常亮（仅 Android 有效）：前台播放时锁屏不熄灭
+    Q_PROPERTY(bool keepScreenOn READ keepScreenOn NOTIFY settingsChanged)
+    // 搜索态（曲库页有关键词）：外壳据此隐藏播放栏，给搜索结果/软键盘让出空间
+    Q_PROPERTY(bool searchActive READ searchActive WRITE setSearchActive NOTIFY searchActiveChanged)
     Q_PROPERTY(QString searchType READ searchType NOTIFY settingsChanged)
     Q_PROPERTY(bool openApiEnabled READ openApiEnabled NOTIFY settingsChanged)
     Q_PROPERTY(QString openApiAddress READ openApiAddress NOTIFY settingsChanged)
@@ -190,6 +198,9 @@ public:
     bool vipSubstituteEnabled() const;
     bool autoToggleSource() const;
     bool qishuiRoam() const;
+    bool keepScreenOn() const;
+    bool searchActive() const;
+    Q_INVOKABLE void setSearchActive(bool value);
     QString searchType() const;
     bool openApiEnabled() const;
     QString openApiAddress() const;
@@ -332,6 +343,7 @@ signals:
     void positionChanged();
     void lyricsChanged();
     void settingsChanged();
+    void searchActiveChanged();
     void customSourcesChanged();
     void scriptSourcesChanged();
     void scriptSourceMessage(const QString &id, bool ok, const QString &message);

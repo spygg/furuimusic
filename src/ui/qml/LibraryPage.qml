@@ -57,6 +57,11 @@ Item {
     property bool searching: false
     readonly property bool searchMode: searchKeyword.length > 0
     readonly property int searchViewIndex: root.tabTitles.length
+    // 搜索态变化时通知外壳：搜索时隐藏迷你播放条，给结果区和软键盘腾出空间，
+    // 避免播放栏压住搜索内容（矮屏/键盘弹出时尤其明显）。
+    onSearchModeChanged: app.searchActive = root.searchMode
+    // 曲库页退到后台/被切走时也要撤销搜索态，否则播放栏一直不回来
+    Component.onDestruction: app.searchActive = false
 
     function runSearch()
     {
@@ -844,6 +849,7 @@ Item {
                                 duration: model.duration
                                 vip: model.vip
                                 favorite: model.favorite
+                                inQueue: model.inQueue
                                 showMv: model.source === "netease"
                                 onPlayRequested: app.playResult(index)
                                 onFavoriteRequested: app.toggleFavoriteResult(index)
@@ -888,6 +894,7 @@ Item {
                             duration: model.duration
                             vip: model.vip
                             favorite: model.favorite
+                            inQueue: model.inQueue
                             showMv: model.source === "netease"
                             onPlayRequested: app.playResult(index)
                             onFavoriteRequested: app.toggleFavoriteResult(index)
@@ -927,6 +934,7 @@ Item {
                             duration: model.duration
                             vip: model.vip
                             favorite: model.favorite
+                            inQueue: model.inQueue
                             showMv: model.source === "netease"
                             onPlayRequested: app.playResult(index)
                             onFavoriteRequested: app.toggleFavoriteResult(index)
@@ -1219,6 +1227,7 @@ Item {
                                 duration: model.duration
                                 vip: model.vip
                                 favorite: model.favorite
+                                inQueue: model.inQueue
                                 showMv: model.source === "netease"
                                 onPlayRequested: app.playResult(index)
                                 onFavoriteRequested: app.toggleFavoriteResult(index)
@@ -1582,6 +1591,7 @@ Item {
                                     duration: model.duration
                                     vip: model.vip
                                     favorite: model.favorite
+                                    inQueue: model.inQueue
                                     showMv: model.source === "netease"
                                     showDownload: true
                                     onPlayRequested: app.playResult(index)

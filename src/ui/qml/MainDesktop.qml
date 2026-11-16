@@ -300,6 +300,8 @@ Item {
             // 还没开始播放时也整条隐藏，不再占着一行空白栏
             visible: root.pageIndex !== 1 && root.pageIndex !== 4
                      && app.currentTitle.length > 0
+                     // 曲库页搜索时隐藏，给搜索结果让出空间
+                     && !(root.pageIndex === 0 && app.searchActive)
             onOpenPlayer: root.pageIndex = 1
             onOpenSettings: root.pageIndex = 3
             onToggleQueue: root.queueOpen = !root.queueOpen

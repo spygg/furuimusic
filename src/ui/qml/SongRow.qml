@@ -20,6 +20,8 @@ Rectangle {
     property bool vip: false
     property bool favorite: false
     property bool playing: false
+    // 该歌是否已在播放队列：搜索结果行据此把「＋」切成「✓」（见 LibraryPage 的 model.inQueue）
+    property bool inQueue: false
     property bool showAdd: true
     property bool showFavorite: true
     property bool showDownload: false
@@ -54,7 +56,7 @@ Rectangle {
 
     function actionLabel(kind) {
         if (kind === "favorite") return root.favorite ? "取消收藏" : "收藏"
-        if (kind === "add") return "加入播放队列"
+        if (kind === "add") return root.inQueue ? "从播放队列移除" : "加入播放队列"
         if (kind === "mv") return "播放 MV"
         if (kind === "download") return "下载到本地"
         return "从播放队列移除"
@@ -278,15 +280,16 @@ Rectangle {
                     }
                 }
 
-                // 加入队列
+                // 加入队列（已在队列里变成高亮的「✓」，再点即移除）
                 Item {
                     width: theme.touchMin; height: theme.touchMin
                     visible: root.showAdd && !root.touchMode
                     Text {
                         anchors.centerIn: parent
-                        text: "＋"
-                        color: root.cSub
-                        font.pixelSize: 15
+                        text: root.inQueue ? "✓" : "＋"
+                        color: root.inQueue ? root.accent : root.cSub
+                        font.pixelSize: root.inQueue ? 18 : 15
+                        font.bold: root.inQueue
                     }
                     MouseArea {
                         anchors.fill: parent
