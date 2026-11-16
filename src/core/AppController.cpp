@@ -246,6 +246,9 @@ struct AppController::Impl {
     QSet<QString> triedFallback;
     bool inFallback = false;
     quint64 fallbackGen = 0;
+    // 连续「所有音源都换过仍播不出来」的次数：达到队列长度就停下，避免列表循环下
+    // 一首首失败歌被自动跳过N后绕回起点、无限重播。某首歌真正开始播放（进度>2s）后清零。
+    int consecutiveFailures = 0;
     // 推荐请求在途：连点下一首时只允许有一个 /luna/track/related 请求
     bool recommendPending = false;
 };
@@ -291,7 +294,14 @@ AppController::AppController(QObject *parent)
         emit playerChanged();
     });
     connect(player, &PlayerController::mediaChanged, this, [this] { emit playerChanged(); });
-    connect(player, &PlayerController::positionChanged, this, [this] { emit positionChanged(); });
+    connect(player, &PlayerController::positionChanged, this, [this, player] {
+        // 进度走过 2 秒说明这首歌真的在播：清零「连续播放失败」计数。
+        // 这样自动跳过失败歌的过程中，中间任何一首正常播放的歌都会把额度恢复，
+        // 不会因为前面跳过几首而在后面误停。
+        if (d->consecutiveFailures > 0 && player->position() > 2000)
+            d->consecutiveFailures = 0;
+        emit positionChanged();
+    });
     connect(player, &PlayerController::volumeChanged, this, [this] { emit volumeChanged(); });
     connect(player, &PlayerController::lyricsChanged, this, [this] { emit lyricsChanged(); });
     connect(player, &PlayerController::queueChanged, this, [this] {
@@ -848,8 +858,9 @@ void AppController::resolveAndPlay(const Song &song)
     SourceManager::instance()->resolve(song, d->quality, [this, song, resolveGeneration](const Playable &p) {
         if (resolveGeneration != d->resolveGen) return;   // 已切到别的歌，丢弃迟到的取链结果
         if (!p.ok) {
-            setStatus(p.message);
-            emit toast(p.message);
+            // 取链阶段所有音源都失败（含 VIP 替代/跨源都试过）：同样自动跳下一首。
+            autoAdvanceAfterFailure(song.title + QLatin1String(" - ") + song.artist,
+                                    p.message, p.message);
             return;
         }
         d->lastResolvedUrl = p.url.toString();
@@ -894,6 +905,7 @@ void AppController::onPlayerError(const QString &msg)
         [this, gen, msg, song, brief](const Playable &r) {
             if (gen != d->fallbackGen) return;     // 期间用户已切到别的歌，丢弃迟到结果
             if (r.ok) {
+                d->consecutiveFailures = 0;        // 换源后能播了，失败链结束
                 d->triedFallback.insert(r.source);
                 // 成功源置顶：custom 永远最前，内置平台按序排到第一。
                 SourceManager::instance()->promoteSource(r.source);
@@ -918,11 +930,33 @@ void AppController::onPlayerError(const QString &msg)
                 emit playerChanged();
                 return;
             }
-            // 所有候选源都失败：终止换源，原样提示播放失败。
             d->inFallback = false;
-            setStatus(msg);
-            emit toast(brief);
+            autoAdvanceAfterFailure(song.title + QLatin1String(" - ") + song.artist, msg, brief);
         });
+}
+
+void AppController::autoAdvanceAfterFailure(const QString &songLabel, const QString &msg,
+                                            const QString &brief)
+{
+    // 所有音源都换过仍播不出来：自动播放下一首。
+    // 用连续失败计数 + 队列长度兜底，防止「列表循环里全是失败歌」时
+    // 一首首跳过又绕回起点、无限重播；中间只要有歌正常播起来（进度>2s）
+    // 就会由 positionChanged 把计数清零。
+    PlayerController *p = PlayerController::instance();
+    const int queueSize = p->queue().size();
+    if (++d->consecutiveFailures < queueSize) {
+        qWarning().noquote() << QStringLiteral("所有音源播放失败，自动跳到下一首：%1（连续失败 %2）")
+                                .arg(songLabel).arg(d->consecutiveFailures);
+        setStatus(QStringLiteral("切换音源后仍无法播放，正在播放下一首…"));
+        // 与 EndOfMedia 一致：不要在播放/换源回调栈里同步 stop/setSource，
+        // 否则新歌经常起不来，表现成「跳到下一首却没声音」。
+        QTimer::singleShot(0, this, [this] { PlayerController::instance()->next(); });
+        return;
+    }
+    // 已经把队列里的歌都跳了一遍还全失败：停下并提示，避免无限循环。
+    d->consecutiveFailures = 0;
+    setStatus(msg);
+    emit toast(brief);
 }
 
 void AppController::playResult(int index)

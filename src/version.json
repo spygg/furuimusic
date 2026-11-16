@@ -1,7 +1,11 @@
 {
-  "version": "1.4.19",
-  "desc": "修复\n- 汽水歌词取不到：/luna/h5/seo_track 返回的 lyric 是对象（content 为 KRC 正文，时间戳标记格式为 \"[startMs,dur]<offset,dur>text\"），resultPaths 补上 lyric.content，并把 KRC 转成播放器统一的 [mm:ss.xx] 标准 LRC；此前汽水歌（含推荐续播进来的歌）全部显示「暂无歌词」\n新增\n- 汽水漫游：设置页新增开关。开启后播放汽水歌曲时，「下一首」改由汽水的相似歌曲推荐决定（以当前歌为种子取 /luna/track/related，免签名 web 接口，登录后效果更好）：推荐歌自动去重后插到当前歌后面接着播，一次最多 10 首\n- 顺序播放走到队列末尾时也会自动取汽水推荐续上，不再直接停止；非汽水歌曲仍按原逻辑结束\n其他\n- 关闭「汽水漫游」后行为与之前一致：仍按原播放队列切歌",
+  "version": "1.4.20",
+  "desc": "修复\n- 播放失败自动换源：所有音源都切换过仍播不出来时不再停在失败状态，自动播放下一首；取链阶段所有音源（含 VIP 替代 / 跨源）都失败时同样自动续播\n- 自动跳歌防循环：连续失败数达到队列长度就停下并提示，中途有歌正常播放会重置计数，避免列表循环里失败歌被反复跳过又绕回起点\n",
   "history": [
+    {
+      "version": "1.4.19",
+      "desc": "修复\n- 汽水歌词取不到：/luna/h5/seo_track 返回的 lyric 是对象（content 为 KRC 正文，时间戳标记格式为 \"[startMs,dur]<offset,dur>text\"），resultPaths 补上 lyric.content，并把 KRC 转成播放器统一的 [mm:ss.xx] 标准 LRC；此前汽水歌（含推荐续播进来的歌）全部显示「暂无歌词」\n新增\n- 汽水漫游：设置页新增开关。开启后播放汽水歌曲时，「下一首」改由汽水的相似歌曲推荐决定（以当前歌为种子取 /luna/track/related，免签名 web 接口，登录后效果更好）：推荐歌自动去重后插到当前歌后面接着播，一次最多 10 首\n- 顺序播放走到队列末尾时也会自动取汽水推荐续上，不再直接停止；非汽水歌曲仍按原逻辑结束\n其他\n- 关闭「汽水漫游」后行为与之前一致：仍按原播放队列切歌"
+    },
     {
       "version": "1.4.18",
       "desc": "修复\n- 汽水音乐登录后同步失败（旧提示让用户去设置填 X-Helios / X-Medusa）：官方 /luna/pc/* 账号接口要求 bdms.node 逐请求签名，抓到的静态签名无效。资料与歌单改走免签名的 web 接口（/luna/me、/luna/me/playlist、/luna/playlist/detail，device_platform=web&channel=pc_web + 浏览器 UA），登录后点「同步全部账号」即可拉到昵称、头像、歌单与收藏\n- 汽水歌单/曲目封面补上 url_cover.template_prefix 图片模板后缀，之前只拼「前缀+uri」会被 CDN 拒绝（400），封面显示为占位图\n- 汽水扫码登录收尾改用同一个 web 资料接口，登录完成后直接显示昵称/头像；官网登录导入 Cookie 时也会补一次资料\n- 设置页移除已无用的 X-Helios / X-Medusa 输入框，改成说明文案\n- 应用内官网登录页按平台声明的 Cookie 名判断登录态，不再写死 MUSIC_U，汽水官网登录也能自动导入"
@@ -92,9 +96,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.19/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.19/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.19/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.19/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.20/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.20/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.20/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.20/FuruiMusic-android-arm64-v8a.apk"
   }
 }
