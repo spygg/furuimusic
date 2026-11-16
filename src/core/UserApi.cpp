@@ -268,12 +268,17 @@ QStringList UserApi::methods(const QString &sourceId) const
              || mm == QLatin1String("phone")) && !out.contains(mm))
             out << mm;
     }
-    // 配置了账号 API 服务（driver=http）且声明了 extraMethods 时，也把它当成可用方式
+    // 配置了账号 API 服务（driver=http）且声明了 extraMethods 时，也把它当成可用方式。
+    // 必须限定 driver=http：汽水这类内置直连平台（driver=direct）把 qrcode 留在
+    // extraMethods 里只是给自建服务用的，无条件并入会让官方 passport 扫码已下线的
+    // 汽水在界面上重新出现「二维码」页签，用户点进去只能白等。
     const UserApiConfig c = config(sourceId);
-    for (const QString &m : c.extraMethods) {
-        const QString mm = m.toLower();
-        if ((mm == QLatin1String("qrcode") || mm == QLatin1String("phone")) && !out.contains(mm))
-            out << mm;
+    if (c.driver == QLatin1String("http") && !c.base.trimmed().isEmpty()) {
+        for (const QString &m : c.extraMethods) {
+            const QString mm = m.toLower();
+            if ((mm == QLatin1String("qrcode") || mm == QLatin1String("phone")) && !out.contains(mm))
+                out << mm;
+        }
     }
     return out;
 }

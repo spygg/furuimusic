@@ -119,7 +119,9 @@ private:
     // 汽水：把本轮扫码会话的 Cookie 映射拼成 "name=value; ..." 头（passport_csrf_token / sessionid）
     QString qishuiCookieHeader() const;
     // 汽水扫码轮询统一的应答处理：统一解析状态文案 + 拿 sessionid（Set-Cookie / body 两条链路共用）
-    void handleQishuiPollReply(const HttpClient::Reply &r, const QString &sessionId, const QString &st);
+    // errorCode 非 0 时按服务端错误处理（7 = 访问太频繁，只能退避，不能终止会话）
+    void handleQishuiPollReply(const HttpClient::Reply &r, const QString &sessionId,
+                               const QString &st, int errorCode, const QString &description);
     void generateQrImage(const QString &content, const QString &sourceId);
     // data:image/png;base64,... 形态的二维码（汽水 passport 出码返回）→ 直接落盘
     bool saveQrDataUrl(const QString &dataUrl, const QString &sourceId);

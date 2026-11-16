@@ -162,6 +162,9 @@ Item {
                 Rectangle {
                     anchors.fill: parent
                     color: "#ffffff"
+                    // 浅色主题下外框背景同为纯白，网页区边界看不出来：补 1px 描边
+                    border.width: 1
+                    border.color: theme.line
                 }
                 Loader {
                     id: webLoader

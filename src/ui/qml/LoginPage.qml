@@ -90,6 +90,10 @@ Item {
             if (m === "phone") return "快捷登录"
             if (m === "password") return "帐号登录"
         }
+        // 汽水只有「官网登录」一种方式（官方 passport 扫码确认后状态不回传，已下线）
+        if (root.selectedSource === "qishui") {
+            if (m === "password") return "官网登录"
+        }
         if (m === "qrcode") return "二维码"
         if (m === "phone") return "手机号"
         if (m === "password") return "密码"

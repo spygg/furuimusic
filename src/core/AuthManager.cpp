@@ -189,6 +189,10 @@ static QByteArray diagHttpLine(const QString &tag, const QString &path, const Ht
 // 或 ptlogin 持续回空串时，2 秒一次的轮询会永远跑下去。
 static const qint64 kQrSessionMs = 4 * 60 * 1000;
 
+// 汽水 passport 轮询间隔：服务端按请求频次限流（约十几秒内十几次就回 error_code=7），
+// 5 秒一次既能及时反映扫码状态，也不会把配额打光。触发限流后退避到 15 秒。
+static const int kQishuiPollMs = 5000;
+
 // Cookie 串里可能混着 Set-Cookie 的属性字段（Max-Age/Path/Domain/Secure…），
 // 直接存下来会污染后续请求的 Cookie 头，这里只保留真正的键值对。
 static QString onlyCookiePairs(const QString &raw)
@@ -499,6 +503,9 @@ void AuthManager::startQrPolling()
 {
     m_qrDeadline = QDateTime::currentMSecsSinceEpoch() + kQrSessionMs;
     m_qrEmptyStreak = 0;
+    // 汽水 passport 对请求频次很敏感：每 2 秒轮询十几次就会回 error_code=7（访问太频繁），
+    // 之后二维码再被确认也读不到登录态。其余平台仍按 2 秒走。
+    m_poll.setInterval(m_qrMode == QLatin1String("qishui") ? kQishuiPollMs : 2000);
     m_polling = true;
     m_poll.start();
 }
@@ -1180,6 +1187,47 @@ QVariantMap qishuiPassportHeaders(const QString &cookie)
     h.insert(QStringLiteral("Accept"), QStringLiteral("application/json, text/plain, */*"));
     if (!cookie.isEmpty()) h.insert(QStringLiteral("Cookie"), cookie);
     return h;
+}
+
+// 汽水 check_qrconnect 的应答解析。
+// 手机端「确认登录」后，官方把登录态放在 data.auth.sessionid，而不是 data.sessionid，
+// 也不保证一定会下发 Set-Cookie；历史实现只认 cookie 与顶层 sessionid，于是手机已显示
+// 成功、客户端却永远停在「等待扫码」。这里把两条路径都收下来。
+struct QishuiPoll {
+    QString sessionId;
+    QString status;       // 小写；可能是 new / scanned / confirmed，也可能是数字
+    QString description;  // 服务端文案（限流/风控时用来说明原因）
+    int errorCode = 0;
+};
+
+QishuiPoll parseQishuiPoll(const HttpClient::Reply &r, const QMap<QString, QString> &cookies)
+{
+    QishuiPoll out;
+    out.sessionId = cookies.value(QStringLiteral("sessionid"));
+    const QJsonObject root = Json::rootOf(r.json).toObject();
+    const QJsonObject data = root.value(QStringLiteral("data")).toObject();
+    out.errorCode = data.value(QStringLiteral("error_code")).toInt(
+        root.value(QStringLiteral("error_code")).toInt());
+    out.status = Json::firstString(data, {QStringLiteral("status"),
+                                          QStringLiteral("status_code"),
+                                          QStringLiteral("state")}).toLower();
+    out.description = Json::firstString(data, {QStringLiteral("description"),
+                                               QStringLiteral("message")});
+    if (out.description.isEmpty()) {
+        out.description = Json::firstString(root, {QStringLiteral("message"),
+                                                   QStringLiteral("description")});
+    }
+    if (out.sessionId.isEmpty()) {
+        out.sessionId = Json::firstString(data, {
+            QStringLiteral("auth.sessionid"), QStringLiteral("auth.session_id"),
+            QStringLiteral("auth.session"), QStringLiteral("sessionid"),
+            QStringLiteral("session_id"), QStringLiteral("session")});
+    }
+    if (out.sessionId.isEmpty()) {
+        out.sessionId = Json::firstString(root, {QStringLiteral("sessionid"),
+                                                 QStringLiteral("session_id")});
+    }
+    return out;
 }
 
 // 把网易云的业务错误码翻译成能行动的提示，别把所有失败都叫「风控」
@@ -2653,7 +2701,7 @@ void AuthManager::startQishuiQr()
                     emit toast(m_qrStatus);
                     return;
                 }
-                m_qrHint = QStringLiteral("请用抖音 App 扫一扫");
+                m_qrHint = QStringLiteral("请用汽水音乐 App 扫一扫（抖音 App 不识别该码）");
                 m_qrStatus = QStringLiteral("等待扫码");
                 if (!saveQrDataUrl(qr, sourceId)) generateQrImage(qr, sourceId);
                 // generateQrImage 只负责画图；轮询由这里显式启动（token 已在手）
@@ -2710,24 +2758,24 @@ void AuthManager::pollQishuiQr()
         return;
     }
     // 未配置自建账号 API 服务 → 官方 passport/web/check_qrconnect；已配置 → 服务侧 /auth/qrcode/status
+    // 记下本轮 token：刷新二维码后，上一轮还在飞的请求（最长 20s）会带着旧 token 回来，
+    // 若直接按「旧码已过期」处理，会把刚生成的新一轮轮询直接停掉，表现为「刚刷新就过期」。
+    const QString token = m_qsToken;
     if (m_qsBase.isEmpty()) {
         QUrl url(QStringLiteral("https://api.qishui.com/passport/web/check_qrconnect/"));
         QUrlQuery query;
-        query.addQueryItem(QStringLiteral("need_logo"), QStringLiteral("false"));
-        query.addQueryItem(QStringLiteral("need_short_url"), QStringLiteral("false"));
-        query.addQueryItem(QStringLiteral("is_frontier"), QStringLiteral("true"));
-        query.addQueryItem(QStringLiteral("token"), m_qsToken);
-        query.addQueryItem(QStringLiteral("is_new_login"), QStringLiteral("1"));
-        query.addQueryItem(QStringLiteral("next"), QStringLiteral("https://api.qishui.com"));
+        // 与 reference/qishui-api 的 authQrcodeStatus 一致：jssdk/aid/iid 走 URL query，
+        // token/is_frontier/need_logo/... 走 form body。两组位置互换会让服务端认不出
+        // 这个轮询会话，二维码即使被确认也永远返回 status=new（实测踩过）。
+        query.addQueryItem(QStringLiteral("passport_jssdk_version"), QStringLiteral("2.4.13"));
+        query.addQueryItem(QStringLiteral("passport_jssdk_type"), QStringLiteral("normal"));
+        query.addQueryItem(QStringLiteral("is_from_ttaccountsdk"), QStringLiteral("1"));
+        query.addQueryItem(QStringLiteral("aid"), QStringLiteral("386088"));
+        query.addQueryItem(QStringLiteral("iid"), QStringLiteral("27960026095955"));
         url.setQuery(query);
         QVariantMap headers = qishuiPassportHeaders(qishuiCookieHeader());
         headers.insert(QStringLiteral("Content-Type"), QStringLiteral("application/x-www-form-urlencoded"));
         QUrlQuery bodyQuery;
-        bodyQuery.addQueryItem(QStringLiteral("passport_jssdk_version"), QStringLiteral("2.4.13"));
-        bodyQuery.addQueryItem(QStringLiteral("passport_jssdk_type"), QStringLiteral("normal"));
-        bodyQuery.addQueryItem(QStringLiteral("is_from_ttaccountsdk"), QStringLiteral("1"));
-        bodyQuery.addQueryItem(QStringLiteral("aid"), QStringLiteral("386088"));
-        bodyQuery.addQueryItem(QStringLiteral("iid"), QStringLiteral("27960026095955"));
         bodyQuery.addQueryItem(QStringLiteral("need_logo"), QStringLiteral("false"));
         bodyQuery.addQueryItem(QStringLiteral("need_short_url"), QStringLiteral("false"));
         bodyQuery.addQueryItem(QStringLiteral("is_frontier"), QStringLiteral("true"));
@@ -2737,10 +2785,12 @@ void AuthManager::pollQishuiQr()
         const QByteArray formBody = bodyQuery.toString().toUtf8();
         HttpClient::instance()->request(
             QStringLiteral("POST"), url, headers, formBody,
-            [this](const HttpClient::Reply &r) {
+            [this, token](const HttpClient::Reply &r) {
                 if (m_qrMode != QLatin1String("qishui") || !m_polling) return;
+                if (token != m_qsToken) return;   // 旧码的迟到应答，丢弃
                 if (m_qsBase.isEmpty()) {
-                    // 官方 passport 链路：扫码确认后 sessionid 走 Set-Cookie，这里统一收口
+                    // 官方 passport 链路：确认后 sessionid 可能在 Set-Cookie，也可能在
+                    // data.auth.sessionid，统一交给 parseQishuiPoll 收口
                     QMap<QString, QString> cookies = m_qsCookies;
                     for (const QString &c : r.setCookies) {
                         const QString kv = c.section(QLatin1Char(';'), 0, 0).trimmed();
@@ -2749,12 +2799,9 @@ void AuthManager::pollQishuiQr()
                         cookies.insert(kv.left(eq).trimmed().toLower(), kv.mid(eq + 1).trimmed());
                     }
                     m_qsCookies = cookies;
-                    const QString session = cookies.value(QStringLiteral("sessionid"));
-                    const QString st = Json::firstString(
-                                          Json::rootOf(r.json).toObject(),
-                                          {QStringLiteral("status"), QStringLiteral("state"),
-                                           QStringLiteral("msg"), QStringLiteral("message")}).toLower();
-                    handleQishuiPollReply(r, session, st);
+                    const QishuiPoll poll = parseQishuiPoll(r, cookies);
+                    handleQishuiPollReply(r, poll.sessionId, poll.status,
+                                          poll.errorCode, poll.description);
                     return;
                 }
                 const QJsonObject body{{QStringLiteral("token"), m_qsToken}};
@@ -2780,7 +2827,11 @@ void AuthManager::pollQishuiQr()
                         const QString st = Json::firstString(data, {
                             QStringLiteral("status"), QStringLiteral("state"),
                             QStringLiteral("msg"), QStringLiteral("message")}).toLower();
-                        handleQishuiPollReply(r, session, st);
+                        const QString desc = Json::firstString(data, {
+                            QStringLiteral("description"), QStringLiteral("message")});
+                        const int code =
+                            data.value(QStringLiteral("error_code")).toInt();
+                        handleQishuiPollReply(r, session, st, code, desc);
                     });
                 return;
             });
@@ -2791,8 +2842,9 @@ void AuthManager::pollQishuiQr()
     headers.insert(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
     HttpClient::instance()->request(
         QStringLiteral("POST"), QUrl(m_qsBase + QStringLiteral("/auth/qrcode/status")), headers,
-        QJsonDocument(body).toJson(QJsonDocument::Compact), [this](const HttpClient::Reply &r) {
+        QJsonDocument(body).toJson(QJsonDocument::Compact), [this, token](const HttpClient::Reply &r) {
             if (m_qrMode != QLatin1String("qishui") || !m_polling) return;
+            if (token != m_qsToken) return;   // 旧码的迟到应答，丢弃
             if (!r.ok) {
                 // 单次网络抖动不该终止会话，继续下一轮
                 m_qrStatus = QStringLiteral("轮询失败，正在重试：") + shortNetworkError(r.error);
@@ -2809,6 +2861,9 @@ void AuthManager::pollQishuiQr()
             const QString st = Json::firstString(data, {
                 QStringLiteral("status"), QStringLiteral("state"),
                 QStringLiteral("msg"), QStringLiteral("message")}).toLower();
+            const QString desc = Json::firstString(data, {
+                QStringLiteral("description"), QStringLiteral("message")});
+            const int code = data.value(QStringLiteral("error_code")).toInt();
 
             if (!session.isEmpty()) {
                 m_poll.stop();
@@ -2818,21 +2873,13 @@ void AuthManager::pollQishuiQr()
                 finishQishuiLogin(session);
                 return;
             }
-            if (st.contains(QLatin1String("expire")) || st.contains(QStringLiteral("过期"))
-                || st.contains(QLatin1String("invalid"))) {
-                m_poll.stop();
-                m_polling = false;
-                m_qrImagePath.clear();
-                m_qrStatus = QStringLiteral("二维码已过期，请重新获取");
-                emit qrChanged();
-                return;
-            }
-            handleQishuiPollReply(r, session, st);
+            handleQishuiPollReply(r, session, st, code, desc);
         });
-    }
+}
 
 void AuthManager::handleQishuiPollReply(const HttpClient::Reply &r, const QString &sessionId,
-                                       const QString &st)
+                                       const QString &st, int errorCode,
+                                       const QString &description)
 {
     if (m_qrMode != QLatin1String("qishui") || !m_polling) return;
     if (!r.ok) {
@@ -2841,6 +2888,10 @@ void AuthManager::handleQishuiPollReply(const HttpClient::Reply &r, const QStrin
         emit qrChanged();
         return;
     }
+    // 释放版也要留下可诊断的一行：扫码到底走到哪个状态、有没有限流、有没有拿到 sessionid
+    qWarning("[qishui] status=%s error_code=%d session=%d desc=%s",
+             qUtf8Printable(st), errorCode, sessionId.isEmpty() ? 0 : 1,
+             qUtf8Printable(description));
     if (!sessionId.isEmpty()) {
         m_poll.stop();
         m_polling = false;
@@ -2849,7 +2900,25 @@ void AuthManager::handleQishuiPollReply(const HttpClient::Reply &r, const QStrin
         finishQishuiLogin(sessionId);
         return;
     }
-    if (st.contains(QLatin1String("expire")) || st.contains(QStringLiteral("过期"))
+    // error_code=7「访问太频繁」：服务端限的是请求频次，不是二维码状态。实测每 2 秒
+    // 轮询十几次就会触发，之后二维码再被确认也读不到结果（手机显示成功、客户端不动）。
+    // 这里既不判过期、也不继续按原节奏打，退避后重试。
+    if (errorCode == 7) {
+        m_poll.setInterval(15000);
+        m_qrStatus = QStringLiteral("服务器限流，正在放慢重试（二维码仍然有效）");
+        emit qrChanged();
+        return;
+    }
+    if (m_poll.interval() != kQishuiPollMs) m_poll.setInterval(kQishuiPollMs);
+    if (errorCode != 0) {
+        m_qrStatus = description.isEmpty()
+            ? QStringLiteral("登录服务暂时不可用，正在重试")
+            : QStringLiteral("登录服务返回：") + description;
+        emit qrChanged();
+        return;
+    }
+    if (st == QLatin1String("3") || st == QLatin1String("4") || st == QLatin1String("5")
+        || st.contains(QLatin1String("expire")) || st.contains(QStringLiteral("过期"))
         || st.contains(QLatin1String("timeout")) || st.contains(QLatin1String("invalid"))
         || st.contains(QLatin1String("cancel"))) {
         m_poll.stop();
@@ -2859,9 +2928,12 @@ void AuthManager::handleQishuiPollReply(const HttpClient::Reply &r, const QStrin
         emit qrChanged();
         return;
     }
-    if (st.contains(QLatin1String("scanned")) || st.contains(QLatin1String("confirm"))
+    if (st == QLatin1String("scanned") || st == QLatin1String("1")
         || st.contains(QStringLiteral("已扫"))) {
         m_qrStatus = QStringLiteral("已扫码，请在手机上确认登录");
+    } else if (st == QLatin1String("2") || st.contains(QLatin1String("confirm"))) {
+        // 已确认但还没拿到登录态（setcookie 偶尔晚一步），保持轮询继续取
+        m_qrStatus = QStringLiteral("已确认，正在同步登录态…");
     } else {
         m_qrStatus = QStringLiteral("等待扫码");
     }

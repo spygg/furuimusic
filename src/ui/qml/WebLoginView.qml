@@ -38,6 +38,12 @@ Item {
     // 的补偿；Windows/桌面端 WebView2 本身就是桌面渲染，无需处理。
     readonly property bool isAndroid: Qt.platform.os === "android"
 
+    // 桌面 UA 豁免：抖音（汽水）是移动优先站点，移动 UA 下返回的就是适配竖屏宽度
+    // 的登录页，强上桌面 UA 反而得到 980 宽的两栏桌面布局——被左右裁掉（实测）。
+    // 需要「桌面 UA + 裁剪放大」补偿的是 QQ/酷我/酷狗这类移动 UA 下回「下载 APP」
+    // 首页的站点。列表之外的维持原行为。
+    readonly property bool wantsDesktopUa: root.isAndroid && root.sourceId !== "qishui"
+
     // 裁剪样式按 URL 只注入一次（单页应用的 URL 会一路变，重复注入没必要）
     property string trimmedFor: ""
     // captured：已经从 CookieManager 抓到登录态并交给 AuthManager，轮询暂停等结果；
@@ -77,6 +83,32 @@ Item {
         Qt.callLater(function () { root.focusLogin() })
     }
 
+    // Android 竖屏首次加载：桌面 UA 页面在 wide viewport（980 布局视口）下按
+    // 100% 缩放渲染，可视区只有 336 宽——左右被遮盖，用户转一次屏（原生
+    // onSizeChanged 重算 overview 缩放）才会缩小适配。这里在加载完成后轻推
+    // 一次 WebView 宽度（±2px 再归零），模拟一次尺寸变化让系统 WebView
+    // 提前重算缩放，不用等用户手动转屏。只动 QML 布局，不碰 runJavaScript，
+    // 避开加载回调里重入 WebView 的老坑。
+    function nudgeRefit() {
+        if (!root.isAndroid || !webLoader.item) return
+        nudgeStep = 0
+        nudgeTimer.restart()
+    }
+    property int nudgeStep: 0
+    Timer {
+        id: nudgeTimer
+        interval: 120
+        repeat: true
+        running: false
+        onTriggered: {
+            root.nudgeStep++
+            // 1 -> -2 -> 0：两次宽度变化确保 onSizeChanged 至少触发一轮
+            webLoader.anchors.rightMargin
+                    = root.nudgeStep === 1 ? 2 : (root.nudgeStep === 2 ? -2 : 0)
+            if (root.nudgeStep >= 3) nudgeTimer.stop()
+        }
+    }
+
     // 找到登录区所在的容器，沿祖先链逐层隐藏兄弟节点，只留登录区这一支。
     // 识别顺序：① class/id 里带 login 且足够大的可见容器（取面积最小的那个，最具体）；
     // ② 密码框 / 手机号框 / 二维码图。检测不到就返回原因、完全不改动页面。
@@ -95,9 +127,12 @@ Item {
         // 真正看得见的只有 visualViewport 那块（竖屏实测 336x584）。登录区必须
         // 按这块居中，否则会整体偏右/被裁掉（网易云竖屏二维码整块在屏幕外）。
         // 返回 [宽, 高, 左偏移, 上偏移]，旋转/软键盘/缩放变了都要重算。
-        + "function port(doc){var w=doc.defaultView,vv=w.visualViewport;"
-        + "return [vv?vv.width:w.innerWidth,vv?vv.height:w.innerHeight,"
-        + "vv?vv.offsetLeft:0,vv?vv.offsetTop:0];}"
+        + "function port(doc){var w=doc.defaultView,vv=w.visualViewport,"
+        // 整页 CSS zoom（汽水）生效后 vv 的 CSS 尺寸已是缩放后的值，换算回
+        // 缩放前坐标系，present()/居中计算才不会错位。
+        + "z=w.__furuiZoom||1;"
+        + "return [(vv?vv.width:w.innerWidth)/z,(vv?vv.height:w.innerHeight)/z,"
+        + "(vv?vv.offsetLeft:0)/z,(vv?vv.offsetTop:0)/z];}"
         // 把登录区摆到可视区正中并等比缩放。可重复调用：先撤掉上一次 transform
         // 量自然尺寸，再重新算，所以横竖屏切换时每轮重跑就能自适应。
         // translate 在 scale 左侧 => p'=s*p+t，t 直接就是最终屏幕偏移。
@@ -505,9 +540,12 @@ Item {
         + "if(vs.textContent.indexOf('furui-veil-card')<0)"
         + "vs.textContent=" + JSON.stringify(root.veilCss) + ";"
         + "if(!document.body)return 'no-body';"
-        + "var vv=window.visualViewport;"
-        + "var vw=vv?vv.width:window.innerWidth,vh=vv?vv.height:window.innerHeight;"
-        + "var vl=vv?vv.offsetLeft:0,vt=vv?vv.offsetTop:0;"
+        + "var vv=window.visualViewport,"
+        // CSS zoom（汽水）生效后 vv 尺寸是缩放后的 CSS 像素，卡片要铺满设备
+        // 可视区必须换算回缩放前坐标系。
+        + "z=window.__furuiZoom||1;"
+        + "var vw=(vv?vv.width:window.innerWidth)/z,vh=(vv?vv.height:window.innerHeight)/z;"
+        + "var vl=(vv?vv.offsetLeft:0)/z,vt=(vv?vv.offsetTop:0)/z;"
         + "var o=document.getElementById('furui-veil-card');"
         + "if(o){o.style.left=vl+'px';o.style.top=vt+'px';"
         + "o.style.width=vw+'px';o.style.height=vh+'px';return 'ok';}"
@@ -555,6 +593,33 @@ Item {
         + "setTimeout(function(){if(o.parentNode)o.parentNode.removeChild(o);},480);}"
         + "return 'ok';})()"
 
+    // viewport meta 强制注入（width=980）：让桌面布局在移动 UA 宽视口下成立。
+    // 抖音（汽水）豁免——动态改 viewport meta Chromium 只在页面加载时才生效，
+    // 加载后注入不生效（实测），所以汽水改走 zoomJs 的 CSS zoom 方案。
+    readonly property string viewportFixJs: root.sourceId === "qishui" ? "" :
+        "var mvs=document.querySelectorAll('meta[name=\"viewport\"]');"
+        + "if(!mvs.length&&document.head){var m2=document.createElement('meta');"
+        + "m2.name='viewport';m2.content='width=980,initial-scale=1.0';"
+        + "document.head.appendChild(m2);}"
+        + "else{for(var mi=0;mi<mvs.length;mi++){"
+        + "if((mvs[mi].getAttribute('content')||'').indexOf('width=980')<0)"
+        + "mvs[mi].setAttribute('content','width=980,initial-scale=1.0');}}"
+
+    // 汽水（抖音）专用：整页 CSS zoom。它无论 UA 都返回无 viewport meta 的桌面
+    // 宽布局，WebView 按 980 回退，可视区只有 336——左右被裁（用户实测旋转一次
+    // 屏幕触发重算才缩小）。zoom = 可视宽/980 一次性设到 <html> 上，整页等比
+    // 缩小、全部可见可点。缩放比只在首轮（页面 scale 还是 1）时用 visualViewport
+    // 宽度算一次并缓存：zoom 生效后 vv.width 会变成 980/z，每轮重算会死循环。
+    // port()/veilInjectJs 按 __furuiZoom 把 CSS 尺寸换算回缩放前坐标系。
+    readonly property string zoomJs: root.sourceId === "qishui" ?
+        "if(!window.__furuiZoom){"
+        + "var vv0=window.visualViewport;"
+        + "var visW=vv0?vv0.width:(window.innerWidth||360);"
+        + "var z=visW>0?visW/980:0.35;z=Math.min(Math.max(z,0.2),1);"
+        + "window.__furuiZoom=z;"
+        + "try{document.documentElement.style.setProperty('zoom',z,'important');}catch(ez){}}"
+        : ""
+
     // Android 自治版执行尾：全程配合 fire-and-forget 的 runJavaScript（无回调）。
     // 背景：QtWebView 的 QML runJavaScript 把回调闭包存进 C++ 全局 QHash
     //（qquickwebview.cpp CallbackStorage），迟到投递时 callback.call() 不校验
@@ -569,13 +634,9 @@ Item {
         // 站点 SPA 会把自己动态改回 width=device-width，甚至再插入第二个
         // viewport meta（酷狗实测 innerWidth 1344→336）：只改第一个会被后来者
         // 盖掉。这里遍历所有 meta 统一校正，每轮一次。
-        + "var mvs=document.querySelectorAll('meta[name=\"viewport\"]');"
-        + "if(!mvs.length&&document.head){var m2=document.createElement('meta');"
-        + "m2.name='viewport';m2.content='width=980,initial-scale=1.0';"
-        + "document.head.appendChild(m2);}"
-        + "else{for(var mi=0;mi<mvs.length;mi++){"
-        + "if((mvs[mi].getAttribute('content')||'').indexOf('width=980')<0)"
-        + "mvs[mi].setAttribute('content','width=980,initial-scale=1.0');}}"
+        + root.viewportFixJs
+        // 汽水整页缩放（zoomJs 必须先于 veilInjectJs：卡片尺寸按 __furuiZoom 换算）
+        + root.zoomJs + ";"
         // 登录选项过渡层：裁剪完成前一直盖着（注入幂等，每轮都会校正
         // 站点 SPA 动态改回来的 viewport meta）。
         + root.veilInjectJs + ";"
@@ -584,6 +645,15 @@ Item {
         + "var ts=document.createElement('style');ts.id='furui-login-trim';"
         + "ts.textContent=" + JSON.stringify(browser.loginCss(root.sourceId)) + ";"
         + "document.head.appendChild(ts);}"
+        // 汽水：整页已按可视宽度缩小、完整可见，不需要裁剪/呈现管线
+        //（present 在 zoom 后的坐标系里算不准），点一次登录入口后掀纱返回。
+        + (root.sourceId === "qishui"
+           ? "if(!window.__furuiQsClicked&&window.__furuiZoom){"
+             + "window.__furuiQsClicked=1;"
+             + browser.loginJs(root.sourceId) + ";}"
+           : "")
+           + root.veilLiftJs + ";"
+           + "document.title='[furui]ok:top';return 'ok:top';"
         + "var ifs=document.querySelectorAll('iframe');"
         + "var fp=port(document);"
         + "var frameCss=" + JSON.stringify(browser.loginCss(root.sourceId)) + ";"
@@ -932,6 +1002,10 @@ Item {
                 anchors.fill: parent
                 color: "#FFFFFF"
                 radius: 10
+                // 浅色主题下页面背景（theme.bg）也是纯白，卡片边界完全看不出来：
+                // 补一圈 1px 描边把网页区框出来（深色主题下 theme.line 同样成立）。
+                border.width: 1
+                border.color: theme.line
             }
             Loader {
                 id: webLoader
@@ -942,8 +1016,9 @@ Item {
                     url: root.startUrl
                     Component.onCompleted: {
                         // 仅 Android：把移动 UA 换成桌面 UA，否则官网登录页会退回
-                        // 「下载 APP」版首页，拿不到桌面登录入口。
-                        if (Qt.platform.os === "android")
+                        // 「下载 APP」版首页，拿不到桌面登录入口。抖音（汽水）例外：
+                        // 移动 UA 才能得到适配竖屏的登录页（见 wantsDesktopUa 注释）。
+                        if (root.wantsDesktopUa)
                             wv.httpUserAgent = root.desktopUa
                     }
                     onLoadingChanged: function (request) {
@@ -968,6 +1043,9 @@ Item {
                             // focusLogin 的 Timer 每轮兜底（其首行即调 injectOnce），
                             // 完全等价且不在重入上下文里。
                             root.status = "正在整理登录页…"
+                            // Android 竖屏首载左右溢出的缩放适配（见 nudgeRefit 注释），
+                            // callLater 排到事件循环，不在加载回调上下文里动布局。
+                            Qt.callLater(root.nudgeRefit)
                         } else if (request.status === WebView.LoadFailedStatus) {
                             // 打开失败页面是空的，先掀纱露出错误信息。同样延迟到
                             // 下一轮事件循环再掀，避免同步重入 WebView 回调。

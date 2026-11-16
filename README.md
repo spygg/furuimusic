@@ -241,7 +241,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
     - 三条接口都要求 **JSON 请求体**（form 提交直接 415）；`www.kuwo.cn/api/www` 那条老路对
       非浏览器指纹一律回 `The request is illegal!`，不要再走
     - QQ / 微博登录的回调是 HTML 弹窗，需要浏览器环境；现在可在「设置 → 内置浏览器」里走网页登录
-  - 汽水音乐：登录现已内置官方 `passport/web` 出码链路（`GET /passport/web/get_qrcode → POST /passport/web/check_qrconnect → GET /luna/pc/me?aid=386088`，浏览器常规头直连即可，服务端完成 secsdk 设备签名）；二维码出码后需用抖音 App 扫一扫确认，扫描后自动登录。未配置自建账号 API 服务即可「直接扫码」；自建账号 API 服务 /auth 契约仍作为可选部署链路（主要用于歌单同步）。
+  - 汽水音乐：登录现已内置官方 `passport/web` 出码链路（`GET /passport/web/get_qrcode → POST /passport/web/check_qrconnect → GET /luna/pc/me?aid=386088`，浏览器常规头直连即可，服务端完成 secsdk 设备签名）；二维码出码后需用**汽水音乐 App** 扫一扫确认（抖音 App 不识别汽水域名的扫码链接，会直接提示失败），扫描后自动登录。轮询固定 5 秒一次；服务端按请求频次限流（`error_code=7 访问太频繁`），触发后自动退避到 15 秒再试，二维码不会因此判过期。未配置自建账号 API 服务即可「直接扫码」；自建账号 API 服务 /auth 契约仍作为可选部署链路（主要用于歌单同步）。
   - 登录页版式参考 [AlgerMusicPlayer](https://github.com/algerkong/AlgerMusicPlayer)：平台先选、方式用分段 Tab、
     二维码带「生成中 / 已扫码 / 已过期」三态遮罩，出错时原因常驻卡片底部
 
@@ -249,7 +249,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 
 - **内置平台接口是示例模板**：`src/config/sources.json` 里的搜索/取链端点可按需替换；部分平台的取链依赖登录态或已失效，失败时界面会给出如实原因，而不是静默跳过。
 - **在线音源现状**：详见下节「在线音源实测（2026-11-09）」；本次 5 个公开源都只声明 `musicUrl`、没有 `search`，所以不会贡献搜索结果。
-- **扫码登录**：网易云默认走密码，扫码若被账号级风控（8821）拒绝会自动切到密码页；若密码也遇到 8821，请走该页的「应用内登录」（内置浏览器过滑块后自动导入登录态，见上节）；QQ / 酷狗 / 咪咕 / 酷我（微信）扫码为内置原生链路；汽水扫码为内置官方 passport 直连链路（出码后用抖音 App 扫一扫）。
+- **扫码登录**：网易云默认走密码，扫码若被账号级风控（8821）拒绝会自动切到密码页；若密码也遇到 8821，请走该页的「应用内登录」（内置浏览器过滑块后自动导入登录态，见上节）；QQ / 酷狗 / 咪咕 / 酷我（微信）扫码为内置原生链路；汽水扫码为内置官方 passport 直连链路（出码后用汽水音乐 App 扫一扫）。
 - **宿主能力边界**：在线脚本运行时的 `crypto.aesEncrypt`、`crypto.rsaEncrypt`、`utils.zlib` 为显式桩（本次 5 个公开源未使用），用到时会明确报“宿主未实现该能力”。
 - **未实机验证**：Linux、macOS 仅有构建配置/脚本；Android 已完成 Qt 6 编译、签名与界面真机运行，图标/二维码修复待用户复测；Windows 为唯一完整实机验证的桌面平台。
 - **旧 Widgets 前端**：`src/legacy/widgets/` 为迁移期保留，默认不编译、不再新增功能。
