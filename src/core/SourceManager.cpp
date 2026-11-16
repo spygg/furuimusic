@@ -407,12 +407,12 @@ void SourceManager::resolveAlternate(const Song &song, const QStringList &exclud
     (*attempt)(0);
 }
 
-void SourceManager::lyric(const Song &song, StringCallback cb)
+void SourceManager::lyric(const Song &song, LyricCallback cb)
 {
     MusicSource *s = source(song.source);
     if (!s) { CustomSourceManager::instance()->lyric(song, cb); return; }
-    s->lyric(song, [song, cb](const QString &text) {
-        if (!text.trimmed().isEmpty()) { if (cb) cb(text); return; }
+    s->lyric(song, [song, cb](const QString &text, const QString &trans) {
+        if (!text.trimmed().isEmpty()) { if (cb) cb(text, trans); return; }
         CustomSourceManager::instance()->lyric(song, cb);
     });
 }

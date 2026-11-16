@@ -27,6 +27,7 @@ public:
     using SongsCallback = std::function<void(const QVector<Song> &)>;
     using PlayableCallback = std::function<void(const Playable &)>;
     using StringCallback = std::function<void(const QString &)>;
+    using LyricCallback = Furui::LyricCallback;   // (lrc, 翻译轨)
 
     static ScriptSourceManager *instance();
 
@@ -54,7 +55,7 @@ public:
     // 聚合入口
     void search(const QString &keyword, int limit, SongsCallback cb);
     void resolve(const Song &song, const QString &quality, PlayableCallback cb);
-    void lyric(const Song &song, StringCallback cb);
+    void lyric(const Song &song, LyricCallback cb);
 
     static QString platformToLx(const QString &platform);
     static QString qualityToLx(const QString &quality);
@@ -93,8 +94,9 @@ private:
         QString key;     // 仓库目录名，健康状态用它标记
         QString name;    // README 小节名
         QString url;     // raw 脚本地址
+        QStringList mirrors;  // 小节里给出的全部地址（原始 + 加速，按页面顺序）
     };
-    // 解析仓库页面（README 原文）：按「### 名称」小节取第一条 latest.js 地址
+    // 解析仓库页面（README 原文）：按「### 名称」小节收集该节的全部 latest.js 地址
     static QVector<DiscoveredSource> parseRepoPage(const QString &text);
     // 原始 raw 地址 -> 多条加速镜像（含原始地址本身）
     static QStringList mirrorUrlsFor(const QString &rawUrl);

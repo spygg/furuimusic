@@ -293,7 +293,7 @@ void CustomSourceManager::search(const QString &keyword, int limit, SongsCallbac
     }
 }
 
-void CustomSourceManager::lyric(const Song &song, StringCallback cb)
+void CustomSourceManager::lyric(const Song &song, LyricCallback cb)
 {
     // 来自在线脚本的歌曲：直接交给脚本的 lyric 能力
     if (song.extra.contains(QStringLiteral("scriptId"))) {
@@ -303,7 +303,7 @@ void CustomSourceManager::lyric(const Song &song, StringCallback cb)
     lyricAt(0, song, cb);
 }
 
-void CustomSourceManager::lyricAt(int index, const Song &song, StringCallback cb)
+void CustomSourceManager::lyricAt(int index, const Song &song, LyricCallback cb)
 {
     // 逐个尝试 HTTP 自定义源；某个源返回空歌词时不能就此收工，
     // 后面还有其它 HTTP 源与所有声明了 lyric 能力的在线脚本。
@@ -319,9 +319,16 @@ void CustomSourceManager::lyricAt(int index, const Song &song, StringCallback cb
         HttpClient::instance()->request(QStringLiteral("GET"), url, QVariantMap(), QByteArray(),
             [this, index, song, cb](const HttpClient::Reply &r) {
                 QString text;
-                if (r.ok) text = Json::firstString(Json::rootOf(r.json),
-                    {QStringLiteral("lyric"), QStringLiteral("data.lyric"), QStringLiteral("lrc")});
-                if (!text.trimmed().isEmpty()) { if (cb) cb(text); return; }
+                QString trans;
+                if (r.ok) {
+                    const QJsonValue root = Json::rootOf(r.json);
+                    text = Json::firstString(root,
+                        {QStringLiteral("lyric"), QStringLiteral("data.lyric"), QStringLiteral("lrc")});
+                    // 自定义源可选返回翻译（translation / trans / tlrc 任一键）
+                    trans = Json::firstString(root,
+                        {QStringLiteral("translation"), QStringLiteral("trans"), QStringLiteral("tlrc")});
+                }
+                if (!text.trimmed().isEmpty()) { if (cb) cb(text, trans.trimmed()); return; }
                 lyricAt(index, song, cb);
             });
         return;

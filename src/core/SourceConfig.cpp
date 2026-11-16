@@ -39,6 +39,7 @@ Endpoint Endpoint::fromVariant(const QVariant &v)
     e.root        = m.value(QStringLiteral("root")).toString();
     e.fields      = m.value(QStringLiteral("fields")).toMap();
     e.resultPaths = toStringList(m.value(QStringLiteral("resultPaths")));
+    e.transPaths  = toStringList(m.value(QStringLiteral("transPaths")));
     const QString single = m.value(QStringLiteral("resultPath")).toString();
     if (!single.isEmpty() && !e.resultPaths.contains(single)) e.resultPaths.prepend(single);
     e.vipRule     = m.value(QStringLiteral("vipRule")).toMap();

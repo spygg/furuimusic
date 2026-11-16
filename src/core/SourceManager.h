@@ -17,6 +17,7 @@ public:
     using PlaylistsCallback = std::function<void(const QVector<Playlist> &)>;
     using PlayableCallback = std::function<void(const Playable &)>;
     using StringCallback = std::function<void(const QString &)>;
+    using LyricCallback = Furui::LyricCallback;   // (lrc, 翻译轨)
     using MvCallback = std::function<void(bool ok, const QUrl &url, const QString &error)>;
     using MvListCallback = std::function<void(const QVector<QVariantMap> &items, bool hasMore)>;
 
@@ -39,7 +40,7 @@ public:
     void promoteSource(const QString &id);
     // 取链/播放失败：后移一位，降低后续优先度（顺序持久化，跨重启保持）。
     void demoteSource(const QString &id);
-    void lyric(const Song &song, StringCallback cb);
+    void lyric(const Song &song, LyricCallback cb);
     void cover(const Song &song, StringCallback cb);
     void mv(const Song &song, MvCallback cb);
     void mvList(const QString &sourceId, const QString &area, int limit, int offset,

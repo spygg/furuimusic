@@ -21,6 +21,7 @@ struct Endpoint {
     QString root;                 // 结果数组路径
     QVariantMap fields;           // 字段映射
     QStringList resultPaths;      // 单值结果候选路径
+    QStringList transPaths;       // 歌词翻译候选路径（仅 lyric 端点使用；空 = 平台无翻译轨）
     QVariantMap vipRule;          // VIP / 不可播放判定
     QVariantMap extra;
 

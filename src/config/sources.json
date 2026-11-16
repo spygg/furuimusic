@@ -162,6 +162,10 @@
           "resultPaths": [
             "lrc.lyric",
             "lyric"
+          ],
+          "transPaths": [
+            "tlyric.lyric",
+            "translate.lyric"
           ]
         },
         "cover": {
@@ -532,6 +536,10 @@
           "resultPaths": [
             "lyric",
             "data.lyric"
+          ],
+          "transPaths": [
+            "trans",
+            "data.trans"
           ]
         }
       },
@@ -1363,6 +1371,10 @@
           "resultPaths": [
             "data.lyric",
             "lyric"
+          ],
+          "transPaths": [
+            "data.translateLyric",
+            "translateLyric"
           ]
         },
         "rankDetail": {
@@ -1590,9 +1602,9 @@
       },
       "login": {
         "methods": [
-          "qrcode"
+          "password"
         ],
-        "_note": "汽水现已内置扫码登录：客户端直连官方 passport 端点（GET /passport/web/get_qrcode -> POST /passport/web/check_qrconnect -> GET /luna/pc/me?aid=386088），无需账号 API 服务即可「直接扫码」（出码后用抖音 App 扫一扫确认）。用户在「设置 → 网络 → 账号 API 服务」填了自建服务时，则走其 GET /auth/* -> POST /auth/me 契约。"
+        "_note": "汽水登录走官网登录页（内嵌浏览器打开 music.douyin.com 的抖音授权登录，登录态由原生 CookieManager 读回自动导入 sessionid 并同步歌单）。曾内置官方 passport 扫码（GET /passport/web/get_qrcode -> POST /passport/web/check_qrconnect）：出码与轮询协议均可用（new/expired 状态正常），但实测三轮（真机 + Python 探针双协议 + version_code/LunaPC UA 变体）手机 App 确认登录后轮询状态始终停在 new、sessionid 不下发——该二维码实为「抖音 APP 身份验证」用途（响应 copywriting 自述），与汽水 App 的扫码登录不是同一体系，故下线 App 内扫码出码，避免用户白等 4 分钟。userApi extraMethods 保留 qrcode 供自建账号 API 服务（/auth 契约）使用。"
       },
       "userApi": {
         "driver": "direct",

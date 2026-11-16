@@ -439,7 +439,9 @@ QString AppController::loginAppName(const QString &id) const
     // 酷我的内置扫码是「微信扫码」（走开放平台 snsapi_login + i.kuwo.cn 回调），
     // 提示文案必须说微信，不能写酷我 App —— 拿酷我 App 扫这张码是扫不动的
     if (id == QLatin1String("kuwo"))    return QStringLiteral("微信");
-    if (id == QLatin1String("qishui"))  return QStringLiteral("抖音"); // 汽水二维码的扫码目标是抖音 App（同账号体系）
+    // 汽水出的是汽水域名的扫码 SDK 链接（bff-pc.qishui.com/...uc_sdk=scan-auth），
+    // 抖音 App 不认这个域名会直接提示失败，必须用汽水音乐 App 扫
+    if (id == QLatin1String("qishui"))  return QStringLiteral("汽水音乐");
     const QString n = SourceConfig::instance()->nameOf(id);
     return n.isEmpty() ? QStringLiteral("官方 App") : n;
 }
@@ -474,6 +476,7 @@ int AppController::playMode() const { return PlayerController::instance()->mode(
 QString AppController::playModeName() const { return PlayerController::instance()->modeName(); }
 QString AppController::lyricsText() const { return PlayerController::instance()->lyricsText(); }
 QStringList AppController::lyricLines() const { return PlayerController::instance()->lyricLines(); }
+QStringList AppController::lyricTransLines() const { return PlayerController::instance()->lyricTransLines(); }
 QVariantList AppController::lyricTimes() const { return PlayerController::instance()->lyricTimes(); }
 bool AppController::lyricsTimed() const { return PlayerController::instance()->lyricsTimed(); }
 QString AppController::currentLyricLine() const { return PlayerController::instance()->currentLyricLine(); }
@@ -816,9 +819,10 @@ void AppController::resolveAndPlay(const Song &song)
     // 原来这段写在 p.ok 分支里：VIP 歌曲取链失败直接 return，歌词请求根本
     // 没发出，界面就一直停在「暂无歌词」，封面也只剩占位图。
     const quint64 lyricGeneration = ++d->lyricGen;
-    SourceManager::instance()->lyric(song, [this, lyricGeneration](const QString &lrc) {
+    SourceManager::instance()->lyric(song, [this, lyricGeneration](const QString &lrc,
+                                                                  const QString &trans) {
         if (lyricGeneration != d->lyricGen) return;   // 已切歌，迟到结果丢弃
-        PlayerController::instance()->setLyrics(lrc);
+        PlayerController::instance()->setLyrics(lrc, trans);
     });
 
     const quint64 coverGeneration = ++d->coverGen;

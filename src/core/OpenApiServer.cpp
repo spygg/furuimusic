@@ -449,6 +449,7 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
         // 带时间轴的歌词给网页播放页做逐行高亮；没有时间轴时前端只显示静态文本
         QJsonObject o;
         const QStringList texts = app->lyricLines();
+        const QStringList trans = app->lyricTransLines();
         const QVariantList times = app->lyricTimes();
         o.insert(QStringLiteral("timed"), app->lyricsTimed());
         o.insert(QStringLiteral("index"), app->currentLyricIndex());
@@ -458,6 +459,8 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
             QJsonObject l;
             l.insert(QStringLiteral("t"), i < times.size() ? double(times.at(i).toLongLong()) : 0.0);
             l.insert(QStringLiteral("text"), texts.at(i));
+            if (i < trans.size() && !trans.at(i).isEmpty())
+                l.insert(QStringLiteral("trans"), trans.at(i));
             lines.append(l);
         }
         o.insert(QStringLiteral("lines"), lines);

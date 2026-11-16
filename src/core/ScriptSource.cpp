@@ -28,18 +28,36 @@ namespace {
 // 同一脚本给多条镜像（加速站可达性随时变化，依次回退，成功即用）。
 // 仅首次启动 / 缺源时预置下载，用户在设置页删除后不再补回（记入 builtinScriptRemoved）。
 // 页面里解析到的音源全部导入，健康状态只用于排序，不再作为筛选条件。
-const char *kReadmeUrls[] = {
-    "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/main/README.md",
-    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/main/README.md",
-    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/README.md",
-    "https://raw.githubusercontent.com/pdone/lx-music-source/main/README.md",
+// README 页尾列出的加速站（访问 GitHub 受限时轮换使用）。可达性随时变化，
+// 所以不挑「唯一可用」的那家：按顺序逐条回退，内容校验不过就换下一条。
+// 已知 ghproxy.cn 会返回 200 + 反爬 HTML，放最后再用（内容校验会拦掉）。
+const char *kMirrorPrefixes[] = {
+    "https://gh-proxy.org/",
+    "https://ghfast.top/",
+    "https://ghproxy.net/",
+    // 下面几条在 2026-11 实测不可达或返回反爬页（内容校验会拦下），只作兜底
+    "https://gh.llkk.cc/",
+    "https://github.moeyy.xyz/",
+    "https://ghp.ci/",
+    "https://gh.api.99988866.xyz/",
+    "https://ghproxy.cc/",
+    "https://ghproxy.cn/",
 };
-const char *kHealthUrls[] = {
-    "https://ghproxy.cn/raw.githubusercontent.com/pdone/lx-music-source/health-status/health-state.json",
-    "https://gh-proxy.org/raw.githubusercontent.com/pdone/lx-music-source/health-status/health-state.json",
-    "https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/health-status/health-state.json",
-    "https://raw.githubusercontent.com/pdone/lx-music-source/health-status/health-state.json",
-};
+
+const QString kRepoRawRoot = QStringLiteral("https://raw.githubusercontent.com/");
+
+// 仓库文件的多条地址：全部加速站在前，直连原始地址兜底
+QStringList repoFileMirrors(const QString &path)
+{
+    const QString suffix =
+        QStringLiteral("raw.githubusercontent.com/pdone/lx-music-source/") + path;
+    const QString relative = QStringLiteral("pdone/lx-music-source/") + path;
+    QStringList urls;
+    for (const char *prefix : kMirrorPrefixes)
+        urls << QLatin1String(prefix) + suffix;
+    urls << kRepoRawRoot + relative;
+    return urls;
+}
 
 void fetchFirst(const QStringList &urls, int index,
                 std::function<void(bool, const QString &)> cb,
@@ -77,11 +95,11 @@ QStringList mirrorUrlsForImpl(const QString &rawUrl)
     if (at < 0) return QStringList() << rawUrl;
     // 保留 host 之后的完整路径：加速站的形态就是 <前缀>/raw.githubusercontent.com/<owner>/...
     const QString suffix = rawUrl.mid(at);
-    return QStringList()
-        << QStringLiteral("https://ghproxy.cn/") + suffix
-        << QStringLiteral("https://gh-proxy.org/") + suffix
-        << QStringLiteral("https://ghproxy.net/") + suffix
-        << QStringLiteral("https://") + suffix;
+    QStringList urls;
+    for (const char *prefix : kMirrorPrefixes)
+        urls << QLatin1String(prefix) + suffix;
+    urls << QStringLiteral("https://") + suffix;
+    return urls;
 }
 
 QJsonArray stringsToJson(const QStringList &list)
@@ -324,25 +342,56 @@ ScriptSourceManager::parseRepoPage(const QString &text)
     static const QRegularExpression link(
         QStringLiteral("https?://[^\\s`\"'<>]+/latest\\.js"));
     QString currentName;
+    QStringList sectionLinks;
+
+    // 每个小节可能给多条地址（原始 raw + 各加速站）。全部收下来当回退链，
+    // 只取第一条会在该镜像被墙/限流时整节失效。
+    auto flush = [&out, &seen, &sectionLinks, &currentName]() {
+        if (currentName.isEmpty() || sectionLinks.isEmpty()) {
+            sectionLinks.clear();
+            return;
+        }
+        const QStringList parts =
+            QUrl(sectionLinks.first()).path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        if (parts.size() >= 2) {
+            const QString key = parts.at(parts.size() - 2);
+            if (!key.isEmpty() && !seen.contains(key)) {
+                seen.insert(key);
+                DiscoveredSource d;
+                d.key = key;
+                d.name = currentName;
+                for (const QString &url : sectionLinks) {
+                    // 统一出 raw 原始地址，便于再按镜像表生成回退链
+                    const int at = url.indexOf(QStringLiteral("raw.githubusercontent.com"));
+                    const QString raw = at > 0
+                        ? QStringLiteral("https://") + url.mid(at) : url;
+                    if (d.url.isEmpty()) d.url = raw;
+                    // 页面里实际给出的地址原样保留（可能含镜像表里没有的加速站）
+                    if (!d.mirrors.contains(url)) d.mirrors << url;
+                }
+                out.append(d);
+            }
+        }
+        sectionLinks.clear();
+    };
+
     const QStringList lines = text.split(QLatin1Char('\n'));
     for (const QString &raw : lines) {
         const QString line = raw.trimmed();
         const QRegularExpressionMatch hm = heading.match(line);
         if (hm.hasMatch()) {
+            flush();
             currentName = hm.captured(1).trimmed();
             continue;
         }
         if (currentName.isEmpty()) continue;
-        const QRegularExpressionMatch lm = link.match(line);
-        if (!lm.hasMatch()) continue;
-        const QString url = lm.captured(0);
-        const QStringList parts = QUrl(url).path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
-        if (parts.size() < 2) continue;
-        const QString key = parts.at(parts.size() - 2);
-        if (key.isEmpty() || seen.contains(key)) continue;
-        seen.insert(key);
-        out.append({key, currentName, url});
+        auto it = link.globalMatch(line);
+        while (it.hasNext()) {
+            const QString url = it.next().captured(0);
+            if (!sectionLinks.contains(url)) sectionLinks << url;
+        }
     }
+    flush();
     return out;
 }
 
@@ -378,10 +427,9 @@ void ScriptSourceManager::seedBuiltinSources()
     Settings::set(QStringLiteral("builtinSeedAt"), now);
     m_seeding = true;
 
-    QStringList readmeUrls;
-    for (const char *u : kReadmeUrls) readmeUrls << QLatin1String(u);
-    QStringList healthUrls;
-    for (const char *u : kHealthUrls) healthUrls << QLatin1String(u);
+    QStringList readmeUrls = repoFileMirrors(QStringLiteral("main/README.md"));
+    QStringList healthUrls =
+        repoFileMirrors(QStringLiteral("health-status/health-state.json"));
 
     QPointer<ScriptSourceManager> self(this);
     // 1) 仓库页面（README 原文）→ 解析出当前在维护的音源清单
@@ -459,7 +507,11 @@ void ScriptSourceManager::seedDiscovered(const QVector<DiscoveredSource> &list,
                                     .toStringList();
     QVector<QStringList> queue;
     for (const DiscoveredSource &d : list) {
-        const QStringList urls = mirrorUrlsFor(d.url);
+        // 先按镜像表铺一遍，再补上页面里实际给出的地址（去重、保持顺序）
+        QStringList urls = mirrorUrlsFor(d.url);
+        for (const QString &u : d.mirrors) {
+            if (!urls.contains(u)) urls << u;
+        }
         bool skip = false;
         bool exists = false;
         for (const QString &u : urls) {
@@ -507,17 +559,25 @@ void ScriptSourceManager::importWithFallback(const QStringList &urls, int index,
                                              std::function<void()> done)
 {
     if (index >= urls.size()) {
+        qWarning("音源下载：%d 条镜像全部失败", int(urls.size()));
         if (done) done();
         return;
     }
     QPointer<ScriptSourceManager> self(this);
+    const QString url = urls.at(index);
     // silent：自动预置属于后台行为，成功失败都不弹提示（失败细节留在音源列表里）
-    importUrl(urls.at(index), [self, urls, index, done](bool ok, const QString &) {
-        if (ok || !self) {
+    importUrl(url, [self, urls, index, done, url](bool ok, const QString &) {
+        ScriptSourceManager *mgr = self.data();
+        if (!mgr) return;
+        // 脚本已经落库就说明这条镜像可用：初始化失败是音源自身暂时不可用，
+        // 换镜像重下同一份脚本没有意义，只会在列表里堆出一串重复条目。
+        auto saved = mgr->m_items.constFind(scriptIdForUrl(url));
+        if (ok || (saved != mgr->m_items.constEnd() && !saved->script.isEmpty())) {
             if (done) done();
             return;
         }
-        QTimer::singleShot(0, self.data(), [self, urls, index, done] {
+        qWarning("音源下载：镜像不可用，换下一条 %s", qUtf8Printable(url));
+        QTimer::singleShot(0, mgr, [self, urls, index, done] {
             if (self) self->importWithFallback(urls, index + 1, done);
         });
     }, true);
@@ -1326,11 +1386,11 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
     (*next)();
 }
 
-void ScriptSourceManager::lyric(const Song &song, StringCallback cb)
+void ScriptSourceManager::lyric(const Song &song, LyricCallback cb)
 {
     // 内置平台歌曲的歌词接口常常返回空（VIP / 下架 / 无版权），此时也应该
     // 让所有声明了 lyric 能力的脚本依次兜底，而不是只认脚本搜索出来的歌。
-    if (!hasEnabled()) { if (cb) cb(QString()); return; }
+    if (!hasEnabled()) { if (cb) cb(QString(), QString()); return; }
 
     struct Candidate { QString engineId; QString key; };
     QVector<Candidate> candidates;
@@ -1361,10 +1421,10 @@ void ScriptSourceManager::lyric(const Song &song, StringCallback cb)
     }
     add(platformToLx(song.source));
 
-    if (candidates.isEmpty()) { if (cb) cb(QString()); return; }
+    if (candidates.isEmpty()) { if (cb) cb(QString(), QString()); return; }
 
     struct State {
-        StringCallback cb;
+        LyricCallback cb;
         Song song;
         QVector<Candidate> candidates;
         int index = 0;
@@ -1379,7 +1439,7 @@ void ScriptSourceManager::lyric(const Song &song, StringCallback cb)
         auto step = weakNext.lock();
         if (!step) return;
         if (state->index >= state->candidates.size()) {
-            if (state->cb) state->cb(QString());
+            if (state->cb) state->cb(QString(), QString());
             return;
         }
         const Candidate cand = state->candidates.at(state->index++);
@@ -1395,16 +1455,23 @@ void ScriptSourceManager::lyric(const Song &song, StringCallback cb)
             engine->callAction(cand.key, QStringLiteral("lyric"), info,
                 [state, step](const ScriptActionResult &r) {
                     QString text;
+                    QString trans;
                     if (r.ok) {
                         if (r.data.canConvert<QVariantMap>()) {
                             const QVariantMap m = r.data.toMap();
                             text = m.value(QStringLiteral("lyric")).toString();
                             if (text.isEmpty()) text = m.value(QStringLiteral("lrc")).toString();
+                            // 洛雪脚本协议：tlrc / translation 是可选的翻译轨
+                            trans = m.value(QStringLiteral("tlrc")).toString();
+                            if (trans.isEmpty()) trans = m.value(QStringLiteral("translation")).toString();
                         } else {
                             text = r.data.toString();
                         }
                     }
-                    if (!text.trimmed().isEmpty()) { if (state->cb) state->cb(text); return; }
+                    if (!text.trimmed().isEmpty()) {
+                        if (state->cb) state->cb(text, trans.trimmed());
+                        return;
+                    }
                     (*step)();
                 }, 15000);
         });

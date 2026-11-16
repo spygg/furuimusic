@@ -652,11 +652,31 @@ QString PlayerController::modeName() const
     return QStringLiteral("列表循环");
 }
 
-void PlayerController::setLyrics(const QString &lrc)
+void PlayerController::setLyrics(const QString &lrc, const QString &trans)
 {
     m_lyrics = parseLrc(lrc);
+    // 翻译轨按时间戳对齐到原文行：两边都升序，双指针就近合并（差 ≤1.2s 才认），
+    // 平台翻译轨偶尔会多/少几行（纯音乐段落），对不上的行直接丢弃。
+    if (!trans.trimmed().isEmpty() && !m_lyrics.isEmpty()) {
+        const QVector<LyricLine> tl = parseLrc(trans);
+        int j = 0;
+        int merged = 0;
+        for (int i = 0; i < m_lyrics.size() && j < tl.size(); ++i) {
+            // 丢弃远早于当前原文行的翻译行（原文开头的 Credit 行没有翻译，
+            // 不能因为「这行没对上」就消耗掉后面的翻译行，否则整体错位）。
+            while (j < tl.size() && tl.at(j).time + 1200 < m_lyrics.at(i).time) ++j;
+            if (j >= tl.size()) break;
+            const qint64 diff = qAbs(tl.at(j).time - m_lyrics.at(i).time);
+            if (diff <= 1200) { m_lyrics[i].trans = tl.at(j).text; ++merged; ++j; }
+            // diff 过大时不消耗 j：tl[j] 可能对应后面的原文行
+        }
+        qWarning().noquote() << "[lyrics] setLyrics: lrc=" << lrc.size()
+                             << "trans=" << trans.size()
+                             << "tl=" << tl.size() << "merged=" << merged;
+    }
     m_lyricsText.clear();
     m_lyricLines.clear();
+    m_lyricTransLines.clear();
     if (m_lyrics.isEmpty()) {
         // 有些音源返回的是无时间轴的纯文本歌词，parseLrc 会返回空，
         // 原来会把整段文本丢掉，界面就一直显示「暂无歌词」。
@@ -668,12 +688,14 @@ void PlayerController::setLyrics(const QString &lrc)
             line = line.trimmed();
             if (!line.isEmpty()) {
                 m_lyricLines << line;
+                m_lyricTransLines << QString();
                 m_lyricsText += line + QLatin1Char('\n');
             }
         }
     } else {
         for (const LyricLine &l : m_lyrics) {
             m_lyricLines << l.text;
+            m_lyricTransLines << l.trans;
             m_lyricsText += l.text + QLatin1Char('\n');
         }
     }

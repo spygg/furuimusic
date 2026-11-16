@@ -7,6 +7,7 @@
 #include <QVariantMap>
 #include <QVector>
 #include <QMetaType>
+#include <functional>
 
 namespace Furui {
 
@@ -77,7 +78,11 @@ struct Playable {
 struct LyricLine {
     qint64 time = 0;    // 毫秒
     QString text;
+    QString trans;      // 该行的翻译（平台歌词接口的翻译轨；空 = 无翻译）
 };
+
+// 歌词回调：lrc = 原文 LRC（可含时间轴），trans = 平台翻译轨 LRC（无翻译为空串）
+using LyricCallback = std::function<void(const QString &lrc, const QString &trans)>;
 
 // 归一化字符串：去空白/标点/大小写/常见括号后缀
 QString normalize(const QString &s);

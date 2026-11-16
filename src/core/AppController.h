@@ -107,6 +107,7 @@ class AppController : public QObject {
     Q_PROPERTY(QString playModeName READ playModeName NOTIFY settingsChanged)
     Q_PROPERTY(QString lyricsText READ lyricsText NOTIFY lyricsChanged)
     Q_PROPERTY(QStringList lyricLines READ lyricLines NOTIFY lyricsChanged)
+    Q_PROPERTY(QStringList lyricTransLines READ lyricTransLines NOTIFY lyricsChanged)
     Q_PROPERTY(QVariantList lyricTimes READ lyricTimes NOTIFY lyricsChanged)
     Q_PROPERTY(bool lyricsTimed READ lyricsTimed NOTIFY lyricsChanged)
     Q_PROPERTY(QString currentLyricLine READ currentLyricLine NOTIFY lyricsChanged)
@@ -177,6 +178,7 @@ public:
     QString playModeName() const;
     QString lyricsText() const;
     QStringList lyricLines() const;
+    QStringList lyricTransLines() const;
     QVariantList lyricTimes() const;
     bool lyricsTimed() const;
     QString currentLyricLine() const;

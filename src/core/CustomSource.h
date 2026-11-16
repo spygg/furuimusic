@@ -24,6 +24,7 @@ public:
     using PlayableCallback = std::function<void(const Playable &)>;
     using SongsCallback = std::function<void(const QVector<Song> &)>;
     using StringCallback = std::function<void(const QString &)>;
+    using LyricCallback = Furui::LyricCallback;   // (lrc, 翻译轨)
 
     static CustomSourceManager *instance();
     void refresh();
@@ -40,7 +41,7 @@ public:
     // 依次尝试所有自定义音源，返回第一个可用结果
     void resolve(const Song &song, const QString &quality, PlayableCallback cb);
     void search(const QString &keyword, int limit, SongsCallback cb);
-    void lyric(const Song &song, StringCallback cb);
+    void lyric(const Song &song, LyricCallback cb);
 
 signals:
     void changed();
@@ -48,7 +49,7 @@ signals:
 private:
     explicit CustomSourceManager(QObject *parent = nullptr);
     void resolveAt(int index, const Song &song, const QString &quality, PlayableCallback cb);
-    void lyricAt(int index, const Song &song, StringCallback cb);
+    void lyricAt(int index, const Song &song, LyricCallback cb);
     void scanLocal();
     Playable matchLocal(const Song &song) const;
     QVector<Item> m_items;

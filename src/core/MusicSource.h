@@ -22,6 +22,7 @@ public:
     using PlaylistsCallback = std::function<void(const QVector<Playlist> &)>;
     using PlayableCallback = std::function<void(const Playable &)>;
     using StringCallback = std::function<void(const QString &)>;
+    using LyricCallback = Furui::LyricCallback;   // (lrc, 翻译轨)
     using MvCallback = std::function<void(bool ok, const QUrl &url, const QString &error)>;
     // MV 榜单：扁平化的卡片数据（id/title/artist/cover/playCount/duration/source）
     using MvListCallback = std::function<void(const QVector<QVariantMap> &items, bool hasMore)>;
@@ -46,7 +47,7 @@ public:
     // 酷狗 v3/rank/song），未配置的平台回退 playlistDetail（榜单 id 兼容歌单 id）。
     void rankDetail(const QString &id, int limit, int offset, SongsCallback cb);
     void resolveUrl(const Song &song, const QString &quality, PlayableCallback cb);
-    void lyric(const Song &song, StringCallback cb);
+    void lyric(const Song &song, LyricCallback cb);
     // 搜索接口不返回封面时（网易云新版只给 album.picId），用配置里的
     // cover 端点按歌曲 id 单独补一张，避免播放页/播放栏一直是占位图。
     void cover(const Song &song, StringCallback cb);

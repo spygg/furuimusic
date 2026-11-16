@@ -1073,7 +1073,11 @@ Item {
                     delegate: Item {
                         id: lyricRow
                         width: ListView.view.width
-                        height: Math.max(34, lineText.implicitHeight + 16)
+                        // 有翻译的行在原文下方多占一小行；高度全部由内容撑出
+                        height: Math.max(34, lineBox.height + 16)
+                        readonly property string transLine:
+                            index < app.lyricTransLines.length ? app.lyricTransLines[index] : ""
+                        readonly property bool hasTrans: transLine.length > 0
                         readonly property bool active: index === app.currentLyricIndex
                         readonly property bool timed: app.currentLyricIndex >= 0
                         readonly property int dist: Math.abs(index - app.currentLyricIndex)
@@ -1111,8 +1115,10 @@ Item {
                             id: lineBox
                             anchors.left: parent.left
                             anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.top: parent.top
+                            anchors.topMargin: 8
                             height: lineText.implicitHeight
+                                    + (lyricRow.hasTrans ? transText.implicitHeight + 2 : 0)
                             // 文字实际占位的宽度。不能用 lineText.contentWidth：这一层是
                             // anchors.fill 定宽定高的 Text，contentWidth 在这种排版下量出来是 0，
                             // 扫光条于是永远 0 宽（截图上完全看不见）。
@@ -1128,7 +1134,9 @@ Item {
 
                             Text {
                                 id: lineText
-                                anchors.fill: parent
+                                anchors.top: parent.top
+                                anchors.left: parent.left
+                                anchors.right: parent.right
                                 text: modelData.length > 0 ? modelData : "♪"
                                 // 未唱到的部分留暗底，亮色交给上面的扫光层逐字露出。
                                 // 只能压暗「当前行」：这里误用全局的 timed 会把整屏几十行
@@ -1147,13 +1155,14 @@ Item {
                             // 扫光条：外层 clip 矩形只露出「已唱到的那一段」，内层文字按整行
                             // 宽度排版后整体左移，保证与底字逐像素对齐。居中排版的行必须从
                             // 文字真正的左边缘开始扫，否则每行开头几拍先扫一段空白。
+                            // 只覆盖原文高度：翻译行在下方，不参与逐字扫光。
                             Item {
                                 id: sweepZone
                                 readonly property real inset: lineText.horizontalAlignment === Text.AlignHCenter
                                     ? Math.max(0, (lineText.width - lineBox.textW) / 2) : 0
                                 x: inset
                                 y: 0
-                                height: lineBox.height
+                                height: lineText.implicitHeight
                                 // 宽度不加 Behavior：推进速度已经由上面 60ms 的墙钟插值给平了，
                                 // 再叠一层缓动只会让亮色落后于唱词。
                                 width: Math.max(0, Math.min(lineBox.textW,
@@ -1162,7 +1171,7 @@ Item {
                                 Text {
                                     x: -sweepZone.inset
                                     width: lineText.width
-                                    height: lineBox.height
+                                    height: lineText.implicitHeight
                                     text: lineText.text
                                     font.family: lineText.font.family
                                     font.pixelSize: lineText.font.pixelSize
@@ -1172,6 +1181,24 @@ Item {
                                     verticalAlignment: Text.AlignVCenter
                                     horizontalAlignment: lineText.horizontalAlignment
                                 }
+                            }
+
+                            // 翻译行：平台歌词接口带了翻译轨（网易云 tlyric / QQ trans / 咪咕
+                            // translateLyric / 脚本 tlrc）时默认显示，随本行一起淡入淡出。
+                            Text {
+                                id: transText
+                                anchors.top: lineText.bottom
+                                anchors.topMargin: 2
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                visible: lyricRow.hasTrans
+                                text: lyricRow.transLine
+                                color: lyricRow.active && lyricView.timed
+                                       ? Qt.rgba(root.ink.r, root.ink.g, root.ink.b, 0.45) : root.ink
+                                opacity: 0.78
+                                font.pixelSize: root.wide ? 14 : 12
+                                wrapMode: Text.Wrap
+                                horizontalAlignment: lineText.horizontalAlignment
                             }
                         }
                     }

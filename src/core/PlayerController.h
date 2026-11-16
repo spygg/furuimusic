@@ -61,10 +61,12 @@ public:
     void cycleMode();
     QString modeName() const;
 
-    void setLyrics(const QString &lrc);
+    void setLyrics(const QString &lrc, const QString &trans = QString());
     QString lyricsText() const { return m_lyricsText; }
     // 逐行歌词（含无时间轴的纯文本），供播放页做逐行高亮与自动滚动
     QStringList lyricLines() const { return m_lyricLines; }
+    // 与 lyricLines 同序的翻译行表：有翻译轨时该行非空，QML 把它渲染成原文下方的小字
+    QStringList lyricTransLines() const { return m_lyricTransLines; }
     // 与 lyricLines 同序的起始毫秒表：界面做逐行扫光（karaoke）时还需要下一行的
     // 起点算出本行的持续时间，所以表里存的是「本行起点」，末行由界面用歌曲长度兜底。
     QVariantList lyricTimes() const;
@@ -107,6 +109,7 @@ private:
     QVector<LyricLine> m_lyrics;
     QString m_lyricsText;
     QStringList m_lyricLines;
+    QStringList m_lyricTransLines;   // 与 m_lyricLines 同长度；无翻译行为空串
     int m_lyricIndex = -1;
     QUrl m_currentUrl;
     // 每次换歌递增：迟到的带 headers 下载结果不能盖掉新歌

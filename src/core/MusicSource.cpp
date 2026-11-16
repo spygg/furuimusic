@@ -528,16 +528,20 @@ void MusicSource::resolveUrl(const Song &song, const QString &quality, PlayableC
     });
 }
 
-void MusicSource::lyric(const Song &song, StringCallback cb)
+void MusicSource::lyric(const Song &song, LyricCallback cb)
 {
     const Endpoint ep = m_desc.endpoints.value(QStringLiteral("lyric"));
-    if (!ep.valid()) { if (cb) cb(QString()); return; }
+    if (!ep.valid()) { if (cb) cb(QString(), QString()); return; }
     call(ep, songVars(song, QStringLiteral("standard")), [ep, cb](const HttpClient::Reply &r) {
         QString out;
         if (r.ok) out = Json::firstString(Json::rootOf(r.json), ep.resultPaths);
         if (out.isEmpty() && !r.body.isEmpty() && r.json.isEmpty())
             out = QString::fromUtf8(r.body);
-        if (cb) cb(out);
+        // 翻译轨：tlyric/translateLyric/trans 等候选路径，空串表示平台没给翻译。
+        QString trans;
+        if (r.ok && !ep.transPaths.isEmpty())
+            trans = Json::firstString(Json::rootOf(r.json), ep.transPaths).trimmed();
+        if (cb) cb(out, trans);
     });
 }
 
