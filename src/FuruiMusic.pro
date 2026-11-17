@@ -169,6 +169,8 @@ CONFIG(legacy_widgets) {
         ui/qml/SongRow.qml \
         ui/qml/AlbumCard.qml \
         ui/qml/EmptyState.qml \
+        ui/qml/BrowserWindow.qml \
+        ui/qml/WebLoginView.qml \
         config/sources.json
 }
 

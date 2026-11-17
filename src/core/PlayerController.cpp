@@ -192,6 +192,11 @@ PlayerController::PlayerController(QObject *parent)
                 qWarning("[播放器] 错误：%s（pos %lld / dur %lld，状态 %d）",
                          qUtf8Printable(msg), position(), duration(),
                          int(m_player->mediaStatus()));
+                // 换源后旧流迟到的 error：不属于当前源，吞掉，别让刚换上的好源被扣分拉黑
+                if (isStaleSwitchError()) {
+                    qWarning("[播放器] 忽略旧流迟到错误（换源过渡期）：%s", qUtf8Printable(msg));
+                    return;
+                }
                 // 位置已经在结尾：这是正常播完，不是故障。在线流在 EOF 处常报
                 // "Internal error" / "Failed to read"，若交给上层换源，就会把刚播完的
                 // 这首重新取链再放一遍（听感上「播完又播当前这首」，再报播放错误）。
@@ -216,6 +221,11 @@ PlayerController::PlayerController(QObject *parent)
                 const QString msg = m_player->errorString();
                 qWarning("[播放器] 错误：%s（pos %lld / dur %lld）",
                          qUtf8Printable(msg), position(), duration());
+                // 换源后旧流迟到的 error：不属于当前源，吞掉
+                if (isStaleSwitchError()) {
+                    qWarning("[播放器] 忽略旧流迟到错误（换源过渡期）：%s", qUtf8Printable(msg));
+                    return;
+                }
                 // 同 Qt6：位置已在结尾的报错算正常播完，别把这首重新取链再放一遍
                 if (atTrackEnd()) { finishAsEnded(); return; }
                 // Qt5 的 Windows 后端是 DirectShow，它根本不读 QNetworkRequest 的自定义头，
@@ -431,6 +441,17 @@ void PlayerController::beginSwitch()
     m_switching = true;
 }
 
+void PlayerController::pauseWatchdog()
+{
+    // 换源解析期间没有新流在加载，看门狗的起播计时应当暂停：
+    // 否则脚本逐源取链（每个可达 15s）会把「解析慢」误判成「加载超时」，
+    // 在换源还没结束时先报一次播放失败（真机日志里出现过 16s 假超时）。
+    // playUrl() 会重新拉起看门狗并按新源重置计时基准。
+    m_watchdog->stop();
+    m_lastPosition = -1;
+    m_stallSince = 0;
+}
+
 // 这次「错误」是否其实已经播到结尾。在线流的 FFmpeg/Android 后端在 EOF 处
 // 经常派发 errorOccurred（"Internal error" / "Failed to read"），若位置已到结尾附近
 // 就不能当故障处理 —— 否则上层会把同一首歌重新取链再放一遍。
@@ -440,9 +461,47 @@ bool PlayerController::atTrackEnd() const
     const qint64 total = duration();
     const qint64 pos = position();
     if (!m_everPlayed || total <= 0) return false;
-    // 5 秒余量：替代音源的真实时长与平台元数据常有几秒出入，太紧会把「正常播完」
+    // 尾部余量：替代音源的真实时长与平台元数据常有几秒出入，太紧会把「正常播完」
     // 当成故障，又回到「重新取链放同一首」的老路上。
-    return pos >= total - 5000;
+    // 长歌额外放宽：网易云 IoT 等临时直链有时效，长曲末尾几十秒断流是常态，
+    // 373714/410253（差 36s）这类若按故障换源就要重来整首。余量随曲长增长，
+    // 但封顶 90s，避免把中间卡死误判成播完而跳过太多内容。
+    // Qt5 的 qMin 模板要求两个实参类型完全一致：qMax<qint64> 返回 qint64，
+    // 字面量 90000 是 int，直接传会「deduced conflicting types」编译失败（Qt6 的
+    // qMin 实现更宽松才没暴露）。显式写成 qint64 才能通过 Qt5/MinGW 编译。
+    const qint64 tail = qMin<qint64>(qMax<qint64>(5000, total / 10), qint64(90000));
+    return pos >= total - tail;
+}
+
+bool PlayerController::isStaleSwitchError() const
+{
+    // 换源后旧 error 迟到：setSource 是异步的，上一路流的 demuxer 在 stop() 后
+    // 仍可能把 "Demuxing failed" 投递到新源名下。实测特征：
+    //   - 距本次 playUrl 极短（<1000ms）
+    //   - 位置还在 0、从未出过声（m_everPlayed=false）
+    //   - 媒体状态不是 NoMedia/Invalid（后者是打不开的硬失败）
+    //   - 错误文本是 demux 中断类，而非「打不开/5XX」类
+    // 这种 error 若上报，上层会把刚换上的好源扣分+拉黑（日志里 fish_music 被误伤）。
+    if (m_everPlayed || m_loadStarted <= 0) return false;
+    if (QDateTime::currentMSecsSinceEpoch() - m_loadStarted >= 1000) return false;
+    if (position() > 0) return false;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // 排除「明确打不开」的状态：真 5XX / 坏地址的 error 常伴 NoMedia(0) 或 InvalidMedia(8)。
+    // 旧流 demux 迟到则处于缓冲类状态（实测 error 时状态 4 = BufferingMedia）。
+    // 状态只是粗筛，最终以文本判据为准（见下）。
+    const QMediaPlayer::MediaStatus st = m_player->mediaStatus();
+    if (st == QMediaPlayer::NoMedia || st == QMediaPlayer::InvalidMedia) return false;
+#else
+    // Qt5 DirectShow 没有可靠的 mediaStatus 区分，退回纯文本判据（见下）。
+#endif
+    const QString msg = m_player->errorString();
+    // 只保留「Demux」这一条有实测证据的旧流特征（换源后 3ms 到达的 "Demuxing failed"）。
+    // 【刻意移除 "Failed to read" / "I/O error"】：这两条恰恰是坏链、过期直链、连接被重置
+    // 等【真实首播失败】最常见的错误文本，且与旧流迟到在「<1s / pos=0 / 未出声」上特征完全
+    // 重合。若继续吞掉，真实首播失败就收不到 errorOccurred → 不换源、不提示，只能等 15s
+    // 看门狗兜底（若后端不进 StoppedState 甚至静默卡住）。宁可旧流迟到多报一次，
+    // 也绝不能吞掉真实首播失败。
+    return msg.contains(QStringLiteral("Demux"), Qt::CaseInsensitive);
 }
 
 void PlayerController::finishAsEnded()

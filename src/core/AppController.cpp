@@ -992,6 +992,10 @@ void AppController::onPlayerError(const QString &msg)
         return;
     }
     d->inFallback = true;
+    // 换源解析期间暂停看门狗：脚本逐源取链每个可达 15s，若继续按旧源的起播时刻
+    // 计时，会在换源尚未完成时误报「加载超时」（实测 16s 假超时）。
+    // 新源 playUrl() 会重新拉起看门狗并按新源重置基准。
+    PlayerController::instance()->pauseWatchdog();
     // 动态权重：已取到直链却播不出来的原平台先降权，下次优先选更稳的源
     SourceManager::instance()->demoteSource(song.source);
     const quint64 gen = ++d->fallbackGen;

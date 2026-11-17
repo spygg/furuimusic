@@ -29,6 +29,9 @@ public:
     // 这段时间里任何播放命令（用户点播放、车机/通知栏送来的 play）都必须被忽略，
     // 否则 m_currentUrl 还指着上一首，play() 会把刚播完的那首从头再放一遍。
     void beginSwitch();
+    // 换源解析期（脚本取链可达 15s）暂停看门狗起播计时：这段时间没有新流在加载，
+    // 继续计时会把「解析慢」误判成「加载超时」。playUrl 会重新拉起看门狗。
+    void pauseWatchdog();
     void next();
     void previous();
     // 队列推进（不做推荐）：AppController 取到推荐歌并插入队列后调用，
@@ -109,6 +112,10 @@ private:
     // 位置已到结尾（或已判定播完）：在线流在 EOF 处常报 "Internal error / Failed to read"，
     // 那不是故障，按正常播完处理，否则上层会把刚播完的这首重新取链再放一遍。
     bool atTrackEnd() const;
+    // 切源过渡期内 QMediaPlayer 可能迟到投递上一路被 stop 掉的流的 error
+    //（实测：换源成功后 3ms 到达的 "Demuxing failed"，pos 0 且状态 StalledMedia）。
+    // 把它当新源失败上报会让刚换上的好源被误扣分/拉黑。
+    bool isStaleSwitchError() const;
     void finishAsEnded();
     // Qt 6 无法给 QMediaPlayer 注入请求头：防盗链直链在直连失败后，
     // 带 headers 流式下载到缓存再播放本地文件。

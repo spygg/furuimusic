@@ -237,8 +237,10 @@ void HttpClient::download(const QUrl &url, const QVariantMap &headers,
         timeoutMs = Settings::integer(QStringLiteral("timeout"), 12) * 1000;
     QTimer::singleShot(timeoutMs, this, [guard, finish]() {
         if (!guard) return;
-        guard->abort();
+        // 与 request() 一致：先投递结果再 abort。abort() 可能同步触发 finished，
+        // 若先 abort，回调会带 "Operation canceled" 抢先占住 done，真正的「下载超时」被吞掉。
         finish(false, QStringLiteral("下载超时"));
+        guard->abort();
     });
 
     connect(reply, &QNetworkReply::readyRead, this, [reply, file]() {

@@ -3,11 +3,11 @@
 #include "../core/HttpClient.h"
 #include "../core/PlayerController.h"
 #include "../core/Settings.h"
-#ifdef Q_OS_ANDROID
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include "../core/AppController.h"
 #endif
 
-#ifdef Q_OS_ANDROID
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 // QNativeInterface::QAndroidApplication 的真实头文件（Qt 6.9+ 才有前向路径，
 // 6.8.3 没有；与 UpdateChecker.cpp 保持一致，显式 include 以保证兼容）。
 #include <QtCore/qcoreapplication_platform.h>
@@ -26,7 +26,7 @@
 
 namespace Furui {
 
-#ifdef Q_OS_ANDROID
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 namespace {
 
 constexpr const char *kServiceClass = "cn/furui/music/MediaSessionService";

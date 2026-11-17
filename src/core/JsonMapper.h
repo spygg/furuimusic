@@ -42,7 +42,11 @@ inline QJsonValue valueAt(const QJsonValue &root, const QString &path)
         }
         if (idx >= 0) {
             if (!cur.isArray()) return QJsonValue();
-            cur = cur.toArray().at(idx);
+            const QJsonArray arr = cur.toArray();
+            // 字段路径来自 sources.json / 用户导入脚本，下标可能越界；
+            // QJsonArray::at() 越界是未定义行为（Debug 下 Q_ASSERT 直接崩）。
+            if (idx >= arr.size()) return QJsonValue();
+            cur = arr.at(idx);
         }
     }
     return cur;
