@@ -9,6 +9,7 @@
 #endif
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -125,12 +126,18 @@ PlayerController::PlayerController(QObject *parent)
 
     connect(m_player, &QMediaPlayer::positionChanged, this, [this](qint64 pos) {
         updateLyric(pos);
+        // 看门狗读数：位置往前走即说明真的在播，清停滞记录
+        m_lastPosition = pos;
+        if (pos > 500) m_everPlayed = true;
+        if (pos > 0) m_stallSince = 0;
         emit positionChanged();
         // 兜底自动连播：部分后端（尤其在线流）在末尾不派发 EndOfMedia，
         // 距结束 150ms 内且确实在播放时排队切下一首；m_advancing 保证只触发一次。
         if (m_mode == 2 || m_advancing || m_suppressEnd) return;
-        const qint64 total = m_player->duration();
-        if (total <= 0 || pos < total - 150 || !playing()) return;   // 150ms 内视为已播完
+        // 时长优先取播放器上报；在线流报 0 时退回队列元数据长度（duration() 已兜底），
+        // 否则 Android 上在线流 duration=0，这条末尾兜底永远不触发，播完就停住。
+        const qint64 total = duration();
+        if (total <= 0 || pos < total - 150 || !playing()) return;
         m_advancing = true;
         qInfo("进度兜底触发下一首：%s（%lld/%lld）",
               qUtf8Printable(current().title), pos, total);
@@ -147,16 +154,23 @@ PlayerController::PlayerController(QObject *parent)
             m_player->setPosition(m_pendingSeek);
             m_pendingSeek = 0;
         }
-        if (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia)
+        // 新歌加载完成前忽略旧曲残留的结束信号。在线流常停留在 BufferingMedia
+        // （而非 BufferedMedia），只认 Loaded/Buffered 会让 suppressEnd 一直挂着，
+        // 末尾的 EndOfMedia 与进度兜底都被挡掉，表现为播完停住。这里只要进入有效
+        // 媒体状态就放开；Invalid/NoMedia 保留旧标记由 playUrl 重置。
+        if (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia
+            || status == QMediaPlayer::BufferingMedia || status == QMediaPlayer::StalledMedia)
             m_suppressEnd = false;
         if (status != QMediaPlayer::EndOfMedia) return;
+        // 到达结尾先放开 suppressEnd，避免它仍挂着把这次结束信号挡掉
+        m_suppressEnd = false;
         if (m_mode == 2) {
             // 单曲循环：原地重播，不重新联网解析地址
             seek(0);
             m_player->play();
             return;
         }
-        if (m_advancing || m_suppressEnd) return;
+        if (m_advancing) return;
         m_advancing = true;
         qInfo("播放结束，排队下一首：%s（模式 %d，队列 %d，index %d）",
               qUtf8Printable(current().title), m_mode, int(m_queue.size()), m_currentIndex);
@@ -208,6 +222,11 @@ PlayerController::PlayerController(QObject *parent)
     m_saveTimer->setInterval(5000);
     connect(m_saveTimer, &QTimer::timeout, this, &PlayerController::saveState);
     m_saveTimer->start();
+
+    // 播放看门狗：每秒巡检起播超时 / 末尾停滞 / 中途卡死，兜底后端丢失结束与错误信号
+    m_watchdog = new QTimer(this);
+    m_watchdog->setInterval(1000);
+    connect(m_watchdog, &QTimer::timeout, this, &PlayerController::onWatchdog);
     connect(this, &PlayerController::queueChanged, this, &PlayerController::saveState);
     connect(this, &PlayerController::stateChanged, this, &PlayerController::saveState);
     if (QCoreApplication::instance())
@@ -233,6 +252,12 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers)
     m_advancing = false;
     // 新源加载完成（LoadedMedia/BufferedMedia）前，忽略旧曲残留的结束信号
     m_suppressEnd = true;
+    // 重置看门狗读数：本次源重新计起播超时与停滞
+    m_lastPosition = -1;
+    m_stallSince = 0;
+    m_everPlayed = false;
+    m_loadStarted = QDateTime::currentMSecsSinceEpoch();
+    m_watchdog->start();
     m_headers = headers;
     m_currentUrl = play;
     // 平台的直链几乎都带防盗链：sources.json 里声明的 Referer/Cookie 必须随请求发出。
@@ -285,6 +310,12 @@ void PlayerController::fetchWithHeaders()
     const QString path = dir + QLatin1Char('/') + key + QLatin1Char('.') + cacheSuffixFor(url);
 
     auto startLocal = [this](const QString &p) {
+        // 本地缓存就绪：重新起看门狗，按本地文件的起播/停滞重新计时
+        m_lastPosition = -1;
+        m_stallSince = 0;
+        m_everPlayed = false;
+        m_loadStarted = QDateTime::currentMSecsSinceEpoch();
+        m_watchdog->start();
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
         m_player->setSource(QUrl::fromLocalFile(p));
 #else
@@ -302,6 +333,10 @@ void PlayerController::fetchWithHeaders()
         // 历史遗留的坏缓存（如防盗链过期时的 200+HTML 错误页）删掉重下
         QFile::remove(path);
     }
+
+    // 下载整首到缓存期间播放器处于 StoppedState：暂停看门狗，避免把「下载中」误判成
+    // 起播超时；本地文件就绪后由 startLocal 重新起表。
+    m_watchdog->stop();
 
     HttpClient::instance()->download(url, m_headers, path,
         [this, gen, startLocal, path](bool ok, const QString &error) {
@@ -341,8 +376,81 @@ void PlayerController::togglePause()
 
 void PlayerController::stop()
 {
+    m_watchdog->stop();
+    m_lastPosition = -1;
+    m_stallSince = 0;
+    m_everPlayed = false;
     m_player->stop();
     emit stateChanged();
+}
+
+// 看门狗巡检：兜底 Android MediaPlayer 等后端丢失 EndOfMedia / errorOccurred 的情况。
+// 不直接换源（换源策略在上层 AppController），只把「起播超时 / 末尾停住 / 中途卡死」
+// 翻译成 errorOccurred 或一次下一首推进，与现有 EndOfMedia、进度兜底链路汇合。
+void PlayerController::onWatchdog()
+{
+    if (m_currentUrl.isEmpty() || m_advancing) return;
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const auto state = m_player->playbackState();
+#else
+    const auto state = m_player->state();
+#endif
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 pos = position();
+    const qint64 total = duration();
+
+    if (state == QMediaPlayer::StoppedState) {
+        if (pos > 0) {
+            // 出过声音后自己停住：结束信号丢失，兜底切下一首
+            m_advancing = true;
+            qInfo("看门狗：结束信号丢失，兜底下一首：%s（pos %lld）",
+                  qUtf8Printable(current().title), pos);
+            QTimer::singleShot(0, this, [this] { if (m_advancing) next(); });
+        } else {
+            // 一直没起播：超过 15s 判加载失败，交上层逐源换源
+            const qint64 elapsed = m_loadStarted > 0 ? now - m_loadStarted : 0;
+            if (elapsed >= 15000) {
+                m_watchdog->stop();
+                qWarning("看门狗：起播超时（%lldms）：%s", elapsed,
+                         qUtf8Printable(current().title));
+                emit errorOccurred(QStringLiteral("加载超时，无法播放"));
+            }
+        }
+        return;
+    }
+
+    // 暂停 / 缓冲中：不干预，等回到播放态再看位置
+    if (state != QMediaPlayer::PlayingState) return;
+
+    // 位置往前走：播放正常，清停滞记录
+    if (pos > m_lastPosition) {
+        m_lastPosition = pos;
+        m_stallSince = 0;
+        m_everPlayed = true;
+        return;
+    }
+
+    // 位置停滞：距结尾 3s 内视为播完，兜底切歌
+    if (total > 0 && pos >= total - 3000) {
+        m_advancing = true;
+        qInfo("看门狗：末尾停滞，兜底下一首：%s（%lld/%lld）",
+              qUtf8Printable(current().title), pos, total);
+        QTimer::singleShot(0, this, [this] { if (m_advancing) next(); });
+        return;
+    }
+
+    if (m_stallSince == 0) {
+        m_stallSince = now;
+        return;
+    }
+    // 中途停滞超过 15s 仍不动：判播放失败，交上层换源 / 跳下一首
+    if (now - m_stallSince >= 15000) {
+        m_watchdog->stop();
+        qWarning("看门狗：播放停滞 %lldms：%s", now - m_stallSince,
+                 qUtf8Printable(current().title));
+        emit errorOccurred(QStringLiteral("播放中断，正在尝试其它音源"));
+    }
 }
 
 bool PlayerController::playing() const

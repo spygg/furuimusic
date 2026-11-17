@@ -133,6 +133,15 @@ private:
     bool m_advancing = false;
     bool m_suppressEnd = false;
     QTimer *m_saveTimer = nullptr;
+    // 播放看门狗：部分后端（尤其 Android MediaPlayer）在线流播完/出错时既不派发
+    // EndOfMedia 也不派发 errorOccurred，表现为「播完一首停住」或「失败卡住不换源」。
+    // 每秒巡检一次：起播超时判失败换源、播完停滞判结束切歌、中途停滞超时判失败换源。
+    QTimer *m_watchdog = nullptr;
+    qint64 m_lastPosition = -1;     // 上次巡检读到的播放位置
+    qint64 m_stallSince = 0;        // 位置开始停滞的时刻（ms），0 = 未停滞
+    qint64 m_loadStarted = 0;       // 本次 playUrl 起播时刻（ms），用于加载超时判定
+    bool m_everPlayed = false;      // 本次源是否真正出过声音（position 越过 0.5s）
+    void onWatchdog();
 };
 
 } // namespace Furui

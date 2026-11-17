@@ -1,0 +1,121 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - button "登录" [ref=e5] [cursor=pointer]
+      - button "登录" [ref=e7] [cursor=pointer]
+  - main [ref=e10]:
+    - main [ref=e13]:
+      - generic [ref=e14]:
+        - generic [ref=e15]:
+          - img "作品一站发行，覆盖汽水音乐、抖音、TikTok 等全球平台" [ref=e17]
+          - heading [level=1] [ref=e18]:
+            - img "亿万用户期待着听到你的音乐" [ref=e19]
+          - button "登录/注册" [ref=e20] [cursor=pointer]
+        - button "探索更多可能" [ref=e21] [cursor=pointer]
+      - generic:
+        - heading "加入我们，获得更好的音乐经营体验" [level=2]
+        - generic:
+          - article:
+            - generic: MUSICIAN
+            - heading "音乐人" [level=3]
+            - paragraph: 我是：原创音乐人 / 词曲作者 / 歌手等 我要：发布歌曲/出售词曲/推广歌曲
+            - button "立即入驻"
+          - article:
+            - generic: LABEL
+            - heading "厂牌/机构" [level=3]
+            - paragraph: 我是：厂牌 / 唱片公司 我要：发布歌曲 / 出售词曲 / 推广歌曲
+            - button "立即入驻"
+          - article:
+            - generic: AGENCY
+            - heading "音乐宣推公司" [level=3]
+            - paragraph: 我是：歌曲推广公司 我要：提供专业的宣传推广服务
+            - button "立即入驻"
+      - generic:
+        - generic:
+          - heading "好歌合作，尽情释放你的天赋" [level=2]
+          - paragraph: 歌曲授权高分成比例，一站全网发行结算，放大音乐版权商业价值
+        - generic:
+          - article:
+            - img "平台合作模式"
+          - article:
+            - img "共声计划"
+      - generic:
+        - generic:
+          - heading "爆款视频，引领音乐推广潮流" [level=2]
+          - paragraph: 达人短视频种草引流，平台加码流量扶持，高效助推新歌出圈爆红
+        - generic:
+          - article:
+            - img "多种短视频玩法"
+          - article:
+            - img "海量达人可选"
+      - generic:
+        - generic:
+          - heading "经营赋能，平台助力音乐成功" [level=2]
+          - paragraph: 提供多种经营工具，数据分析洞察经营方向，快速结算保障收益稳定
+        - generic:
+          - article:
+            - img "数据分析"
+          - article:
+            - img "分账结算"
+      - generic [ref=e29]:
+        - navigation "页面底部链接" [ref=e30]:
+          - link "用户服务协议" [ref=e31] [cursor=pointer]:
+            - /url: https://www.douyin.com/agreements/?id=6773906068725565448
+          - link "隐私政策" [ref=e32] [cursor=pointer]:
+            - /url: https://www.douyin.com/agreements/?id=6773901168964798477
+          - link "汽水音乐合作平台宣推服务协议" [ref=e33] [cursor=pointer]:
+            - /url: https://lf3-cdn-tos.draftstatic.com/obj/ies-hotsoon-draft/douyin/17bc3522-30a0-4ee6-a4f0-39581501d970.html
+          - link "汽水音乐合作平台隐私政策" [ref=e34] [cursor=pointer]:
+            - /url: https://lf9-cdn-tos.draftstatic.com/obj/ies-hotsoon-draft/douyin/ed9f80cf-2752-4854-8886-6e1601d2bcce.html
+          - link "帐号找回" [ref=e35] [cursor=pointer]:
+            - /url: https://www.douyin.com/recovery_account/
+          - link "联系我们" [ref=e36] [cursor=pointer]:
+            - /url: https://www.douyin.com/aboutus/
+          - link "广告投放" [ref=e37] [cursor=pointer]:
+            - /url: https://www.oceanengine.com/resource/douyin/?source=dou%3Fsource%3Ddou
+          - link "营业执照" [ref=e38] [cursor=pointer]:
+            - /url: https://zzlz.gsxt.gov.cn/businessCheck/verifKey.do?showType=p&serial=91110101MA0045N17U-SAIC_SHOW_10000091110101MA0045N17U1789030025612&signData=MEYCIQDOrZzWm/uXo7crGxxGkMHL96We0j9Uyfl050NrnrrIIQIhAMQuGw41hGQSsh3RWNiEuquo5LuteuoQkpjzM8Mtuwkc
+        - generic [ref=e39]:
+          - paragraph [ref=e40]:
+            - generic [ref=e41]:
+              - generic [ref=e42]: 2022©抖音
+              - text: "|"
+            - generic [ref=e43]:
+              - link "京ICP备16016397号-3" [ref=e44] [cursor=pointer]:
+                - /url: https://beian.miit.gov.cn
+              - text: "|"
+            - generic [ref=e45]:
+              - generic [ref=e46]: 北京抖音科技有限公司
+              - text: "|"
+            - generic [ref=e47]:
+              - generic [ref=e48]: 增值电信业务经营许可证：京B2-20170846
+              - text: "|"
+            - generic [ref=e49]: 网络文化经营许可证：京网文〔2025〕0181-061号
+          - paragraph [ref=e51]:
+            - generic [ref=e52]:
+              - link "违法和不良信息举报：400-140-2108" [ref=e53] [cursor=pointer]:
+                - /url: tel:4001402108
+              - text: "|"
+            - generic [ref=e54]:
+              - link "举报邮箱：jubao@douyin.com" [ref=e55] [cursor=pointer]:
+                - /url: mailto:jubao@douyin.com
+              - text: "|"
+            - generic [ref=e56]:
+              - link "京公网安备11000002002046号" [ref=e57] [cursor=pointer]:
+                - /url: http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=11000002002046
+              - text: "|"
+            - generic [ref=e58]:
+              - generic [ref=e59]: 地址：北京市海淀区北三环西路甲18号院4号楼2层2022
+              - text: "|"
+            - generic [ref=e60]:
+              - generic [ref=e61]: 友情链接
+              - link "抖音|" [ref=e62] [cursor=pointer]:
+                - /url: https://www.douyin.com/
+              - link "剪映|" [ref=e63] [cursor=pointer]:
+                - /url: https://lv.ulikecam.com/
+              - link "西瓜视频|" [ref=e64] [cursor=pointer]:
+                - /url: https://www.ixigua.com/
+              - link "中视频伙伴计划" [ref=e65] [cursor=pointer]:
+                - /url: https://studio.ixigua.com/mvp
+          - paragraph [ref=e66]: 公司介绍：北京抖音科技有限公司成立于2016年3月，经营范围：技术开发、技术推广、技术转让、技术咨询、技术服务；计算机技术培训；计算机系统服务；数据处理等。
+        - paragraph [ref=e67]: 汽水音乐合作平台即原抖音音乐开放平台

@@ -7,6 +7,8 @@
 /debug/
 /release/
 
+/.playwright-cli/
+
 # 可执行产物与打包产物（含 OpenSSL DLL、APK、临时探针）
 /bin/
 # 按 Qt 版本 / 平台划分的可分发产物目录（windeployqt 部署的 DLL、QML 插件、

@@ -74,57 +74,67 @@ Item {
         color: cBg
     }
 
-    ColumnLayout {
-        anchors.fill: parent
-        // 竖排导航模式下把内容列右移，给左侧导航条让位（不用 RowLayout 嵌套，
-        // 页面栈/迷你条/标签栏的层级保持不变）
+    // 页面区：填满顶部到底部栏之间的区域。不用 ColumnLayout 流式堆叠——Android
+    // adjustResize 弹起软键盘时窗口高度被压扁，ColumnLayout 会先把 fillHeight 的
+    // 页面区压到 0，迷你条和标签栏就顺着堆到顶端（截图里的挤顶现象）。改为 anchors
+    // 绝对定位：底部两栏永远贴底，页面区只占剩余上部空间，窗口怎么压缩都不串位。
+    StackLayout {
+        id: pageStack
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: bottomBar.top
         anchors.leftMargin: root.sideNav ? root.navRailWidth : 0
-        // 横屏矮窗口里各页的最小高度之和可能超过可用高度，撑破后会顶掉底部迷你条。
-        // 这里允许压缩并裁剪，页面有自己的滚动区，不会丢内容
-        clip: true
-        spacing: 0
-
-        StackLayout {
-            id: pageStack
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.minimumHeight: 0
-            // index 4 是外壳级 MV 覆盖层，不属于页面栈；钳到 0..3 避免越界
-            currentIndex: Math.min(root.pageIndex, 3)
-            onCurrentIndexChanged: {
-                // 切页必须主动收键盘：TextField 的焦点会活过页面切换（QML 不会因为
-                // 父页被 StackLayout 藏起来就失焦），不处理的话软键盘会一直盖在新页面上
-                Qt.inputMethod.hide()
-                const af = root.Window.window ? root.Window.window.activeFocusItem : null
-                if (af) af.focus = false
-                pageFade.restart()
-                // 播放页是 index 1（索引必须与底部标签栏顺序一致）
-                if (currentIndex === 1)
-                    playerPageMobile.playEntrance()
-            }
-
-            LibraryPage { }
-            // 移动端迷你条只有一条进度线，播放页承担完整的进度/音量/切歌控件
-            PlayerPage {
-                id: playerPageMobile
-                showControls: true
-                onRequestClose: root.pageIndex = 0
-                onRequestSettings: root.pageIndex = 3
-                onRequestQueue: root.queueOpen = !root.queueOpen
-            }
-            LoginPage { }
-            SettingsPage { }
+        // index 4 是外壳级 MV 覆盖层，不属于页面栈；钳到 0..3 避免越界
+        currentIndex: Math.min(root.pageIndex, 3)
+        onCurrentIndexChanged: {
+            // 切页必须主动收键盘：TextField 的焦点会活过页面切换（QML 不会因为
+            // 父页被 StackLayout 藏起来就失焦），不处理的话软键盘会一直盖在新页面上
+            Qt.inputMethod.hide()
+            const af = root.Window.window ? root.Window.window.activeFocusItem : null
+            if (af) af.focus = false
+            pageFade.restart()
+            // 播放页是 index 1（索引必须与底部标签栏顺序一致）
+            if (currentIndex === 1)
+                playerPageMobile.playEntrance()
         }
+
+        LibraryPage { }
+        // 移动端迷你条只有一条进度线，播放页承担完整的进度/音量/切歌控件
+        PlayerPage {
+            id: playerPageMobile
+            showControls: true
+            onRequestClose: root.pageIndex = 0
+            onRequestSettings: root.pageIndex = 3
+            onRequestQueue: root.queueOpen = !root.queueOpen
+        }
+        LoginPage { }
+        SettingsPage { }
+    }
+
+    // 底部栏容器：迷你条 + 标签栏，整体贴底；高度随两者显隐自适应
+    Item {
+        id: bottomBar
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: root.sideNav ? root.navRailWidth : 0
+        height: (tabBar.visible ? tabBar.height : 0)
+                + (miniBar.visible ? miniBar.height + miniBar.topMargin + miniBar.bottomMargin : 0)
 
         // 迷你播放条：贴底浮动胶囊（Alger 风格：圆角、左右留白、圆形封面），位于页面与底部标签栏之间
         Rectangle {
-            Layout.fillWidth: true
+            id: miniBar
+            anchors.left: parent.left
+            anchors.right: parent.right
+            // 标签栏可见时压在标签栏上方，否则直接贴容器底
+            anchors.bottom: tabBar.visible ? tabBar.top : parent.bottom
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+            anchors.topMargin: 4
+            anchors.bottomMargin: 4
             // 横屏用竖排导航时高度更金贵，胶囊压到 58
-            Layout.preferredHeight: root.sideNav ? 58 : 64
-            Layout.leftMargin: 12
-            Layout.rightMargin: 12
-            Layout.topMargin: 4
-            Layout.bottomMargin: 4
+            height: root.sideNav ? 58 : 64
             radius: 18
             color: cCard
             border.color: cLine
@@ -273,8 +283,11 @@ Item {
 
         // 底部标签栏（横屏改用左侧竖排导航，这里整条隐藏，省下 56dp 高度）
         Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 56
+            id: tabBar
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 56
             visible: !root.sideNav
             color: cCard
             Rectangle {

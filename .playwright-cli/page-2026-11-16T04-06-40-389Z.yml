@@ -1,0 +1,48 @@
+- generic [ref=e3]:
+  - navigation [ref=e6]:
+    - link [ref=e7] [cursor=pointer]:
+      - /url: /
+      - img "汽水音乐" [ref=e8]
+    - link "用户协议" [ref=e9] [cursor=pointer]:
+      - /url: https://luna-web.douyin.com/terms
+    - link "隐私政策" [ref=e10] [cursor=pointer]:
+      - /url: https://luna-web.douyin.com/privacy
+    - link "音乐人入驻" [ref=e11] [cursor=pointer]:
+      - /url: https://music.douyin.com/
+    - link "发布视频" [ref=e12] [cursor=pointer]:
+      - /url: https://creator.douyin.com/creator-micro/content/upload
+  - main [ref=e14]:
+    - generic [ref=e15]:
+      - img "汽水音乐" [ref=e16]
+      - generic [ref=e17]: 抖音官方出品音乐APP
+      - link [ref=e18] [cursor=pointer]:
+        - /url: https://lf-luna-release.qishui.com/obj/luna-release/2.1.0/12292405/SodaMusic-v2.1.0-official-win32_x64.exe
+        - img "下载汽水音乐 PC 版" [ref=e19]
+        - text: 下载汽水音乐 PC 版
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - img "Android" [ref=e22]
+          - text: Android
+        - generic [ref=e23]:
+          - img "iOS" [ref=e24]
+          - text: iOS
+        - button "车载版" [ref=e25] [cursor=pointer]
+      - generic [ref=e26]:
+        - link [ref=e27] [cursor=pointer]:
+          - /url: https://www.qishui.com/download
+          - text: 更多版本
+          - img "更多版本" [ref=e28]
+        - link [ref=e29] [cursor=pointer]:
+          - /url: https://wj.toutiao.com/q/257123/M6S6Pt73/5a5f/#/
+          - text: 遇到安装问题？
+          - img "遇到安装问题?" [ref=e30]
+    - generic [ref=e31]:
+      - img "mac" [ref=e32]
+      - img "phone" [ref=e33]
+  - contentinfo [ref=e34]:
+    - generic [ref=e35]: 2026 © 抖音|京ICP备16016397号-38|北京抖音科技有限公司|营业执照
+    - generic [ref=e36]:
+      - text: 北京市海淀区北三环西路甲18号院4号楼2层2022|
+      - generic [ref=e37] [cursor=pointer]: 京公网安备11010802050002号|
+      - text: 互联网宗教信息服务许可证：京（2025）0000017
+    - generic [ref=e39]: 广播电视节目制作经营许可证：（京）字第11313号|网络文化经营许可证：京网文〔2025〕0181-061号|增值电信业务经营许可证：京B2-20170846|出版物经营许可证：新出发 京零 字第 海180271 号

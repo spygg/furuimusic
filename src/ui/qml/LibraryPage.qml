@@ -58,8 +58,9 @@ Item {
     readonly property bool searchMode: searchKeyword.length > 0
     readonly property int searchViewIndex: root.tabTitles.length
     // 搜索态变化时通知外壳：搜索时隐藏迷你播放条，给结果区和软键盘腾出空间，
-    // 避免播放栏压住搜索内容（矮屏/键盘弹出时尤其明显）。
-    onSearchModeChanged: app.searchActive = root.searchMode
+    // 避免播放栏压住搜索内容（矮屏/键盘弹出时尤其明显）。输入框持有焦点（键盘开着）
+    // 同样算搜索态，与 keyword.onActiveFocusChanged 双向对齐。
+    onSearchModeChanged: app.searchActive = root.searchMode || keyword.activeFocus
     // 曲库页退到后台/被切走时也要撤销搜索态，否则播放栏一直不回来
     Component.onDestruction: app.searchActive = false
 
@@ -415,6 +416,9 @@ Item {
                         if (text.length === 0 && root.searchKeyword.length > 0)
                             root.clearSearch()
                     }
+                    // 一聚焦就进入搜索态：此时软键盘刚弹起，先把迷你播放条隐藏，
+                    // 避免它和键盘挤压搜索结果（原先要敲出内容才隐藏，聚焦空档播放栏仍占位）
+                    onActiveFocusChanged: app.searchActive = activeFocus || root.searchMode
                     onAccepted: root.runSearch()
                 }
 
