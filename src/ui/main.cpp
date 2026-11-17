@@ -816,5 +816,15 @@ int main(int argc, char *argv[])
     }
 #endif
 
+#ifdef Q_OS_ANDROID
+    // Android 后台连播的关键前提：QT_BLOCK_EVENT_LOOPS_WHEN_SUSPENDED 必须为 0，
+    // 它由 AndroidManifest 里 activity 上的 android.app.background_running=true 导出。
+    // 为 1（默认）时 Activity 一进后台 Qt 事件循环就被冻结：音频线程照旧出声，但
+    // QTimer / 跨线程信号 / 网络回调全停，表现就是「切到后台播完一首不自动下一首」。
+    // 这行只在启动时打一次，排障时一眼能确认清单有没有生效。
+    qInfo("android: block_event_loops_when_suspended=%s",
+          qgetenv("QT_BLOCK_EVENT_LOOPS_WHEN_SUSPENDED").constData());
+#endif
+
     return app.exec();
 }

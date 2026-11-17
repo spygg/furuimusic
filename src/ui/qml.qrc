@@ -6,6 +6,7 @@
         <file alias="TitleBar.qml">qml/TitleBar.qml</file>
         <file alias="ResizeHandle.qml">qml/ResizeHandle.qml</file>
         <file alias="GlyphIcon.qml">qml/GlyphIcon.qml</file>
+        <file alias="Backdrop.qml">qml/Backdrop.qml</file>
         <file alias="LibraryPage.qml">qml/LibraryPage.qml</file>
         <file alias="LoginPage.qml">qml/LoginPage.qml</file>
         <file alias="BrowserWindow.qml">qml/BrowserWindow.qml</file>

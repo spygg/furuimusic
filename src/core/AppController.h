@@ -121,6 +121,8 @@ class AppController : public QObject {
     Q_PROPERTY(QString quality READ quality NOTIFY settingsChanged)
     Q_PROPERTY(bool vipSubstituteEnabled READ vipSubstituteEnabled NOTIFY settingsChanged)
     Q_PROPERTY(bool autoToggleSource READ autoToggleSource NOTIFY settingsChanged)
+    // 取链顺序：platform（平台优先）/ vip（VIP 歌先走自定义，默认）/ custom（全部先走自定义）
+    Q_PROPERTY(QString sourceFirstOrder READ sourceFirstOrder NOTIFY settingsChanged)
     // 汽水漫游：开启后播到汽水果时，下一首由汽水推荐流决定（队列只作兜底）
     Q_PROPERTY(bool qishuiRoam READ qishuiRoam NOTIFY settingsChanged)
     // 播放时常亮（仅 Android 有效）：前台播放时锁屏不熄灭
@@ -197,6 +199,7 @@ public:
     QString quality() const;
     bool vipSubstituteEnabled() const;
     bool autoToggleSource() const;
+    QString sourceFirstOrder() const;
     bool qishuiRoam() const;
     bool keepScreenOn() const;
     bool searchActive() const;

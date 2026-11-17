@@ -18,8 +18,15 @@ Item {
     readonly property color cPrimaryHover: Qt.lighter(theme.accent, 1.1)
 
     readonly property var qualityKeys: ["standard", "high", "lossless", "hires"]
+    // 取链顺序：与后端 Settings 的 sourceFirst 取值一一对应
+    readonly property var sourceFirstKeys: ["platform", "vip", "custom"]
     // 响应式左右留白
     readonly property real sideMargin: Math.max(16, Math.min(36, Math.round(root.width * 0.035)))
+    // 表单最大宽度：横屏手机只有 300dp 高，再让一行下拉框铺满 700dp 宽会非常难读；
+    // 大屏（平板横屏/车机）反而要宽一点，免得 900dp 宽度只用到中间一条。
+    readonly property real formMaxWidth: root.width >= 1000 ? 900
+                                        : (root.width > root.height * 1.12 ? 680 : 820)
+    readonly property real pageTopMargin: root.height < 480 ? 12 : (root.width < 700 ? 16 : 28)
 
     // themeCombo.currentIndex 已经绑到 theme.mode，外部（标题栏快捷按钮）改主题时会自动跟随，
     // 这里再用 Connections 赋值等于把绑定改成一次性数值，反而让后续变化失效
@@ -27,15 +34,15 @@ Item {
     Flickable {
         anchors.fill: parent
         contentWidth: width
-        contentHeight: formCol.height + formCol.anchors.topMargin + 24
+        contentHeight: formCol.height + formCol.anchors.topMargin + 28
         clip: true
 
         ColumnLayout {
             id: formCol
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
-            width: Math.max(240, Math.min(parent.width - 2 * root.sideMargin, 860))
-            anchors.topMargin: root.width < 700 ? 16 : 28
+            width: Math.max(240, Math.min(parent.width - 2 * root.sideMargin, root.formMaxWidth))
+            anchors.topMargin: root.pageTopMargin
             height: implicitHeight
             spacing: 8
 
@@ -107,6 +114,39 @@ Item {
                     }
                     onActivated: app.setSetting("quality", root.qualityKeys[index])
                 }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Text { Layout.fillWidth: true; text: "取链顺序"; color: cText; font.pixelSize: 13 }
+                ComboBox {
+                    id: orderCombo
+                    Layout.preferredWidth: 168
+                    Layout.preferredHeight: theme.touchMin
+                    model: ["平台优先", "VIP 优先", "全部自定义"]
+                    currentIndex: Math.max(0, root.sourceFirstKeys.indexOf(app.sourceFirstOrder))
+                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
+                    contentItem: Text {
+                        text: orderCombo.displayText
+                        color: cText
+                        font.pixelSize: 13
+                        leftPadding: 8
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    onActivated: app.setSetting("sourceFirst", root.sourceFirstKeys[index])
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: app.sourceFirstOrder !== "platform"
+                text: app.sourceFirstOrder === "custom"
+                      ? "所有歌曲都先向自定义/在线音源取链，取不到再回落原平台直链。自定义音源失败少、起播快，但音质取决于音源本身。"
+                      : "VIP / 平台判定不可播的歌曲跳过原平台直链，直接从自定义/在线音源取链，省掉一次注定失败的请求；普通歌曲仍走平台正版直链。"
+                color: cSub
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
             }
 
             RowLayout {

@@ -433,6 +433,7 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
         o.insert(QStringLiteral("quality"), qualityName(qualityFromKey(app->quality())));
         o.insert(QStringLiteral("playMode"), app->playModeName());
         o.insert(QStringLiteral("vipSubstitute"), app->vipSubstituteEnabled());
+        o.insert(QStringLiteral("sourceFirst"), app->sourceFirstOrder());
         o.insert(QStringLiteral("autoToggle"), app->autoToggleSource());
         o.insert(QStringLiteral("openApi"), running());
         o.insert(QStringLiteral("address"), address());

@@ -18,6 +18,7 @@
 #include <QJsonObject>
 #include <QStandardPaths>
 #include <QNetworkRequest>
+#include <QThread>
 #include <QTimer>
 
 #include "HttpClient.h"
@@ -164,10 +165,12 @@ PlayerController::PlayerController(QObject *parent)
         if (status != QMediaPlayer::EndOfMedia) return;
         // 到达结尾先放开 suppressEnd，避免它仍挂着把这次结束信号挡掉
         m_suppressEnd = false;
+        m_ended = true;
         if (m_mode == 2) {
             // 单曲循环：原地重播，不重新联网解析地址
             seek(0);
             m_player->play();
+            m_ended = false;
             return;
         }
         if (m_advancing) return;
@@ -185,9 +188,17 @@ PlayerController::PlayerController(QObject *parent)
             [this](QMediaPlayer::PlaybackState) { emit stateChanged(); });
     connect(m_player, &QMediaPlayer::errorOccurred, this,
             [this](QMediaPlayer::Error error, const QString &msg) {
+                if (error == QMediaPlayer::NoError) return;
+                qWarning("[播放器] 错误：%s（pos %lld / dur %lld，状态 %d）",
+                         qUtf8Printable(msg), position(), duration(),
+                         int(m_player->mediaStatus()));
+                // 位置已经在结尾：这是正常播完，不是故障。在线流在 EOF 处常报
+                // "Internal error" / "Failed to read"，若交给上层换源，就会把刚播完的
+                // 这首重新取链再放一遍（听感上「播完又播当前这首」，再报播放错误）。
+                if (atTrackEnd()) { finishAsEnded(); return; }
                 // 带防盗链头的直链：先直连试播，被拒后再带 headers 下载缓存重试一次。
                 // 大多数直链其实不校验 Referer，这样可以避免每次播放都先下载整首。
-                if (error != QMediaPlayer::NoError && !m_headerRetry && !m_headers.isEmpty()
+                if (!m_headerRetry && !m_headers.isEmpty()
                     && m_currentUrl.scheme().startsWith(QStringLiteral("http"))) {
                     m_headerRetry = true;
                     fetchWithHeaders();
@@ -200,17 +211,22 @@ PlayerController::PlayerController(QObject *parent)
             [this](QMediaPlayer::State) { emit stateChanged(); });
     connect(m_player, static_cast<void (QMediaPlayer::*)(QMediaPlayer::Error)>(&QMediaPlayer::error),
             this, [this](QMediaPlayer::Error error) {
+                if (error == QMediaPlayer::NoError) return;
+                // Qt5 DirectShow 失败时 errorString 可能是空串，直接透传会弹一个空 toast
+                const QString msg = m_player->errorString();
+                qWarning("[播放器] 错误：%s（pos %lld / dur %lld）",
+                         qUtf8Printable(msg), position(), duration());
+                // 同 Qt6：位置已在结尾的报错算正常播完，别把这首重新取链再放一遍
+                if (atTrackEnd()) { finishAsEnded(); return; }
                 // Qt5 的 Windows 后端是 DirectShow，它根本不读 QNetworkRequest 的自定义头，
                 // 所以带防盗链的直链一定失败；这里必须和 Qt6 一样退回「带头下载再本地播放」，
                 // 否则酷狗/QQ 这类校验 Referer 的源在 Windows 上永远播不了。
-                if (error != QMediaPlayer::NoError && !m_headerRetry && !m_headers.isEmpty()
+                if (!m_headerRetry && !m_headers.isEmpty()
                     && m_currentUrl.scheme().startsWith(QStringLiteral("http"))) {
                     m_headerRetry = true;
                     fetchWithHeaders();
                     return;
                 }
-                // Qt5 DirectShow 失败时 errorString 可能是空串，直接透传会弹一个空 toast
-                const QString msg = m_player->errorString();
                 emit errorOccurred(msg.isEmpty() ? QStringLiteral("播放失败") : msg);
             });
 #endif
@@ -250,6 +266,8 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers)
     ++m_playGen;
     m_headerRetry = false;
     m_advancing = false;
+    m_ended = false;
+    m_switching = false;
     // 新源加载完成（LoadedMedia/BufferedMedia）前，忽略旧曲残留的结束信号
     m_suppressEnd = true;
     // 重置看门狗读数：本次源重新计起播超时与停滞
@@ -364,13 +382,34 @@ void PlayerController::togglePause()
             emitRequest(m_currentIndex);
         return;
     }
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    if (m_player->playbackState() == QMediaPlayer::PlayingState) m_player->pause();
-    else m_player->play();
-#else
-    if (m_player->state() == QMediaPlayer::PlayingState) m_player->pause();
-    else m_player->play();
-#endif
+    if (playing()) {
+        m_player->pause();
+        emit stateChanged();
+        return;
+    }
+    // 切歌取链的空窗期：新地址马上就到。此时 m_currentUrl 还指着上一首，
+    // 直接 play() 会把刚播完（或刚要切走）的那首从头再放一遍，随后新地址到达又打断它，
+    // 听感/界面就是「播完一首又去播当前这首，然后报播放错误」。
+    if (m_switching) {
+        qInfo("忽略播放请求：正在切换音源（%s）", qUtf8Printable(current().title));
+        return;
+    }
+    // 已经播到结尾：这里的「播放」应该是下一首。Android 后端 play() 会从 0 重放当前曲，
+    // 单曲循环除外（那是用户明确要的原地重播）。
+    if (m_ended && m_mode != 2) {
+        // 媒体键是从 JNI 线程同步进来的（见 AndroidMediaSession 的说明），
+        // 切歌要改队列、发一堆信号，必须回主线程做
+        if (QThread::currentThread() != thread()) {
+            qInfo("播完后收到播放请求（媒体键线程），排队切下一首");
+            QMetaObject::invokeMethod(this, [this] { next(); }, Qt::QueuedConnection);
+            return;
+        }
+        qInfo("播完后收到播放请求，按下一首处理：%s", qUtf8Printable(current().title));
+        next();
+        return;
+    }
+    m_player->play();
+    m_ended = false;
     emit stateChanged();
 }
 
@@ -380,8 +419,49 @@ void PlayerController::stop()
     m_lastPosition = -1;
     m_stallSince = 0;
     m_everPlayed = false;
+    m_ended = false;
+    m_switching = false;
     m_player->stop();
     emit stateChanged();
+}
+
+void PlayerController::beginSwitch()
+{
+    stop();              // stop() 会清掉 m_switching，所以在它之后再置位
+    m_switching = true;
+}
+
+// 这次「错误」是否其实已经播到结尾。在线流的 FFmpeg/Android 后端在 EOF 处
+// 经常派发 errorOccurred（"Internal error" / "Failed to read"），若位置已到结尾附近
+// 就不能当故障处理 —— 否则上层会把同一首歌重新取链再放一遍。
+bool PlayerController::atTrackEnd() const
+{
+    if (m_ended) return true;
+    const qint64 total = duration();
+    const qint64 pos = position();
+    if (!m_everPlayed || total <= 0) return false;
+    // 5 秒余量：替代音源的真实时长与平台元数据常有几秒出入，太紧会把「正常播完」
+    // 当成故障，又回到「重新取链放同一首」的老路上。
+    return pos >= total - 5000;
+}
+
+void PlayerController::finishAsEnded()
+{
+    m_ended = true;
+    if (m_mode == 2) {
+        qInfo("结尾报错，按单曲循环原地重播：%s", qUtf8Printable(current().title));
+        seek(0);
+        m_player->play();
+        m_ended = false;
+        return;
+    }
+    if (m_advancing) return;
+    m_advancing = true;
+    qInfo("结尾报错，按播完处理，切下一首：%s（%lld/%lld）",
+          qUtf8Printable(current().title), position(), duration());
+    QTimer::singleShot(0, this, [this] {
+        if (m_advancing) next();
+    });
 }
 
 // 看门狗巡检：兜底 Android MediaPlayer 等后端丢失 EndOfMedia / errorOccurred 的情况。
@@ -404,6 +484,7 @@ void PlayerController::onWatchdog()
         if (pos > 0) {
             // 出过声音后自己停住：结束信号丢失，兜底切下一首
             m_advancing = true;
+            m_ended = true;
             qInfo("看门狗：结束信号丢失，兜底下一首：%s（pos %lld）",
                   qUtf8Printable(current().title), pos);
             QTimer::singleShot(0, this, [this] { if (m_advancing) next(); });
@@ -434,6 +515,7 @@ void PlayerController::onWatchdog()
     // 位置停滞：距结尾 3s 内视为播完，兜底切歌
     if (total > 0 && pos >= total - 3000) {
         m_advancing = true;
+        m_ended = true;
         qInfo("看门狗：末尾停滞，兜底下一首：%s（%lld/%lld）",
               qUtf8Printable(current().title), pos, total);
         QTimer::singleShot(0, this, [this] { if (m_advancing) next(); });
@@ -442,6 +524,20 @@ void PlayerController::onWatchdog()
 
     if (m_stallSince == 0) {
         m_stallSince = now;
+        return;
+    }
+    // 替代音源的实际长度常短于平台元数据（VIP 替代/跨平台匹配到的音源时长不同），
+    // 于是「已经放完」时 pos 可能永远到不了 total-3000，只会停在那里不动。
+    // 停滞 4 秒且已在末尾 2%（至少 8 秒）以内，同样按播完处理 —— 否则要等 15 秒
+    // 才判「播放中断」，再把这件已经播完的歌重新取链放一遍（听感上就是「播完又播当前这首」）。
+    if (total > 0 && pos >= total - qMax<qint64>(8000, total / 50)) {
+        if (now - m_stallSince >= 4000) {
+            m_advancing = true;
+            m_ended = true;
+            qInfo("看门狗：已到末尾停滞 %lldms，按播完切下一首：%s（%lld/%lld）",
+                  now - m_stallSince, qUtf8Printable(current().title), pos, total);
+            QTimer::singleShot(0, this, [this] { if (m_advancing) next(); });
+        }
         return;
     }
     // 中途停滞超过 15s 仍不动：判播放失败，交上层换源 / 跳下一首
@@ -569,6 +665,13 @@ void PlayerController::restoreState()
 void PlayerController::seek(qint64 ms)
 {
     if (ms < 0) ms = 0;
+    // 往回拖过结尾：这首重新算「没播完」，之后再按播放是继续播而不是跳下一首
+    const qint64 total = duration();
+    if (total <= 0 || ms < total - 2000) {
+        m_ended = false;
+        m_stallSince = 0;
+        m_lastPosition = ms;
+    }
     m_player->setPosition(ms);
     updateLyric(ms);
 }
@@ -682,6 +785,8 @@ void PlayerController::setCurrentIndex(int index)
     m_pendingSeek = 0;
     m_advancing = false;
     m_suppressEnd = false;
+    m_ended = false;
+    m_switching = false;
     emit mediaChanged();
     emitRequest(index);
 }
@@ -694,11 +799,20 @@ void PlayerController::emitRequest(int index)
 
 void PlayerController::next()
 {
+    // 媒体键（JNI 线程）也会走到这里：切歌要改队列并发一串信号，必须回主线程
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this] { next(); }, Qt::QueuedConnection);
+        return;
+    }
     advance(true);
 }
 
 void PlayerController::playNextInQueue()
 {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this] { playNextInQueue(); }, Qt::QueuedConnection);
+        return;
+    }
     advance(false);
 }
 
@@ -711,6 +825,7 @@ void PlayerController::advance(bool allowRecommend)
 {
     if (m_queue.isEmpty()) return;
     m_advancing = false;   // 本次推进开始；排队回调看到 false 就不会重复切歌
+    m_ended = false;       // 换歌后这首的「已播完」状态作废
 
     const Song cur = current();
     if (allowRecommend && cur.source == QLatin1String("qishui") && !cur.sourceId.isEmpty()) {
@@ -770,13 +885,29 @@ void PlayerController::insertAfterCurrent(const QVector<Song> &songs)
 
 void PlayerController::previous()
 {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this] { previous(); }, Qt::QueuedConnection);
+        return;
+    }
     if (m_queue.isEmpty()) return;
     m_advancing = false;
-    if (position() > 5000) { seek(0); return; }
+    m_ended = false;
+    // 上一首就是上一首：不再走「已播 5 秒就先重头播本曲」的行业惯例。
+    // 那样第一次点击只是 restart、第二次才真换歌，真机上会被当成按钮失灵。
     int prev = m_currentIndex - 1;
-    if (prev < 0) prev = m_mode == 0 ? 0 : m_queue.size() - 1;
+    if (prev < 0) {
+        if (m_mode == 0) {
+            // 顺序播放已在队首：没有上一首，保持现状（也不重头播当前这首）
+            qInfo("上一首：已在队首，忽略");
+            return;
+        }
+        prev = m_queue.size() - 1;
+    }
+    if (prev == m_currentIndex) return;
     m_currentIndex = prev;
     m_pendingSeek = 0;
+    qInfo("切到上一首：index %d / %d「%s」", prev, int(m_queue.size()),
+          qUtf8Printable(m_queue.at(prev).title));
     emit mediaChanged();
     emitRequest(prev);
 }

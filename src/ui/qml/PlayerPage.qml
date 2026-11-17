@@ -39,6 +39,13 @@ Item {
     // 竖屏分屏/窄矮窗口：页面高度只剩 250dp 上下时，封面+歌词会把进度和控件顶出可视区
     // （底部标签栏再把它们盖住）。这种高度下让封面/歌词让位，保证播放控件始终可点。
     readonly property bool compactTiny: !root.wide && root.height < 420
+    // 再往下只剩 250dp 上下的竖屏分屏 / 车机窄条：顶部让位 72 + 元信息 ~50 + 进度 36 +
+    // 控件 62 + 间距与边距 30 已经超过可用高度，ColumnLayout 会把控件压到首选高度以下，
+    // 实测主按钮被底部标签栏切掉一半。这里按高度再收一档，保证主按钮始终完整可点。
+    readonly property bool ultraTiny: !root.wide && root.height < 340
+    // 页面自带封面氛围底。移动端外壳已在根层铺了一层覆盖整窗的 Backdrop（含侧栏区域），
+    // 这里必须关掉，否则侧栏右侧会出现一条接缝、左右封面还可能错位。
+    property bool ownBackdrop: true
     readonly property bool isDark: theme.dark
 
     // 本页专用文字色：浅色主题用深墨（压在白纱背景上），深色主题用浅墨
@@ -95,6 +102,7 @@ Item {
         id: bgLayer
         anchors.fill: parent
         scale: 1.06
+        visible: root.ownBackdrop
 
         Image {
             id: bgOld
@@ -145,13 +153,22 @@ Item {
     Component.onCompleted: {
         if (visible)
             root.playEntrance()
-        bgLayer.setArt(root.artSource)
+        if (root.ownBackdrop)
+            bgLayer.setArt(root.artSource)
     }
-    onArtSourceChanged: bgLayer.setArt(root.artSource)
+    onArtSourceChanged: {
+        if (root.ownBackdrop)
+            bgLayer.setArt(root.artSource)
+    }
+    onOwnBackdropChanged: {
+        if (root.ownBackdrop)
+            bgLayer.setArt(root.artSource)
+    }
 
     // 主题纱：浅色 = 白纱（页面变成封面的淡彩），深色 = 黑纱
     Rectangle {
         anchors.fill: parent
+        visible: root.ownBackdrop
         gradient: Gradient {
             GradientStop {
                 position: 0.0
@@ -256,9 +273,12 @@ Item {
         Item {
             id: widePane
             anchors.fill: parent
-            anchors.margins: 32
-            anchors.topMargin: 26
-            anchors.bottomMargin: 14
+            // 横屏手机宽度只有 700dp 出头，左右各 32 会把双栏再挤掉 64；
+            // 大屏（平板/车机）反而需要更宽的留白，按宽度分档。
+            anchors.leftMargin: Math.max(16, Math.min(56, root.width * 0.045))
+            anchors.rightMargin: anchors.leftMargin
+            anchors.topMargin: root.height < 420 ? 14 : 26
+            anchors.bottomMargin: root.height < 420 ? 8 : 14
             visible: root.wide
 
             // 封面边长：由「左列宽度」和「扣除信息区后的剩余高度」共同决定，避免小窗口把按钮挤出去。
@@ -346,19 +366,23 @@ Item {
         Item {
             id: compactPane
             anchors.fill: parent
-            anchors.margins: root.compactTiny ? 12 : 18
-            anchors.topMargin: root.compactTiny ? 72 : 58
+            anchors.margins: root.ultraTiny ? 10 : (root.compactTiny ? 12 : 18)
+            // 72/74 不是随手取的：顶部按钮是 margins 22 + 48 触控高 = 到 70dp，
+            // 元信息必须整体落在它下面，否则标题会贴到「队列 / 视频 / 音效」上。
+            // 矮窗（竖屏分屏、手机横屏单栏）用 72 省那 2dp，宽裕的竖屏给 74。
+            anchors.topMargin: (root.ultraTiny || root.compactTiny) ? 72 : 74
             visible: !root.wide
 
             ColumnLayout {
                 id: compactCol
                 anchors.fill: parent
-                spacing: 6
+                spacing: root.ultraTiny ? 4 : 6
 
                 Loader {
                     Layout.fillWidth: true
                     // 同宽屏那处：三行元信息约 89 高，写死 64 会让角标压在歌词第一行上
-                    Layout.preferredHeight: item ? item.implicitHeight : 80
+                    Layout.preferredHeight: item ? Math.min(item.implicitHeight, root.ultraTiny ? 30 : 9999)
+                                                : (root.ultraTiny ? 30 : 80)
                     sourceComponent: metaComp
                 }
 
@@ -425,13 +449,15 @@ Item {
 
                 Loader {
                     Layout.fillWidth: true
+                    // 进度自身是 18(滑条) + 2 + 16(时间) 的定高，压小只会切掉时间文字，
+                    // 高度由上面的元信息与下面的控件去省，这里保持原样
                     Layout.preferredHeight: 36
                     sourceComponent: progressComp
                 }
 
                 Loader {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 62
+                    Layout.preferredHeight: root.ultraTiny ? 50 : 62
                     sourceComponent: controlsComp
                 }
             }
@@ -658,7 +684,8 @@ Item {
             Row {
                 anchors.horizontalCenter: parent.horizontalCenter
                 spacing: 8
-                visible: root.hasSong
+                // 极矮分屏里连角标一起省掉：一行 20dp 高度留给控件更值
+                visible: root.hasSong && !root.ultraTiny
                 topPadding: 2
 
                 Rectangle {
@@ -681,12 +708,13 @@ Item {
                     width: subText.implicitWidth + 16
                     height: 20
                     radius: 10
-                    color: Qt.rgba(theme.vip.r, theme.vip.g, theme.vip.b, 0.22)
+                    // 浅色主题下 0.22 橙底 + 橙字几乎读不出来（背景是封面模糊层，越亮越糊）
+                    color: Qt.rgba(theme.vip.r, theme.vip.g, theme.vip.b, root.isDark ? 0.26 : 0.14)
                     Text {
                         id: subText
                         anchors.centerIn: parent
                         text: app.substituteBadge
-                        color: theme.vip
+                        color: root.isDark ? theme.vip : Qt.darker(theme.vip, 1.45)
                         font.pixelSize: theme.fontXs
                         font.bold: true
                     }
@@ -776,7 +804,7 @@ Item {
             // 控制行是 5 枚触控按钮 + 1 个主按钮。360dp 手机按 48dp 触控位 + 12 间距
             // 需要 358dp，扣掉页面左右留白后放不下，最右的音量按钮会被裁掉。
             // 这里按可用宽度反推按钮尺寸与间距，窄屏自动收小，宽屏保持 48dp。
-            readonly property int ctrlPlayW: root.wide ? 64 : 58
+            readonly property int ctrlPlayW: root.wide ? 64 : (root.ultraTiny ? 46 : 58)
             readonly property int ctrlBtn: {
                 var avail = Math.max(0, width - ctrlPlayW)
                 var gapTarget = root.wide ? 18 : 12

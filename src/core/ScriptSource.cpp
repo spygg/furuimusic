@@ -199,6 +199,22 @@ QString displayStatus(const QString &status)
     return status;
 }
 
+// 脚本的 search 返回值形状不统一：可能直接是数组，也可能包在 list/data/songs/result 里
+QVariantList actionList(const QVariant &data)
+{
+    if (data.canConvert<QVariantList>())
+        return data.toList();
+    if (data.canConvert<QVariantMap>()) {
+        const QVariantMap m = data.toMap();
+        for (const QString &key : {QStringLiteral("list"), QStringLiteral("data"),
+                                   QStringLiteral("songs"), QStringLiteral("result")}) {
+            if (m.value(key).canConvert<QVariantList>())
+                return m.value(key).toList();
+        }
+    }
+    return QVariantList();
+}
+
 } // namespace
 
 ScriptSourceManager *ScriptSourceManager::instance()
@@ -261,6 +277,7 @@ void ScriptSourceManager::load()
     for (const QString &id : rest) {
         if (!m_order.contains(id)) m_order << id;
     }
+    loadScores();
 }
 
 int ScriptSourceManager::rankOf(const QString &id) const
@@ -284,6 +301,71 @@ QStringList ScriptSourceManager::orderedIds() const
 void ScriptSourceManager::saveOrder()
 {
     Settings::set(QStringLiteral("scriptSourceOrder"), m_order);
+}
+
+void ScriptSourceManager::loadScores()
+{
+    m_score.clear();
+    const QString raw = Settings::string(QStringLiteral("scriptSourceScore"));
+    if (raw.isEmpty())
+        return;
+    const QStringList parts = raw.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    for (const QString &part : parts) {
+        const int eq = part.lastIndexOf(QLatin1Char('='));
+        if (eq <= 0)
+            continue;
+        bool ok = false;
+        const int v = part.mid(eq + 1).toInt(&ok);
+        if (!ok)
+            continue;
+        m_score.insert(part.left(eq), qBound(-6, v, 12));
+    }
+}
+
+void ScriptSourceManager::saveScores()
+{
+    QStringList parts;
+    for (auto it = m_score.constBegin(); it != m_score.constEnd(); ++it) {
+        if (it.value() == 0)
+            continue;   // 0 是初始值，不落库，避免成绩表无限膨胀
+        parts << (it.key() + QLatin1Char('=') + QString::number(it.value()));
+    }
+    Settings::set(QStringLiteral("scriptSourceScore"), parts.join(QLatin1Char(';')));
+}
+
+int ScriptSourceManager::scoreOf(const QString &id, const QString &lxKey) const
+{
+    if (id.isEmpty() || lxKey.isEmpty())
+        return 0;
+    return m_score.value(id + QLatin1Char('|') + lxKey, 0);
+}
+
+void ScriptSourceManager::reportResult(const QString &id, const QString &lxKey, bool ok, int weight)
+{
+    if (id.isEmpty() || lxKey.isEmpty())
+        return;
+    const QString key = id + QLatin1Char('|') + lxKey;
+    const int now = m_score.value(key, 0);
+    // 成功 +2 / 失败 -2：一次成功刚好抵一次失败，既不会被一次偶然失败沉底，
+    // 也不至于「曾经成功过一次就永远排第一」。上下限防止极端值锁死排序。
+    // weight 非 0 时用它代替默认步长：「返回了地址但根本播不出来」比普通失败更严重。
+    const int delta = weight != 0 ? weight : (ok ? 2 : -2);
+    m_score.insert(key, qBound(-6, now + delta, 12));
+    saveScores();
+}
+
+void ScriptSourceManager::notePlaybackFailure(const QString &id, const QString &lxKey,
+                                              const QString &songKey)
+{
+    if (id.isEmpty() || lxKey.isEmpty() || songKey.isEmpty())
+        return;
+    if (songKey != m_badPlaybackSong) {
+        m_badPlaybackSong = songKey;
+        m_badPlayback.clear();
+    }
+    m_badPlayback.insert(songKey + QLatin1Char('|') + id + QLatin1Char('|') + lxKey);
+    qWarning().noquote() << QStringLiteral("[换源] 本首跳过该候选：") + id
+                                + QStringLiteral(" [") + lxKey + QLatin1Char(']');
 }
 
 void ScriptSourceManager::promoteSource(const QString &id)
@@ -1227,9 +1309,62 @@ void ScriptSourceManager::search(const QString &keyword, int limit, SongsCallbac
     });
 }
 
+// 脚本 musicUrl 的返回形态很不统一：字符串、{url}、{data:{url}}、{url, headers}、
+// 甚至 [{url}]。统一收敛成「直链 + 请求头」—— 防盗链直链不带 Referer/UA 会被 CDN 拒，
+// 表现成播放器 4ms 就报 I/O error（连握手都没做成）。
+static QString playUrlFrom(const QVariant &data, QVariantMap *headers)
+{
+    QVariantMap hdr;
+    auto takeHeaders = [&hdr](const QVariantMap &m) {
+        const QVariant h = m.value(QStringLiteral("headers"));
+        if (!h.canConvert<QVariantMap>()) return;
+        const QVariantMap hm = h.toMap();
+        for (auto it = hm.constBegin(); it != hm.constEnd(); ++it)
+            hdr.insert(it.key(), it.value());
+    };
+
+    QString url;
+    // 先按真实类型分派，不能用 canConvert<QVariantList>() 试探：
+    // QVariant(QString).canConvert<QVariantList>() 也返回 true，toList() 会把
+    // "https://..." 拆成单字符序列，list.first() 拿到 'h' —— 实测所有脚本的直链
+    // 都被截成首字母，播放器 4ms 报 I/O error。
+    const int type = data.userType();
+    if (type == QMetaType::QVariantList) {
+        const QVariantList list = data.toList();
+        if (!list.isEmpty()) return playUrlFrom(list.first(), headers);
+    } else if (type == QMetaType::QVariantMap) {
+        const QVariantMap m = data.toMap();
+        takeHeaders(m);
+        url = m.value(QStringLiteral("url")).toString();
+        if (url.isEmpty()) {
+            const QVariant d = m.value(QStringLiteral("data"));
+            if (d.userType() == QMetaType::QVariantMap) {
+                const QVariantMap dm = d.toMap();
+                takeHeaders(dm);
+                url = dm.value(QStringLiteral("url")).toString();
+            } else if (d.userType() == QMetaType::QVariantList) {
+                const QVariantList dl = d.toList();
+                if (!dl.isEmpty()) url = dl.first().toMap().value(QStringLiteral("url")).toString();
+            }
+        }
+    } else {
+        url = data.toString();
+    }
+    if (headers) *headers = hdr;
+    return url.trimmed();
+}
+
 void ScriptSourceManager::resolve(const Song &song, const QString &quality, PlayableCallback cb)
 {
     if (!hasMusicUrl()) {
+        QStringList dump;
+        for (const Item &i : m_items)
+            dump << QStringLiteral("%1(%2, %3)").arg(i.name,
+                        i.enabled ? QStringLiteral("启用") : QStringLiteral("禁用"),
+                        i.actions.join(QLatin1Char('/')));
+        qWarning().noquote() << QStringLiteral("[换源] 没有启用的取链音源，跳过脚本层；已导入 %1 个：%2")
+                                    .arg(int(m_items.size()))
+                                    .arg(dump.isEmpty() ? QStringLiteral("无") : dump.join(QStringLiteral("；")));
         Playable p;
         p.reason = QStringLiteral("no-source");
         p.message = QStringLiteral("没有启用的在线取链音源（导入后请确认状态为「正常」；失效音源需更换）");
@@ -1242,9 +1377,17 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
         QString lxKey;
         QString quality;
         QString name;
+        // 跨平台候选：手上只有「歌名 + 歌手」，要先 search 拿到该平台的条目再取链。
+        // 这是 VIP 歌曲最有效的一条兜底：某个平台全线取不到时，同一首歌在别的平台
+        // 常常有免费源，比在同一个平台上反复换脚本有用得多。
+        bool viaSearch = false;
     };
     QVector<Candidate> candidates;
     const QString wanted = qualityToLx(quality);
+    qInfo().noquote() << QStringLiteral("[换源] 开始：%1 - %2（源=%3 音质=%4 lxKey=%5 vip=%6）")
+                             .arg(song.title, song.artist, song.source, quality,
+                                  song.extra.value(QStringLiteral("lxKey")).toString())
+                             .arg(song.vip);
 
     // 脚本只声明自己支持的音质。宿主要 high/lossless 时若直接把 320k/flac
     // 丢给只支持 128k 的音源，取链会被拒；这里收敛到声明范围内。
@@ -1255,21 +1398,30 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
         if (qs.contains(QStringLiteral("128k"))) return QStringLiteral("128k");
         return qs.first();
     };
-    auto addByKey = [this, &candidates, &pickQuality](const QString &key) {
+    auto addByKey = [this, &candidates, &pickQuality](const QString &key, bool viaSearch) {
         if (key.isEmpty()) return;
-        // 按权重顺序挑选同类音源：优先让最近取链成功的源先试
+        const QStringList need = viaSearch
+            ? QStringList{QStringLiteral("search"), QStringLiteral("musicUrl")}
+            : QStringList{QStringLiteral("musicUrl")};
+        // 按权重顺序挑选同类音源：同一 key 下先交给最近取链成功的脚本
         for (const QString &id : orderedIds()) {
             const Item item = m_items.value(id);
             if (!item.enabled) continue;
             for (const QJsonValue &v : item.sources) {
                 const QJsonObject o = v.toObject();
                 if (o.value(QStringLiteral("key")).toString() != key) continue;
-                if (!jsonToStrings(o.value(QStringLiteral("actions"))).contains(QStringLiteral("musicUrl")))
-                    continue;
+                const QStringList actions = jsonToStrings(o.value(QStringLiteral("actions")));
+                bool capable = true;
+                for (const QString &a : need)
+                    if (!actions.contains(a)) capable = false;
+                if (!capable) continue;
                 bool dup = false;
                 for (const Candidate &c : candidates)
-                    if (c.engineId == id && c.lxKey == key) { dup = true; break; }
-                if (!dup) candidates << Candidate{id, key, pickQuality(o), item.name};
+                    if (c.engineId == id && c.lxKey == key && c.viaSearch == viaSearch) {
+                        dup = true;
+                        break;
+                    }
+                if (!dup) candidates << Candidate{id, key, pickQuality(o), item.name, viaSearch};
                 break;
             }
         }
@@ -1289,12 +1441,47 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
                         break;
                     }
                 }
-                candidates << Candidate{storedScript, storedKey, q, it->name};
+                candidates << Candidate{storedScript, storedKey, q, it->name, false};
             }
         }
-        addByKey(storedKey);
+        addByKey(storedKey, false);
     }
-    addByKey(platformToLx(song.source));
+    const QString ownKey = !storedKey.isEmpty() ? storedKey : platformToLx(song.source);
+    addByKey(platformToLx(song.source), false);
+
+    // ---- 跨平台兜底：同一首歌去别的平台找 ----
+    // 只在用户开着「自动跨源换源」时启用；只追加同平台候选之后的备选，命中即停。
+    if (Settings::boolean(QStringLiteral("autoToggleSource"), true) && hasSearch()
+        && !song.title.trimmed().isEmpty()) {
+        QStringList keys{QStringLiteral("tx"), QStringLiteral("kg"), QStringLiteral("kw"),
+                         QStringLiteral("mg"), QStringLiteral("wy")};
+        // 平台顺序 = 该平台上所有脚本的平均成绩：先搜最靠谱的平台，
+        // 多数情况第一个平台就命中，后面几个的搜索请求根本发不出去
+        auto keyScore = [this](const QString &key) {
+            int sum = 0, n = 0;
+            const QStringList ids = orderedIds();
+            for (const QString &id : ids) {
+                const Item item = m_items.value(id);
+                if (!item.enabled) continue;
+                for (const QJsonValue &v : item.sources) {
+                    if (v.toObject().value(QStringLiteral("key")).toString() == key) {
+                        sum += scoreOf(id, key);
+                        ++n;
+                        break;
+                    }
+                }
+            }
+            return n > 0 ? qreal(sum) / n : 0.0;
+        };
+        std::stable_sort(keys.begin(), keys.end(),
+                         [&keyScore](const QString &a, const QString &b) {
+                             return keyScore(a) > keyScore(b);
+                         });
+        for (const QString &key : keys) {
+            if (key == ownKey) continue;
+            addByKey(key, true);
+        }
+    }
 
     if (candidates.isEmpty()) {
         Playable p;
@@ -1304,6 +1491,56 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
             : QStringLiteral("已导入的在线音源未声明该平台（%1）的取链能力").arg(song.source);
         if (cb) cb(p);
         return;
+    }
+
+    // 排序：先看「这个脚本在这个平台上」的成绩，再看全局权重。
+    // addByKey 已按全局权重插入，stable_sort 保证同分时维持原顺序 —— 等于把
+    // 「整体最强」和「在这个平台上最能打」两个维度合并，且跨重启保留。
+    std::stable_sort(candidates.begin(), candidates.end(),
+                     [this](const Candidate &a, const Candidate &b) {
+                         const int sa = scoreOf(a.engineId, a.lxKey);
+                         const int sb = scoreOf(b.engineId, b.lxKey);
+                         if (sa != sb) return sa > sb;
+                         return false;
+                     });
+    // 兜底链上限：15 个脚本 × 20s 会让用户以为卡死，一场播放最多试这么多次
+    // 同一首歌内，播放器已经证明「打不开」的候选先剔掉：这样一次点击就能轮到下一个源，
+    // 而不是每轮都从成绩最高的那个重来（用户看到的是反复换源却始终没声）。
+    const QString songKey = song.title + QLatin1Char('|') + song.artist;
+    if (songKey == m_badPlaybackSong && !m_badPlayback.isEmpty()) {
+        QVector<Candidate> kept;
+        kept.reserve(candidates.size());
+        for (const Candidate &c : candidates) {
+            if (m_badPlayback.contains(songKey + QLatin1Char('|') + c.engineId
+                                       + QLatin1Char('|') + c.lxKey))
+                continue;
+            kept << c;
+        }
+        if (kept.size() != candidates.size()) {
+            qInfo().noquote() << QStringLiteral("[换源] 跳过本首已证明打不开的 %1 个候选，剩 %2 个")
+                                     .arg(int(candidates.size() - kept.size())).arg(int(kept.size()));
+            candidates = kept;
+        }
+    }
+    if (candidates.isEmpty()) {
+        Playable p;
+        p.reason = QStringLiteral("script-failed");
+        p.message = QStringLiteral("这首歌的在线音源都试过了，拿到的地址都播不出来");
+        if (cb) cb(p);
+        return;
+    }
+    if (candidates.size() > 14)
+        candidates.resize(14);
+    {
+        QStringList plan;
+        for (int i = 0; i < candidates.size(); ++i) {
+            const Candidate &c = candidates.at(i);
+            plan << QStringLiteral("%1.%2[%3%4]").arg(i + 1).arg(c.name, c.lxKey,
+                              c.viaSearch ? QStringLiteral("/搜索") : QString())
+                        + QStringLiteral("(%1)").arg(scoreOf(c.engineId, c.lxKey));
+        }
+        qInfo().noquote() << QStringLiteral("[换源] 候选 %1 个：%2")
+                                 .arg(int(candidates.size())).arg(plan.join(QStringLiteral(" ")));
     }
 
     struct ResolveState {
@@ -1318,11 +1555,111 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
     state->song = song;
     state->candidates = candidates;
 
+    // 跨平台候选要先搜索再取链：把一条搜索结果转成 Song，按相似度挑最像的
+    auto bestMatch = [](const Song &target, const QVariantList &list) {
+        Song best;
+        const qreal threshold = 0.62;   // 低于这个分宁可不换，避免播成翻唱/伴奏/纯音乐
+        qreal bestScore = threshold;
+        qreal maxScore = 0.0;
+        QString maxLabel;
+        qInfo().noquote() << QStringLiteral("[换源] 搜索结果 %1 条；目标：%2 - %3（时长 %4）")
+                                 .arg(int(list.size())).arg(target.title, target.artist)
+                                 .arg(target.duration);
+        for (const QVariant &v : list) {
+            const QVariantMap raw = v.toMap();
+            Song s;
+            s.title = entryTitle(raw);
+            if (s.title.isEmpty()) continue;
+            s.artist = entryArtist(raw);
+            s.album = entryText(raw, {QStringLiteral("albumName"), QStringLiteral("album")});
+            s.duration = parseInterval(raw.value(QStringLiteral("interval")));
+            if (s.duration <= 0)
+                s.duration = parseInterval(raw.value(QStringLiteral("duration")));
+            s.sourceId = entrySourceId(raw);
+            s.extra = raw;
+            const qreal t = similarity(target.title, s.title);
+            const qreal a = similarity(target.artist, s.artist);
+            qreal d = 0.0;
+            if (target.duration > 0 && s.duration > 0) {
+                const qint64 diff = qAbs(target.duration - s.duration);
+                d = qMax(0.0, 1.0 - qreal(diff) / qreal(qMax<qint64>(target.duration, 10000)));
+            }
+            const qreal score = t * 0.60 + a * 0.25 + d * 0.15;
+            if (score > maxScore) { maxScore = score; maxLabel = s.title + QStringLiteral(" - ") + s.artist; }
+            qInfo().noquote() << QStringLiteral("[换源]   %1 - %2  t=%3 a=%4 d=%5 → %6")
+                                     .arg(s.title, s.artist)
+                                     .arg(t, 0, 'f', 2).arg(a, 0, 'f', 2)
+                                     .arg(d, 0, 'f', 2).arg(score, 0, 'f', 2);
+            if (t < 0.6) continue;
+            if (score > bestScore) {
+                bestScore = score;
+                best = s;
+            }
+        }
+        if (best.title.isEmpty()) {
+            qInfo().noquote() << QStringLiteral("[换源] 无匹配（最高 %1 分：%2）")
+                                     .arg(maxScore, 0, 'f', 2).arg(maxLabel);
+        } else {
+            qInfo().noquote() << QStringLiteral("[换源] 匹配：%1 - %2（%3 分）")
+                                     .arg(best.title, best.artist)
+                                     .arg(bestScore, 0, 'f', 2);
+        }
+        return best;
+    };
+
+    // 取链成功：记成绩 → 置顶 → 回调，三条路径共用
+    auto succeed = [this, state](const Candidate &cand, const QString &url,
+                                 const QVariantMap &headers) {
+        qInfo().noquote() << QStringLiteral("[换源] OK ") + cand.name + QStringLiteral(" [") + cand.lxKey
+                                 + QLatin1Char(']')
+                                 + (cand.viaSearch ? QStringLiteral("(跨平台)") : QString())
+                                 + QStringLiteral(" url=") + url
+                                 + QStringLiteral(" len=") + QString::number(url.size())
+                                 + QStringLiteral(" headers=")
+                                 + QStringList(headers.keys()).join(QLatin1Char(','));
+        // +1 只是「确实取到了地址」的弱信号；能不能播要等播放器确认（见 AppController），
+        // 这是坏源没法靠假成功长期霸榜的关键。
+        reportResult(cand.engineId, cand.lxKey, true, 1);
+        // 置顶也推迟到「确认能播」那一刻（AppController 进度过 2 秒），
+        // 否则返回坏地址的源会被一次假成功顶到全局第一，后面每首歌都先撞它一遍。
+        Playable p;
+        p.ok = true;
+        p.url = QUrl(url);
+        p.headers = headers;
+        // 把提供者带回 AppController：等播放器真的放出声音才补记成功分
+        p.engineId = cand.engineId;
+        p.platformKey = cand.lxKey;
+        p.substituted = true;
+        p.substituteSource = cand.viaSearch
+            ? QStringLiteral("在线音源 · %1（跨平台）").arg(cand.name)
+            : QStringLiteral("在线音源 · ") + cand.name;
+        p.message = cand.viaSearch
+            ? QStringLiteral("原平台不可播放，已由在线音源「%1」跨平台提供").arg(cand.name)
+            : QStringLiteral("已由在线音源「%1」提供").arg(cand.name);
+        if (state->cb) state->cb(p);
+    };
+    // 一次取链失败：记成绩；只有同一「脚本 × 平台」累计到两次失败才动全局顺序，
+    // 免得一次版权/网络抖动把一个在别的平台上很稳的脚本整体沉下去
+    auto failed = [this, state](const Candidate &cand, const QString &reason) {
+        QString text = reason.trimmed().isEmpty() ? QStringLiteral("取链失败") : reason;
+        text = text.left(80);
+        qWarning().noquote() << QStringLiteral("[换源] FAIL %1 [%2]%3：%4")
+                                    .arg(cand.name, cand.lxKey,
+                                         cand.viaSearch ? QStringLiteral("（跨平台）") : QString(), text);
+        state->failures << QStringLiteral("%1%2：%3")
+                               .arg(cand.name,
+                                    cand.viaSearch ? QStringLiteral("(跨平台)") : QString(),
+                                    text);
+        reportResult(cand.engineId, cand.lxKey, false);
+        if (scoreOf(cand.engineId, cand.lxKey) <= -2)
+            demoteSource(cand.engineId);
+    };
+
     // 用 weak_ptr 打断「shared_ptr -> function -> shared_ptr」的自捕获循环；
     // 链上的异步回调各自捕获局部强引用 step，链结束即随回调一起释放。
     auto next = std::make_shared<std::function<void()>>();
     std::weak_ptr<std::function<void()>> weakNext = next;
-    *next = [this, state, weakNext]() {
+    *next = [this, state, weakNext, succeed, failed, bestMatch]() {
         auto step = weakNext.lock();
         if (!step) return;
         if (state->index >= state->candidates.size()) {
@@ -1330,57 +1667,99 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
             p.reason = QStringLiteral("script-failed");
             p.message = state->failures.isEmpty()
                 ? QStringLiteral("所有在线音源均未能取到音频地址")
-                : QStringLiteral("在线音源取链失败：%1").arg(state->failures.join(QStringLiteral("；")));
+                : QStringLiteral("在线音源取链失败：%1")
+                      .arg(state->failures.join(QStringLiteral("；")));
             if (state->cb) state->cb(p);
             return;
         }
         const Candidate cand = state->candidates.at(state->index++);
-        ensureEngine(cand.engineId, [this, state, cand, step](bool ok) {
+        qInfo().noquote() << QStringLiteral("[换源] 尝试 %1/%2：%3 [%4]%5 分数=%6")
+                                 .arg(state->index)
+                                 .arg(int(state->candidates.size()))
+                                 .arg(cand.name, cand.lxKey,
+                                      cand.viaSearch ? QStringLiteral("（跨平台搜索）") : QString())
+                                 .arg(scoreOf(cand.engineId, cand.lxKey));
+
+        ensureEngine(cand.engineId, [this, state, cand, step, succeed, failed, bestMatch](bool ok) {
             if (!ok) {
-                state->failures << QStringLiteral("%1：初始化失败").arg(cand.name);
-                demoteSource(cand.engineId);
+                failed(cand, QStringLiteral("脚本初始化失败"));
                 (*step)();
                 return;
             }
             ScriptEngine *engine = m_engines.value(cand.engineId).data();
             if (!engine || !engine->ready()) {
-                state->failures << QStringLiteral("%1：脚本未就绪").arg(cand.name);
-                demoteSource(cand.engineId);
+                failed(cand, QStringLiteral("脚本未就绪"));
                 (*step)();
                 return;
             }
-            QVariantMap info;
-            info.insert(QStringLiteral("type"), cand.quality);
-            info.insert(QStringLiteral("musicInfo"), musicInfoFor(state->song, cand.lxKey));
-            engine->callAction(cand.lxKey, QStringLiteral("musicUrl"), info,
-                [this, state, cand, step](const ScriptActionResult &r) {
-                    QString url;
-                    if (r.ok) {
-                        if (r.data.canConvert<QVariantMap>()) {
-                            const QVariantMap m = r.data.toMap();
-                            url = m.value(QStringLiteral("url")).toString();
-                        } else {
-                            url = r.data.toString();
+            QPointer<ScriptEngine> guard(engine);
+
+            // 取链：target 是「带该平台 id 的 Song」（原歌，或跨平台匹配到的同曲）
+            auto callUrl = [this, state, cand, step, succeed, failed, guard](const Song &target) {
+                ScriptEngine *e = guard.data();
+                if (!e) {
+                    failed(cand, QStringLiteral("脚本已卸载"));
+                    (*step)();
+                    return;
+                }
+                QVariantMap info;
+                info.insert(QStringLiteral("type"), cand.quality);
+                info.insert(QStringLiteral("musicInfo"), musicInfoFor(target, cand.lxKey));
+                e->callAction(cand.lxKey, QStringLiteral("musicUrl"), info,
+                    [this, state, cand, step, succeed, failed](const ScriptActionResult &r) {
+                        QString url;
+                        QVariantMap hdr;
+                        if (r.ok) {
+                            qInfo().noquote() << QStringLiteral("[换源] 原始返回 类型=")
+                                                     + QString::fromLatin1(r.data.typeName())
+                                                 + QStringLiteral(" 文本=") + r.data.toString().left(90);
+                            url = playUrlFrom(r.data, &hdr);
                         }
-                    }
-                    if (!url.isEmpty()) {
-                        // 动态权重：成功的源升到最前，下次优先使用
-                        promoteSource(cand.engineId);
-                        Playable p;
-                        p.ok = true;
-                        p.url = QUrl(url);
-                        p.substituted = true;
-                        p.substituteSource = QStringLiteral("在线音源 · ") + cand.name;
-                        p.message = QStringLiteral("已由在线音源「%1」提供").arg(cand.name);
-                        if (state->cb) state->cb(p);
+                        if (url.isEmpty()) {
+                            failed(cand, r.ok ? QStringLiteral("未返回音频地址") : r.error);
+                            (*step)();
+                            return;
+                        }
+                        // 地址必须能直接交给播放器：脚本偶发会把 undefined/半截字符串当成
+                        // url 回调回来（实测有源返回单个字符），以前直接 succeed，结果
+                        // 「取链成功 → 播放器 4ms 报错 → 再换源」无限循环。这里先卡一道。
+                        const QString scheme = QUrl(url).scheme().toLower();
+                        if (scheme != QLatin1String("http") && scheme != QLatin1String("https")
+                            && scheme != QLatin1String("file")) {
+                            failed(cand, QStringLiteral("返回的地址无效：%1").arg(url.left(40)));
+                            (*step)();
+                            return;
+                        }
+                        succeed(cand, url, hdr);
+                    }, 15000);
+            };
+
+            if (!cand.viaSearch) {
+                callUrl(state->song);
+                return;
+            }
+            // 跨平台：先按「歌名 + 歌手」搜这个平台，再挑最像的一条取链
+            QVariantMap sinfo;
+            const QString keyword = (state->song.title + QLatin1Char(' ') + state->song.artist).trimmed();
+            sinfo.insert(QStringLiteral("keyword"), keyword);
+            sinfo.insert(QStringLiteral("page"), 1);
+            sinfo.insert(QStringLiteral("limit"), 8);
+            sinfo.insert(QStringLiteral("type"), 1);
+            qInfo().noquote() << QStringLiteral("[换源] 跨平台搜索 %1 [%2] 关键词「%3」")
+                                     .arg(cand.name, cand.lxKey, keyword);
+            engine->callAction(cand.lxKey, QStringLiteral("search"), sinfo,
+                [state, cand, step, failed, bestMatch, callUrl](const ScriptActionResult &sr) {
+                    if (!sr.ok)
+                        qWarning().noquote() << QStringLiteral("[换源] 跨平台搜索失败 %1 [%2]：%3")
+                                                    .arg(cand.name, cand.lxKey, sr.error);
+                    const Song matched = bestMatch(state->song, actionList(sr.data));
+                    if (matched.title.isEmpty()) {
+                        failed(cand, QStringLiteral("其它平台没有匹配的同曲"));
+                        (*step)();
                         return;
                     }
-                    QString reason = r.ok ? QStringLiteral("未返回音频地址") : r.error;
-                    if (reason.trimmed().isEmpty()) reason = QStringLiteral("取链失败");
-                    state->failures << QStringLiteral("%1：%2").arg(cand.name, reason.left(80));
-                    demoteSource(cand.engineId);
-                    (*step)();
-                }, 20000);
+                    callUrl(matched);
+                }, 15000);
         });
     };
     (*next)();

@@ -1,17 +1,72 @@
 @echo off
-rem FuruiMusic Android APK - Qt 6.11.1 + CMake (arm64-v8a, NDK 27, JDK 17)
+rem FuruiMusic Android APK - Qt 6.11.x + CMake (arm64-v8a, NDK 27, JDK 17)
 rem The final signed APK lands in bin_android/ at the repo root, separate from the
 rem desktop bin_qt6 / bin_qt5.
 setlocal
 set "ROOT=%~dp0..\.."
 set "SRC=%ROOT%\src"
-set "QT_ANDROID=E:\programes\Qt\Qt\6.11.1\android_arm64_v8a"
-set "QT_HOST=E:\programes\Qt\Qt\6.11.1\mingw_64"
-set "CMAKE_DIR=E:\programes\Qt\Qt\Tools\CMake_64\bin"
-set "NINJA_DIR=E:\programes\Qt\Qt\Tools\Ninja"
-set "ANDROID_SDK_ROOT=E:\programes\Android\SDK"
-set "ANDROID_NDK_ROOT=E:\programes\Android\SDK\ndk\27.1.12297006"
-set "JAVA_HOME=E:\programes\Android\jdk-17.0.17.10-hotspot"
+rem ---------- toolchain discovery ----------
+rem Qt and the Android SDK live under different roots on different machines
+rem (E:\programes on the original workstation, D:\software elsewhere). Probe the known
+rem roots instead of hard-coding one, so the script runs unchanged on every build box.
+rem Everything below is plain ASCII on purpose: cmd.exe parses .bat files in byte
+rem chunks and non-ASCII bytes desynchronise the parser.
+set "QTROOT="
+set "QTV="
+for %%R in ("E:\programes\Qt\Qt" "D:\software\Qt" "C:\Qt") do (
+    if not defined QTV (
+        for %%V in (6.11.3 6.11.1 6.11.2 6.10.0) do (
+            if not defined QTV if exist "%%~R\%%V\android_arm64_v8a\bin\qmake.bat" (
+                set "QTROOT=%%~R"
+                set "QTV=%%V"
+            )
+        )
+    )
+)
+if not defined QTV (
+    echo [error] Qt for Android arm64-v8a not found under the known roots.
+    echo         Edit the probe list at the top of this script.
+    goto :fail
+)
+set "QT_ANDROID=%QTROOT%\%QTV%\android_arm64_v8a"
+set "QT_HOST=%QTROOT%\%QTV%\mingw_64"
+set "CMAKE_DIR=%QTROOT%\Tools\CMake_64\bin"
+set "NINJA_DIR=%QTROOT%\Tools\Ninja"
+
+set "ANDROID_SDK_ROOT="
+for %%R in ("E:\programes\Android\SDK" "D:\software\Android\SDK" "C:\Android\Sdk") do (
+    if not defined ANDROID_SDK_ROOT if exist "%%~R\platform-tools\adb.exe" set "ANDROID_SDK_ROOT=%%~R"
+)
+if not defined ANDROID_SDK_ROOT (
+    echo [error] Android SDK not found under the known roots.
+    goto :fail
+)
+
+rem NDK 27 keeps the same clang/CMake layout across minor revisions; take the newest
+rem one that is actually installed instead of pinning an exact revision.
+set "ANDROID_NDK_ROOT="
+for %%V in (27.2.12479018 27.1.12297006 27.0.12077973) do (
+    if not defined ANDROID_NDK_ROOT if exist "%ANDROID_SDK_ROOT%\ndk\%%V\build\cmake\android.toolchain.cmake" set "ANDROID_NDK_ROOT=%ANDROID_SDK_ROOT%\ndk\%%V"
+)
+if not defined ANDROID_NDK_ROOT (
+    for /d %%D in ("%ANDROID_SDK_ROOT%\ndk\27*") do set "ANDROID_NDK_ROOT=%%~fD"
+)
+if not defined ANDROID_NDK_ROOT (
+    echo [error] Android NDK 27.x not found under %ANDROID_SDK_ROOT%\ndk.
+    goto :fail
+)
+
+set "FOUND_JDK="
+for %%R in ("E:\programes\Android" "D:\software\Android" "C:\Program Files\Java") do (
+    if not defined FOUND_JDK (
+        for /d %%J in ("%%~R\jdk-17*") do set "FOUND_JDK=%%~fJ"
+    )
+)
+if defined FOUND_JDK (
+    set "JAVA_HOME=%FOUND_JDK%"
+) else (
+    echo [warn] JDK 17 not found under the known roots; using the inherited JAVA_HOME.
+)
 set "PATH=%QT_HOST%\bin;%CMAKE_DIR%;%NINJA_DIR%;%JAVA_HOME%\bin;%ANDROID_SDK_ROOT%\platform-tools;%PATH%"
 
 if not exist "%ROOT%\build\android_qt6" mkdir "%ROOT%\build\android_qt6"
@@ -35,8 +90,15 @@ echo [gradle] stopping daemon to release pipe handles
 pushd "%ROOT%\build\android_qt6\android-build" && (call gradlew.bat --stop >nul 2>&1 & popd)
 echo.
 echo [sign] zipalign + apksigner (debug keystore)
-set "BT=%ANDROID_SDK_ROOT%\build-tools\35.0.0"
-if not exist "%BT%\apksigner.bat" set "BT=%ANDROID_SDK_ROOT%\build-tools\37.0.0"
+rem Newest installed build-tools that actually ships apksigner (first hit wins).
+set "BT="
+for %%V in (37.0.0 36.0.0 35.0.0 34.0.0 33.0.1 31.0.0 30.0.3) do (
+    if not defined BT if exist "%ANDROID_SDK_ROOT%\build-tools\%%V\apksigner.bat" set "BT=%ANDROID_SDK_ROOT%\build-tools\%%V"
+)
+if not defined BT (
+    echo [error] Android build-tools with apksigner not found.
+    goto :fail
+)
 rem Fixed signing identity shared with CI (base64 in src/platform/android-qt6).
 rem Generating a fresh random keystore per build makes in-app updates fail with
 rem "same signature already installed" / signature mismatch on the device.

@@ -67,11 +67,30 @@ Item {
     // 只剩 270dp 上下），底部标签栏再吃掉 56dp 就没什么内容区了，把导航挪到左侧
     // 换回高度。竖屏仍用底部标签栏（拇指可达、且高度充裕）。
     readonly property bool sideNav: root.width >= 400 && root.width > root.height * 1.12
-    readonly property int navRailWidth: 76
+    // 竖排导航宽度：手机横屏 76dp 够用，平板/车机（>=900dp）给到 92dp，
+    // 图标和文字都要按设备尺寸放大，否则 12 寸屏上侧栏像一根细线
+    readonly property int navRailWidth: root.width >= 900 ? 92
+                                       : (root.width >= 640 ? 82 : 76)
+    // 横屏手机（高度 < 420dp）内容区只有 300dp 上下，底部两栏必须进一步收薄
+    readonly property bool shortViewport: root.height < 420
 
+    // 兜底色：封面还没解码出来时先铺主题底，避免首帧透明
     Rectangle {
         anchors.fill: parent
         color: cBg
+    }
+
+    // 封面氛围底：铺满整个窗口，包括左侧导航栏与状态栏区域。
+    // 背景归外壳统一负责之后，横屏才不会出现「左边一条白色侧栏、右边是封面」的割裂感
+    // （这正是以前看着像没铺到屏幕左边缘的原因）。页面只负责内容，不再各自画背景。
+    Backdrop {
+        anchors.fill: parent
+        source: app.currentCover.length > 0 ? app.currentCover
+                                            : "qrc:/qml/art/default_cover.jpg"
+        dark: theme.dark
+        // 播放页纱薄一些（要能看出封面色彩），其它页纱厚一些（列表与表单要压得住背景）
+        veil: root.pageIndex === 1 ? 0.62 : 0.90
+        Behavior on veil { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
     }
 
     // 页面区：填满顶部到底部栏之间的区域。不用 ColumnLayout 流式堆叠——Android
@@ -85,6 +104,9 @@ Item {
         anchors.right: parent.right
         anchors.bottom: bottomBar.top
         anchors.leftMargin: root.sideNav ? root.navRailWidth : 0
+        // 兜底裁切：页面自己的 Flickable/ListView 已经裁过，这里再裁一层，
+        // 避免任何页面把内容画到迷你条和标签栏底下（页尾一行字被胶囊压住一半）
+        clip: true
         // index 4 是外壳级 MV 覆盖层，不属于页面栈；钳到 0..3 避免越界
         currentIndex: Math.min(root.pageIndex, 3)
         onCurrentIndexChanged: {
@@ -104,6 +126,9 @@ Item {
         PlayerPage {
             id: playerPageMobile
             showControls: true
+            // 背景已由外壳的 Backdrop 统一铺满整窗，页面内不再重复画一层
+            // （重复画会在侧栏右侧形成一条接缝，且左右两侧封面错位）
+            ownBackdrop: false
             onRequestClose: root.pageIndex = 0
             onRequestSettings: root.pageIndex = 3
             onRequestQueue: root.queueOpen = !root.queueOpen
@@ -119,8 +144,12 @@ Item {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.leftMargin: root.sideNav ? root.navRailWidth : 0
+        // 胶囊上下留白。以前写成 miniBar.topMargin（不存在的属性）→ 表达式得 NaN，
+        // 被 QML 当成 0，底部栏高度恒为 0：页面区一路铺到屏幕底，设置页/曲库页的
+        // 最后一行会被浮动胶囊压住。改成显式常量，两边引用同一个值。
+        readonly property int barPad: 4
         height: (tabBar.visible ? tabBar.height : 0)
-                + (miniBar.visible ? miniBar.height + miniBar.topMargin + miniBar.bottomMargin : 0)
+                + (miniBar.visible ? miniBar.height + barPad * 2 : 0)
 
         // 迷你播放条：贴底浮动胶囊（Alger 风格：圆角、左右留白、圆形封面），位于页面与底部标签栏之间
         Rectangle {
@@ -131,10 +160,12 @@ Item {
             anchors.bottom: tabBar.visible ? tabBar.top : parent.bottom
             anchors.leftMargin: 12
             anchors.rightMargin: 12
-            anchors.topMargin: 4
-            anchors.bottomMargin: 4
-            // 横屏用竖排导航时高度更金贵，胶囊压到 58
-            height: root.sideNav ? 58 : 64
+            anchors.topMargin: bottomBar.barPad
+            anchors.bottomMargin: bottomBar.barPad
+            // 横屏用竖排导航时高度更金贵，胶囊压到 56；横屏手机（矮窗）再收到 48
+            height: root.shortViewport ? 48 : (root.sideNav ? 56 : 64)
+            // 按钮跟胶囊高度联动：48dp 胶囊里塞 48dp 圆钮会把上下边距吃没
+            readonly property int buttonSize: Math.min(theme.touchMin, height - 6)
             radius: 18
             color: cCard
             border.color: cLine
@@ -175,8 +206,8 @@ Item {
                         spacing: 10
 
                         Rectangle {
-                            Layout.preferredWidth: 46
-                            Layout.preferredHeight: 46
+                            Layout.preferredWidth: Math.min(46, miniBar.height - 10)
+                            Layout.preferredHeight: Layout.preferredWidth
                             Layout.alignment: Qt.AlignVCenter
                             radius: width / 2
                             border.width: 3
@@ -240,8 +271,8 @@ Item {
                 }
 
                 Rectangle {
-                    Layout.preferredWidth: theme.touchMin
-                    Layout.preferredHeight: theme.touchMin
+                    Layout.preferredWidth: miniBar.buttonSize
+                    Layout.preferredHeight: miniBar.buttonSize
                     Layout.alignment: Qt.AlignVCenter
                     radius: height / 2
                     gradient: Gradient {
@@ -261,8 +292,8 @@ Item {
                 }
 
                 Rectangle {
-                    Layout.preferredWidth: theme.touchMin
-                    Layout.preferredHeight: theme.touchMin
+                    Layout.preferredWidth: miniBar.buttonSize
+                    Layout.preferredHeight: miniBar.buttonSize
                     Layout.alignment: Qt.AlignVCenter
                     radius: width / 2
                     color: "transparent"
@@ -349,16 +380,11 @@ Item {
         anchors.bottom: parent.bottom
         width: root.sideNav ? root.navRailWidth : 0
         visible: root.sideNav
-        color: cCard
+        // 透明：让外壳的封面氛围底一路铺到屏幕最左边。
+        // 以前这里是 cCard（纯白/纯深），再加一条 1px 分隔线，横屏时左侧就是一块
+        // 明显与内容割裂的白板 —— 换任何背景色都还是「一条板」，只有透明才是真铺满。
+        color: "transparent"
         clip: true
-
-        Rectangle {
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            width: 1
-            color: cLine
-        }
 
         Column {
             id: railColumn

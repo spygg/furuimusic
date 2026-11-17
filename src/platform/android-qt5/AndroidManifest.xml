@@ -28,6 +28,12 @@
             <!-- Application arguments -->
 
             <meta-data android:name="android.app.lib_name" android:value="-- %%INSERT_APP_LIB_NAME%% --"/>
+
+            <!-- 后台不冻结 Qt 事件循环：默认（缺这项）Activity 一进后台 Qt 事件循环就停，
+                 音频线程还在出声但 QTimer / 跨线程信号 / 网络回调全停，表现是「播完一首
+                 不自动下一首」，回到前台才把攒下的信号一次性补跑。
+                 Qt 按 ActivityInfo.metaData 读取（写在 <application> 下无效），值必须是小写 true。 -->
+            <meta-data android:name="android.app.background_running" android:value="true"/>
             <meta-data android:name="android.app.qt_sources_resource_id" android:resource="@array/qt_sources"/>
             <meta-data android:name="android.app.repository" android:value="default"/>
             <meta-data android:name="android.app.qt_libs_resource_id" android:resource="@array/qt_libs"/>

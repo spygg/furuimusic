@@ -11,8 +11,11 @@ Item {
     // 这里压缩页头间距、给结果区保底高度，并给每个结果视图挂可见滚动条；
     // 不套整页 Flickable，避免与 ListView/GridView 形成同向嵌套滚动互抢手势。
     readonly property bool shortViewport: root.height < 620
-    readonly property real pageTop: shortViewport ? 12 : (root.width < 700 ? 16 : 28)
-    readonly property real pageGap: shortViewport ? 8 : 14
+    // 页头留白：竖屏手机给 14（状态栏下方刚好透气），横屏矮窗压到 8。
+    // 之前横竖屏都按 16/28 走，安全区一扣完顶部就只剩一条缝，列表看起来被推下去了。
+    readonly property real pageTop: shortViewport ? (root.height < 420 ? 8 : 12)
+                                                  : (root.width < 700 ? 14 : 24)
+    readonly property real pageGap: shortViewport ? 8 : 12
     readonly property real pageBottom: shortViewport ? 8 : 12
     // 页头两行（搜索行 + 我的歌单/刷新歌单 胶囊行）默认各 48dp，合计近百：
     // 平板横屏/车机矮屏的逻辑高度常常只有 270~450dp，光页头就吃掉一半，
@@ -42,6 +45,14 @@ Item {
     property string discoveryTitle: ""
     // 歌单封面卡片墙 / 列表
     property bool gridView: true
+    // 用户手动点过「卡片 ↔ 列表」后就不再按形态自动切，避免横竖屏来回转时反复覆盖用户选择
+    property bool gridViewByUser: false
+    // 横屏手机内容高度只剩 300dp 上下，封面卡片一格就占满，等于看不见几行
+    readonly property bool shortLandscape: root.height < 460 && root.width > root.height
+    onShortLandscapeChanged: {
+        if (!root.gridViewByUser)
+            root.gridView = !root.shortLandscape
+    }
     // 详情曲目正在从平台接口拉取：此时列表为空不等于「没有歌」，
     // 头部直接显示「0 首」会让人以为榜单是空的
     property bool detailLoading: false
@@ -61,6 +72,14 @@ Item {
     // 避免播放栏压住搜索内容（矮屏/键盘弹出时尤其明显）。输入框持有焦点（键盘开着）
     // 同样算搜索态，与 keyword.onActiveFocusChanged 双向对齐。
     onSearchModeChanged: app.searchActive = root.searchMode || keyword.activeFocus
+    // 软键盘收起（返回键 / 点空白）时若输入框已空，结束搜索态。
+    // 焦点往往还留在输入框上，光靠 onActiveFocusChanged 清不掉，迷你播放条会一直不回来。
+    // 用属性绑定监听输入法可见性（比 Connections target 到 Qt.inputMethod 更稳）。
+    readonly property bool imeVisible: Qt.inputMethod.visible
+    onImeVisibleChanged: {
+        if (!imeVisible && keyword.text.length === 0)
+            app.searchActive = false
+    }
     // 曲库页退到后台/被切走时也要撤销搜索态，否则播放栏一直不回来
     Component.onDestruction: app.searchActive = false
 
@@ -343,7 +362,10 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.gridView = !root.gridView
+                    onClicked: {
+                        root.gridViewByUser = true
+                        root.gridView = !root.gridView
+                    }
                 }
                 ToolTip.visible: gridMa.containsMouse
                 ToolTip.text: root.gridView ? "切换为列表视图" : "切换为封面视图"

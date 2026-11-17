@@ -259,6 +259,15 @@ struct AppController::Impl {
     // 连续「所有音源都换过仍播不出来」的次数：达到队列长度就停下，避免列表循环下
     // 一首首失败歌被自动跳过N后绕回起点、无限重播。某首歌真正开始播放（进度>2s）后清零。
     int consecutiveFailures = 0;
+    // 同一首歌反复「取到直链但播不出来」的次数：脚本音源偶尔返回坏地址（过期/防盗链
+    // /格式不对），会形成 取链→播放失败→再取链 的死循环，屏幕上表现为反复换源但一直没声。
+    // 同一首连续 3 次就放弃并跳下一首，把决定权交回队列。
+    QString guardSongUid;
+    int guardSongTries = 0;
+    // 脚本音源刚取到链、尚未确认能播的（engineId, platformKey）。进度走过 2 秒补记成功，
+    // 播放报错记重度失败 —— 「取到地址」和「能播出声音」是两件事，成绩表只认后者。
+    QString pendingEngine;
+    QString pendingKey;
     // 推荐请求在途：连点下一首时只允许有一个 /luna/track/related 请求
     bool recommendPending = false;
     // 曲库页搜索框是否有内容：外壳据此隐藏播放栏，给搜索结果/软键盘让位
@@ -312,6 +321,20 @@ AppController::AppController(QObject *parent)
         // 不会因为前面跳过几首而在后面误停。
         if (d->consecutiveFailures > 0 && player->position() > 2000)
             d->consecutiveFailures = 0;
+        // 真的播起来了 → 这首歌不是坏歌。同一次会话里反复播放同一首歌不该被
+        // 「连续失败 3 次」的闸门误伤（早先的计数在进 resolveAndPlay 时就 +1，
+        // 手动重播四次就会被判成坏歌）。
+        if (d->guardSongTries > 0 && player->position() > 2000)
+            d->guardSongTries = 0;
+        // 进度走过 2 秒 = 这条直链真的能播：给提供它的「脚本 × 平台」补记成功分
+        if (!d->pendingEngine.isEmpty() && player->position() > 2000) {
+            ScriptSourceManager::instance()->reportResult(d->pendingEngine, d->pendingKey, true, 2);
+            ScriptSourceManager::instance()->promoteSource(d->pendingEngine);
+            qInfo().noquote() << QStringLiteral("[换源] 确认可播放，加分并置顶：%1 [%2]")
+                                     .arg(d->pendingEngine, d->pendingKey);
+            d->pendingEngine.clear();
+            d->pendingKey.clear();
+        }
         emit positionChanged();
     });
     connect(player, &PlayerController::volumeChanged, this, [this] { emit volumeChanged(); });
@@ -521,6 +544,8 @@ QString AppController::quality() const { return d->quality; }
 bool AppController::vipSubstituteEnabled() const { return d->vipSubstitute; }
 bool AppController::autoToggleSource() const
 { return Settings::boolean(QStringLiteral("autoToggleSource"), true); }
+QString AppController::sourceFirstOrder() const
+{ return Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip")); }
 bool AppController::qishuiRoam() const
 { return Settings::boolean(QStringLiteral("qishuiRoam"), false); }
 bool AppController::keepScreenOn() const
@@ -854,10 +879,30 @@ void AppController::refreshAccounts() { syncAccountModel(); }
 void AppController::resolveAndPlay(const Song &song)
 {
     if (song.title.isEmpty()) return;
+    // 死循环闸门：同一首歌已经连续三次「取到链但播不出来」，再换源只是把同一件事重做一遍。
+    // 计数只在真的失败时 +1（见 autoAdvanceAfterFailure），播起来就清零；
+    // 不能在进函数时 +1 —— 那样同一首歌手动重播四次就会被误判成坏歌。
+    const QString guardUid = song.uid.isEmpty()
+            ? song.title + QLatin1Char('|') + song.artist : song.uid;
+    if (guardUid != d->guardSongUid) {
+        d->guardSongUid = guardUid;
+        d->guardSongTries = 0;
+    }
+    if (d->guardSongTries >= 3) {
+        qWarning().noquote() << QStringLiteral("同一首歌连续 %1 次取链后仍无法播放，跳过：%2 - %3")
+                                    .arg(d->guardSongTries).arg(song.title, song.artist);
+        d->guardSongTries = 0;
+        d->guardSongUid.clear();
+        autoAdvanceAfterFailure(song.title + QLatin1String(" - ") + song.artist,
+                                QStringLiteral("该歌曲的音源地址无法播放"), QStringLiteral("播放失败"));
+        return;
+    }
     // 开始一首新歌：先停掉上一首。取链是异步的（多源轮询 + 失败换源），这一小段
     // 如果不停，上一首会继续响，用户看到的就是「点了下一首、界面已经切了，声音
     // 还是老歌」；停住后新直链回来再 playUrl，宁可短暂静音也不留旧歌的尾音。
-    PlayerController::instance()->stop();
+    // beginSwitch 额外标记「正在切换」：这段空窗期里收到的播放命令（用户点播放、
+    // 通知栏/车机送来的 play）一律忽略，否则会拿上一首的旧地址从头再放一遍。
+    PlayerController::instance()->beginSwitch();
     // 重置播放失败的换源状态，记录当前歌（供失败换源复用）。
     d->currentSong = song;
     d->triedFallback.clear();
@@ -898,8 +943,13 @@ void AppController::resolveAndPlay(const Song &song)
         }
         d->lastResolvedUrl = p.url.toString();
         d->lastPlayableHeaders = p.headers;
+        d->pendingEngine = p.engineId;
+        d->pendingKey = p.platformKey;
+        // 非 VIP 歌走「全部自定义」时也被标了 substituted，但写「VIP 替代」会误导：
+        // 直接用它自己的来源名（脚本层已带「在线音源 · 」前缀）
         d->substituteBadge = p.substituted
-                ? QStringLiteral("VIP 替代 · %1").arg(p.substituteSource)
+                ? (song.vip ? QStringLiteral("VIP 替代 · %1").arg(p.substituteSource)
+                            : p.substituteSource)
                 : (song.vip ? QStringLiteral("VIP") : QString());
         d->currentSourceLabel = SourceConfig::instance()->nameOf(song.source);
         // 原平台取链成功：把成功源置顶，让后续换源优先尝试它（"成功源放到第一位"）。
@@ -921,6 +971,19 @@ void AppController::onPlayerError(const QString &msg)
     // QMediaPlayer 的错误原文（"Error transferring http://... - server replied ..."）
     // 又长又没信息量：状态栏留给排查，提示只保留一句，免得糊满屏幕
     const QString brief = QStringLiteral("播放失败");
+    // 这条直链是脚本音源给的却没播出来：重度扣分（-4），让它尽快跌出优先位置。
+    // 不这么做的话「取到地址就 +2」会把返回坏地址的源越推越前，形成死循环。
+    if (!d->pendingEngine.isEmpty()) {
+        ScriptSourceManager::instance()->reportResult(d->pendingEngine, d->pendingKey, false, -4);
+        // 记进「本首坏候选」：下次取链直接跳过它，把这一轮让给下一个音源
+        ScriptSourceManager::instance()->notePlaybackFailure(
+            d->pendingEngine, d->pendingKey,
+            song.title + QLatin1Char('|') + song.artist);
+        qWarning().noquote() << QStringLiteral("[换源] 直链播不出来，扣分：%1 [%2]")
+                                    .arg(d->pendingEngine, d->pendingKey);
+        d->pendingEngine.clear();
+        d->pendingKey.clear();
+    }
     Logger::write(QStringLiteral("W"),
                   QStringLiteral("播放失败：%1 - %2（%3）").arg(song.title, song.artist, msg));
     if (song.title.isEmpty() || d->inFallback) {
@@ -934,19 +997,32 @@ void AppController::onPlayerError(const QString &msg)
     const quint64 gen = ++d->fallbackGen;
     // 跳过：原平台（它已失败）+ 本次换源流程里已经试过的候选源。
     const QStringList exclude = QStringList() << song.source << d->triedFallback.values();
+    qWarning().noquote() << QStringLiteral("[换源] 播放出错，开始换源：%1 - %2（源=%3 inFallback=%4 已试=%5）")
+                                .arg(song.title, song.artist, song.source)
+                                .arg(d->inFallback ? 1 : 0)
+                                .arg(d->triedFallback.values().join(QStringLiteral(",")));
     SourceManager::instance()->resolveAlternate(song, exclude, d->quality,
         [this, gen, msg, song, brief](const Playable &r) {
             if (gen != d->fallbackGen) return;     // 期间用户已切到别的歌，丢弃迟到结果
             if (r.ok) {
                 d->consecutiveFailures = 0;        // 换源后能播了，失败链结束
-                d->triedFallback.insert(r.source);
+                // custom 不能在这里记「已试」：脚本层内部有十几个候选，这一条播不出来
+                // 还要继续试下一个；真正去重由 ScriptSource 的坏候选名单负责。
+                // 内置平台没有候选链，试过就不再试。
+                if (r.source != QLatin1String("custom"))
+                    d->triedFallback.insert(r.source);
                 // 成功源置顶：custom 永远最前，内置平台按序排到第一。
                 SourceManager::instance()->promoteSource(r.source);
-                d->substituteBadge = r.substituted ? r.substituteSource
-                                                  : (song.vip ? QStringLiteral("VIP") : QString());
+                d->substituteBadge = r.substituted
+                        ? (song.vip ? QStringLiteral("VIP 替代 · %1").arg(r.substituteSource)
+                                    : r.substituteSource)
+                        : (song.vip ? QStringLiteral("VIP") : QString());
                 d->currentSourceLabel = SourceConfig::instance()->nameOf(song.source)
                         + (r.source == QLatin1String("custom")
                                ? QString() : QStringLiteral(" → %1").arg(r.substituteSource));
+                // 换源（含脚本层多候选）成功后同样要记提供者：真的播出来才补记成功分
+                d->pendingEngine = r.engineId;
+                d->pendingKey = r.platformKey;
                 // 放开 inFallback：若本次换源播放仍失败，errorOccurred 会再次进来试下一源；
                 // 试过的源已记入 triedFallback，不会重复，也不会死循环。
                 d->inFallback = false;
@@ -977,6 +1053,9 @@ void AppController::autoAdvanceAfterFailure(const QString &songLabel, const QStr
     // 就会由 positionChanged 把计数清零。
     PlayerController *p = PlayerController::instance();
     const int queueSize = p->queue().size();
+    // 这一首彻底放不出来（所有音源都试完了）：给「同曲闸门」计一笔，
+    // 攒到 3 次说明不是偶发网络抖动，再点它就别再耗一整轮取链。
+    ++d->guardSongTries;
     if (++d->consecutiveFailures < queueSize) {
         qWarning().noquote() << QStringLiteral("所有音源播放失败，自动跳到下一首：%1（连续失败 %2）")
                                 .arg(songLabel).arg(d->consecutiveFailures);
@@ -988,6 +1067,8 @@ void AppController::autoAdvanceAfterFailure(const QString &songLabel, const QStr
     }
     // 已经把队列里的歌都跳了一遍还全失败：停下并提示，避免无限循环。
     d->consecutiveFailures = 0;
+    // 明确收尾：清掉「正在切换」标记，否则播放按钮会一直处于被忽略状态
+    p->stop();
     setStatus(msg);
     emit toast(brief);
 }

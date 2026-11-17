@@ -25,6 +25,10 @@ public:
     void playUrl(const QUrl &url, const QVariantMap &headers = QVariantMap());
     void togglePause();
     void stop();
+    // 切歌取链的空窗期专用：先停掉旧流并标记「正在切换」。
+    // 这段时间里任何播放命令（用户点播放、车机/通知栏送来的 play）都必须被忽略，
+    // 否则 m_currentUrl 还指着上一首，play() 会把刚播完的那首从头再放一遍。
+    void beginSwitch();
     void next();
     void previous();
     // 队列推进（不做推荐）：AppController 取到推荐歌并插入队列后调用，
@@ -102,6 +106,10 @@ private:
     void advance(bool allowRecommend);
     void updateLyric(qint64 pos);
     void emitRequest(int index);
+    // 位置已到结尾（或已判定播完）：在线流在 EOF 处常报 "Internal error / Failed to read"，
+    // 那不是故障，按正常播完处理，否则上层会把刚播完的这首重新取链再放一遍。
+    bool atTrackEnd() const;
+    void finishAsEnded();
     // Qt 6 无法给 QMediaPlayer 注入请求头：防盗链直链在直连失败后，
     // 带 headers 流式下载到缓存再播放本地文件。
     void fetchWithHeaders();
@@ -132,6 +140,10 @@ private:
     // 新歌加载完成前（m_suppressEnd）忽略旧曲残留的结束信号。
     bool m_advancing = false;
     bool m_suppressEnd = false;
+    // 已播到结尾：此后「播放」在语义上是「下一首」，而不是把这首从头再放一遍。
+    bool m_ended = false;
+    // 正在切歌取链：旧源已停止但新地址还没到，期间的播放命令一律忽略。
+    bool m_switching = false;
     QTimer *m_saveTimer = nullptr;
     // 播放看门狗：部分后端（尤其 Android MediaPlayer）在线流播完/出错时既不派发
     // EndOfMedia 也不派发 errorOccurred，表现为「播完一首停住」或「失败卡住不换源」。

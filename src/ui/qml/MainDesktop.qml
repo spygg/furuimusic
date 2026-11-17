@@ -109,7 +109,9 @@ Item {
             // 省下的横向空间全部给内容区；宽屏桌面仍显示图标 + 文案
             Rectangle {
                 id: rail
-                readonly property bool compactNav: root.width < 1100
+                // 车机矮宽屏（1920x720 这类）宽度够但高度只有 480dp 上下，
+                // 只按宽度判会把 200dp 的侧栏留在那儿，正文区高度更吃紧
+                readonly property bool compactNav: root.width < 1100 || root.height < 560
                 // 车机/横屏平板高度紧张时（窗口不足 560dp）进一步压缩行高与间距，
                 // 让 5 个导航项 + 底部状态点都留在视口内，不必滚动
                 readonly property bool denseNav: root.height < 560

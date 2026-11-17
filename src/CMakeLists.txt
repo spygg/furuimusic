@@ -166,6 +166,7 @@ set(UI_FILES
     ui/qml/TitleBar.qml
     ui/qml/ResizeHandle.qml
     ui/qml/GlyphIcon.qml
+    ui/qml/Backdrop.qml
     ui/qml/MainMobile.qml
     ui/qml/LibraryPage.qml
     ui/qml/LoginPage.qml

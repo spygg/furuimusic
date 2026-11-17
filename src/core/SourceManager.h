@@ -1,6 +1,7 @@
 #pragma once
 // 福瑞音乐 - 多平台聚合 + VIP 音源替代链
 #include <QObject>
+#include <QSet>
 #include <QVector>
 #include <functional>
 
@@ -53,6 +54,11 @@ private:
     void tryCrossSource(const Song &song, const QString &quality, const Playable &original,
                         PlayableCallback cb);
     static qreal candidateScore(const Song &target, const Song &candidate);
+    // 平台已经明确说过「这首要会员 / 没版权」的歌，本会话内记住：
+    // 下次同一首直接跳过原平台直链，省掉一次注定失败的请求。
+    void noteNeedsSubstitute(const Song &song);
+    bool isKnownUnplayable(const Song &song) const;
+    QSet<QString> m_knownUnplayable;
     QVector<MusicSource *> m_sources;
     // 音源优先级（内置平台 id 顺序）；custom 永远排在最前，不在本表里。
     // 由 promoteSource 在成功播放后置顶，并持久化到 Settings，跨重启保持"成功源第一位"。

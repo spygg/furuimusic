@@ -4,16 +4,90 @@
 #include "core/QtCompat.h"
 
 #include <QGuiApplication>
+#include <QInputMethod>
 #include <QMargins>
 #include <QPointer>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QScreen>
 #include <QTimer>
 #include <cmath> // std::hypot：Qt 5.15 没有 qHypot（Qt 6 才加）
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QCoreApplication>   // QNativeInterface::QAndroidApplication（Android 上随它引入）
+#include <QJniObject>
+#endif
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QInputDevice>
 #else
 #include <QTouchDevice>
+#endif
+
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+namespace {
+
+// Android 安全区：直接问 DecorView 的 rootWindowInsets。
+//
+// 为什么不用 Qt 的 QWindow::safeAreaMargins()：Qt 6.11 在「刘海 + 状态栏」同时存在的
+// 机型上会把两者相加（实测 141px 状态栏 + 141px 挖孔 = 282px），竖屏顶部因此多留了
+// 整整一个状态栏的高度（80dp 而不是 40dp）；横屏旋转后又把同样的值同时塞进 left 和
+// top，左侧轨道被推到屏幕中间 —— 就是「顶部/左侧空白太大」的直接原因。
+// WindowInsets 是窗口坐标、随旋转实时更新，也自动处理分屏（窗口不在屏幕顶端时 top=0）。
+struct AndroidInsets {
+    qreal left = 0, top = 0, right = 0, bottom = 0;
+    bool valid = false;
+};
+
+AndroidInsets queryAndroidInsets(qreal devicePixelRatio)
+{
+    AndroidInsets out;
+    QJniObject activity = QNativeInterface::QAndroidApplication::context();
+    if (!activity.isValid())
+        return out;
+    QJniObject window = activity.callObjectMethod("getWindow", "()Landroid/view/Window;");
+    if (!window.isValid())
+        return out;
+    QJniObject decor = window.callObjectMethod("getDecorView", "()Landroid/view/View;");
+    if (!decor.isValid())
+        return out;
+    // 窗口刚创建、还没 attach 到窗口管理器时返回 null，调用方会稍后重试
+    QJniObject insets = decor.callObjectMethod("getRootWindowInsets",
+                                               "()Landroid/view/WindowInsets;");
+    if (!insets.isValid())
+        return out;
+
+    jint l = 0, t = 0, r = 0, b = 0;
+    if (QNativeInterface::QAndroidApplication::sdkVersion() >= 30) {
+        // Type.systemBars()(1) | Type.displayCutout()(128)：并集按「每边取最大」合并，
+        // 正好是我们需要的「系统栏或挖孔压到的范围」，不会像相加那样翻倍
+        QJniObject gi = insets.callObjectMethod("getInsets", "(I)Landroid/graphics/Insets;",
+                                                jint(1 | 128));
+        if (gi.isValid()) {
+            l = gi.getField<jint>("left");
+            t = gi.getField<jint>("top");
+            r = gi.getField<jint>("right");
+            b = gi.getField<jint>("bottom");
+        }
+    }
+    if (l == 0 && t == 0 && r == 0 && b == 0) {
+        // Android 10 及更早只有这组（已废弃但仍在）的逐边接口
+        l = insets.callMethod<jint>("getSystemWindowInsetLeft");
+        t = insets.callMethod<jint>("getSystemWindowInsetTop");
+        r = insets.callMethod<jint>("getSystemWindowInsetRight");
+        b = insets.callMethod<jint>("getSystemWindowInsetBottom");
+    }
+    if (l == 0 && t == 0 && r == 0 && b == 0)
+        return out;
+
+    const qreal dpr = devicePixelRatio > 0 ? devicePixelRatio : 1.0;
+    out.left = l / dpr;
+    out.top = t / dpr;
+    out.right = r / dpr;
+    out.bottom = b / dpr;
+    out.valid = true;
+    return out;
+}
+
+} // namespace
 #endif
 
 namespace Furui {
@@ -27,6 +101,20 @@ PlatformAdapter::PlatformAdapter(QObject *parent) : QObject(parent)
         emit touchPrimaryChanged();
         emit formFactorChanged();
     });
+
+    // 软键盘显隐会改变「底部安全区是否要计入」（见 refreshInsets 的去重逻辑），
+    // 而输入法状态变化不一定伴随窗口尺寸变化（部分机型的 adjustResize 时机更晚），
+    // 这里直接跟着输入法信号重算一次，键盘一弹出就把正确边距交给 QML。
+    if (QInputMethod *ime = QGuiApplication::inputMethod()) {
+        connect(ime, &QInputMethod::visibleChanged, this, [this] {
+            if (m_safeAreaWindow)
+                refreshInsets(m_safeAreaWindow);
+        });
+        connect(ime, &QInputMethod::keyboardRectangleChanged, this, [this] {
+            if (m_safeAreaWindow)
+                refreshInsets(m_safeAreaWindow);
+        });
+    }
 }
 
 bool PlatformAdapter::isMobile() const
@@ -157,18 +245,47 @@ void PlatformAdapter::closeWindow(QQuickWindow *window)
 void PlatformAdapter::refreshInsets(QQuickWindow *window)
 {
     qreal l = 0, t = 0, r = 0, b = 0;
+    bool fromPlatform = false;
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // ---- Android：Qt Quick 已经替我们做好了，这里不再叠一层 ----
+    // Qt 6.11 的 Qt Quick 内置 QQuickSafeArea，会把内容区摆到状态栏/挖孔下沿并相应缩小
+    // （实测竖屏窗口仍是 363x792，但 QML 原点在屏幕 y=40dp，场景实际可用 363x752）。
+    // 此时如果 QML 再按系统 insets 内缩一次，就是「一笔边距扣两遍」：竖屏顶部多出整整
+    // 一个状态栏的空白（本次 2.0 之前的表现），横屏左侧同理。
+    // 老版本 Qt（5.x / 6.9 之前）的 Android 端口同样把 surface 摆在系统栏下方，结论一致。
+    //
+    // 所以这里只用 JNI 取一次系统 insets 做日志（现场核对机型差异用），不下发边距；
+    // 真要做全屏沉浸（内容画进挖孔区）时，再从这里把「Qt 已让出」的差额补回来。
+    if (window) {
+        const AndroidInsets ai = queryAndroidInsets(window->devicePixelRatio());
+        if (ai.valid) {
+            m_lastOsLeft = ai.left;
+            m_lastOsTop = ai.top;
+            fromPlatform = true;
+            m_insetRetries = 0;
+        } else if (m_insetRetries < 6) {
+            ++m_insetRetries;
+            QPointer<QQuickWindow> guard(window);
+            QTimer::singleShot(220, this, [this, guard] {
+                if (guard)
+                    refreshInsets(guard);
+            });
+        }
+    }
+#endif
 #if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
     // Android 15 起 targetSdk 35 的应用被强制 edge-to-edge：窗口与屏幕可用区都是整屏，
     // 下面「窗口几何 - availableGeometry」恒为 0，状态栏就会压到界面上。
     // Qt 6.9+ 的 safeAreaMargins() 由平台直接上报系统栏/刘海占位（已转设备无关像素，
     // 且扣除了窗口自身偏移），窗口本来就没铺到系统栏时它返回 0，不会二次留白。
-    if (window) {
+    if (!fromPlatform && window) {
         const QMargins safe = window->safeAreaMargins();
         if (!safe.isNull()) {
             l = qMax(0, safe.left());
             t = qMax(0, safe.top());
             r = qMax(0, safe.right());
             b = qMax(0, safe.bottom());
+            fromPlatform = !safe.isNull();
         }
         // 安全区是异步上报的（旋转、系统栏显隐都会变），只在尺寸变化时刷新会漏掉。
         // 每个窗口只接一次；QPointer 防止窗口销毁后回调野指针。
@@ -186,7 +303,7 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
     // QWindow::geometry() 和 QScreen 的几何都是设备无关像素，直接同单位相减。
     // 早先在这里把窗口乘了 dpr（以为 QScreen 是物理像素），dpr=2 的手机上右/下安全区
     // 被算成屏幕的一半，Loader 内缩后整个界面只剩左上 1/4。
-    if (l == 0 && t == 0 && r == 0 && b == 0 && window && window->screen()) {
+    if (!fromPlatform && l == 0 && t == 0 && r == 0 && b == 0 && window && window->screen()) {
         // 只在「窗口铺屏」时计算：桌面浮窗被拖到任务栏上时也确实压到了可用区外，
         // 但那种情况该让用户移动窗口，而不是界面凭空缩进去一条
         const bool fillsScreen = isMobile() || window->visibility() == QWindow::Maximized
@@ -203,9 +320,59 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
         }
     }
 
+    // ---- 软键盘与安全区去重（仅 Android）----
+    // adjustResize 已经把键盘占掉的高度从窗口里扣掉了，此时窗口只剩键盘上方的可见区。
+    // 但 Qt 6.9+ 的 safeAreaMargins() 在部分机型上还会把 IME 一并算进 bottom，
+    // 两边叠加等于「扣两次」：窗口 527dp 再减掉 265dp 键盘，内容区只剩一百多 dp，
+    // 表现就是曲库页一点搜索框，页头和底部标签栏被挤成顶部薄薄一条、下面一片空白。
+    // 键盘可见时底部安全区没有意义（那块空间已被键盘盖住），直接清零；收起后按系统栏重算。
+    const QInputMethod *ime = QGuiApplication::inputMethod();
+    const bool imeVisible = ime && ime->isVisible();
+#if defined(Q_OS_ANDROID)
+    if (imeVisible)
+        b = 0;
+#endif
+
+    // ---- 兜底：安全区不可能占掉那么多 ----
+    // Android 上「adjustResize 已压缩窗口」与「平台上报 IME/系统栏安全区」叠加时，实测会
+    // 算出把窗口大半都算成边距的离谱值（曲库页一点搜索框，页头与底部标签栏被压成顶部
+    // 扁扁一条，下面一片空白）。真实系统栏最厚也就 60dp 上下，上下加起来超过窗口高度
+    // 40% 一定是有误 —— 此时整组丢弃，让内容直接铺满窗口（键盘本身已经把窗口压小了）。
+    if (window && window->height() > 0 && t + b > window->height() * 0.4) {
+        qWarning("insets: 上下边距异常（%.0f+%.0f / 窗口高 %.0f dp），丢弃安全区",
+                 t, b, window->height());
+        l = t = r = b = 0;
+    }
+    if (window && window->width() > 0 && l + r > window->width() * 0.4) {
+        qWarning("insets: 左右边距异常（%.0f+%.0f / 窗口宽 %.0f dp），丢弃安全区",
+                 l, r, window->width());
+        l = t = r = b = 0;
+    }
+
+    // 窗口几何变化（旋转、分屏、键盘）单独留一行，和安全区值分开看，
+    // 便于判断「留白是系统栏占的」还是「Qt 自己把窗口挪下去了」
+    if (window && window->geometry() != m_lastGeom) {
+        m_lastGeom = window->geometry();
+        const QRect scr = window->screen() ? window->screen()->geometry() : QRect();
+        QQuickItem *c = window->contentItem();
+        qInfo("geom: win=%d,%d %dx%d screen=%dx%d dpr=%.2f content=%d,%d %dx%d",
+              window->x(), window->y(), window->width(), window->height(),
+              scr.width(), scr.height(), window->devicePixelRatio(),
+              c ? int(c->x()) : -1, c ? int(c->y()) : -1,
+              c ? int(c->width()) : -1, c ? int(c->height()) : -1);
+    }
     if (qFuzzyCompare(l, m_insetLeft) && qFuzzyCompare(t, m_insetTop)
         && qFuzzyCompare(r, m_insetRight) && qFuzzyCompare(b, m_insetBottom))
         return;
+    // 每次安全区变化都留一行：现场排查「界面被挤到顶部 / 留白太大」时，
+    // 一眼能看出是窗口被压扁、系统栏占位，还是两套算法给出了不同答案
+    qInfo("insets: win=%dx%d at %d,%d os=%d,%d ime=%d src=%s -> %d,%d,%d,%d",
+          window ? int(window->width()) : -1, window ? int(window->height()) : -1,
+          window ? window->x() : -1, window ? int(window->y()) : -1,
+          int(m_lastOsLeft), int(m_lastOsTop),
+          int(imeVisible),
+          fromPlatform ? "os" : "fallback",
+          int(l), int(t), int(r), int(b));
     m_insetLeft = l;
     m_insetTop = t;
     m_insetRight = r;

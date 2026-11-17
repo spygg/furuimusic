@@ -3,6 +3,7 @@
 // 只暴露“平台是什么、目录在哪、能力是否具备”，页面不写平台条件编译。
 #include <QObject>
 #include <QPointer>
+#include <QRect>
 #include <QString>
 #include <QUrl>
 
@@ -125,6 +126,13 @@ private:
     // 已接上 safeAreaMarginsChanged 的窗口：Qt 的 UniqueConnection 不支持 lambda，
     // 这里自己记一个，避免每次 refreshInsets 重复 connect
     QPointer<QQuickWindow> m_safeAreaWindow;
+    // Android 上 getRootWindowInsets() 在窗口 attach 之前返回 null，做有限次短延迟重试
+    int m_insetRetries = 0;
+    // 最近一次系统上报的原始 insets（扣掉 Qt 已让出的部分之前），只用于日志排查
+    qreal m_lastOsLeft = 0;
+    qreal m_lastOsTop = 0;
+    // 窗口矩形变化时打一行几何日志（旋转/分屏/上下分屏切换时定位问题用）
+    QRect m_lastGeom;
 };
 
 } // namespace Furui

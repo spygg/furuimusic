@@ -1,6 +1,7 @@
 #include "core/QtCompat.h"
 #include "CustomSource.h"
 
+#include <QDebug>
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
@@ -20,11 +21,14 @@ static void tryScriptSources(const Song &song, const QString &quality,
                              CustomSourceManager::PlayableCallback cb)
 {
     // 兜底交给在线 LX 脚本音源（用户导入或从仓库自动发现的）
+    qInfo().noquote() << QStringLiteral("[换源] 交给在线音源脚本层：%1 - %2")
+                             .arg(song.title, song.artist);
     ScriptSourceManager::instance()->resolve(song, quality, [cb](const Playable &p) {
         if (p.ok) {
             if (cb) cb(p);
             return;
         }
+        qWarning().noquote() << QStringLiteral("[换源] 脚本层最终失败：%1").arg(p.message);
         Playable fail;
         // 之前把脚本侧的具体原因吞掉了，界面只会显示「未找到替代音频」，
         // 用户分不清是没导入音源、音源初始化失败还是服务端 404。这里原样透传。
@@ -127,6 +131,8 @@ static QVariantMap songVarsFor(const Song &s, const QString &quality)
 
 void CustomSourceManager::resolve(const Song &song, const QString &quality, PlayableCallback cb)
 {
+    qInfo().noquote() << QStringLiteral("[换源] 自定义音源 %1 个，开始替代：%2 - %3")
+                             .arg(int(m_items.size())).arg(song.title, song.artist);
     if (m_items.isEmpty()) {
         tryScriptSources(song, quality, cb);
         return;
@@ -143,6 +149,8 @@ void CustomSourceManager::resolveAt(int index, const Song &song, const QString &
     }
     const Item item = m_items.at(index);
     if (!item.enabled) { resolveAt(index + 1, song, quality, cb); return; }
+    qInfo().noquote() << QStringLiteral("[换源] 自定义音源 #%1 %2（%3）")
+                             .arg(index).arg(item.name, item.type);
 
     if (item.type == QLatin1String("local")) {
         scanLocal();

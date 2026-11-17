@@ -51,6 +51,15 @@ public:
     // 动态权重：成功取链的源置顶，失败的源后移一位（顺序持久化到 scriptSourceOrder）。
     void promoteSource(const QString &id);
     void demoteSource(const QString &id);
+    // 每个「脚本 × 平台」的取链成绩。全局顺序只能回答「哪个脚本整体更好」，
+    // 而实际失效往往是「某脚本的 wy 接口挂了、kg 还正常」——所以候选排序先看
+    // 该平台上的历史成功率，全局顺序只当同分时的次序。跨重启持久化（scriptSourceScore）。
+    int scoreOf(const QString &id, const QString &lxKey) const;
+    void reportResult(const QString &id, const QString &lxKey, bool ok, int weight = 0);
+    // 播放器判定「这个候选给的直链播不出来」（不是取链失败，是取到了却打不开）。
+    // 同一首歌下次取链时直接跳过它：否则每轮都从成绩最高的那个重来，用户点一首
+    // VIP 歌要等它把同一个坏源撞三遍才开始试第二个。
+    void notePlaybackFailure(const QString &id, const QString &lxKey, const QString &songKey);
 
     // 聚合入口
     void search(const QString &keyword, int limit, SongsCallback cb);
@@ -107,6 +116,9 @@ private:
     int rankOf(const QString &id) const;
     QStringList orderedIds() const;      // 按权重排好序的音源 id
     void saveOrder();
+    // 「脚本 × 平台」成绩表：key = "<scriptId>|<lxKey>"，值域 -6..+12
+    void loadScores();
+    void saveScores();
     void persist(const Item &item);
     Item *find(const QString &id);
     void ensureEngine(const QString &id, std::function<void(bool)> cb);
@@ -122,6 +134,12 @@ private:
     QHash<QString, Item> m_items;
     // 音源使用顺序（权重从高到低）：取链成功置顶、失败后移一位
     QStringList m_order;
+    // 成绩表：key "<scriptId>|<lxKey>"（脚本级汇总用 "<scriptId>|*"）
+    QHash<QString, int> m_score;
+    // 播放器已经证明「给的直链打不开」的候选：key "<songKey>|<scriptId>|<lxKey>"。
+    // 只对当前这首歌有效，换歌即清空（同一源对另一首歌可能完全正常）。
+    QSet<QString> m_badPlayback;
+    QString m_badPlaybackSong;
     QHash<QString, QPointer<ScriptEngine>> m_engines;
     QHash<QString, QVector<std::function<void(bool)>>> m_waiters;
     QSet<QString> m_starting;

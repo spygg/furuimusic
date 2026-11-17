@@ -114,8 +114,8 @@ CONFIG(legacy_widgets) {
 } else {
     # 统一 QML 前端：桌面与 Android 共用同一入口和资源
     TARGET = FuruiMusic
-    HEADERS += ui/PlatformAdapter.h ui/ThemeManager.h ui/GlyphImageProvider.h
-    SOURCES += ui/main.cpp ui/PlatformAdapter.cpp ui/ThemeManager.cpp ui/GlyphImageProvider.cpp
+    HEADERS += ui/PlatformAdapter.h ui/ThemeManager.h ui/GlyphImageProvider.h ui/AndroidMediaSession.h
+    SOURCES += ui/main.cpp ui/PlatformAdapter.cpp ui/ThemeManager.cpp ui/GlyphImageProvider.cpp ui/AndroidMediaSession.cpp
     RESOURCES += ui/qml.qrc ui/icons/icons.qrc
 
     # Qt5 自编译 FFmpeg 播放后端：src/scripts/build_ffmpeg_desktop.bat 产出
@@ -151,6 +151,7 @@ CONFIG(legacy_widgets) {
         ui/qml/TitleBar.qml \
         ui/qml/ResizeHandle.qml \
         ui/qml/GlyphIcon.qml \
+        ui/qml/Backdrop.qml \
         ui/qml/LibraryPage.qml \
         ui/qml/LoginPage.qml \
         ui/qml/CaptchaField.qml \

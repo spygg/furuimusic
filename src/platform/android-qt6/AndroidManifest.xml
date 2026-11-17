@@ -33,6 +33,14 @@
         android:allowBackup="true"
         android:resizeableActivity="true"
         android:fullBackupOnly="false">
+        <!-- 后台播放的关键开关：Qt for Android 默认把 android.app.background_running 当 false，
+             会导出 QT_BLOCK_EVENT_LOOPS_WHEN_SUSPENDED=1 —— Activity 一进后台就冻结 Qt 事件
+             循环。音频解码线程照旧出声，但 QTimer / 跨线程信号 / 网络回调全部停摆，实测表现
+             就是「切到后台后播完一首不自动下一首」，回到前台才把攒下的信号一次性补跑。
+             置 true 后事件循环在后台继续跑；Qt 在窗口不可见时本来就不渲染，无需额外处理。 -->
+        <meta-data
+            android:name="android.app.background_running"
+            android:value="true" />
         <!-- configChanges 里没有 multiWindow 这一位（AAPT 实测直接报错，构建失败）：
              分屏/折叠的尺寸变化由 screenSize|smallestScreenSize|screenLayout|orientation|density
              这几位接住，Activity 不重建，播放状态与页面位置保住 -->
@@ -57,6 +65,13 @@
           <meta-data
                 android:name="android.app.arguments"
                 android:value="-- %%INSERT_APP_ARGUMENTS%% --" />
+
+          <!-- 后台不冻结事件循环（见上面 <application> 里的说明）。
+               Qt 6.11 的 QtLoader 是按 ComponentInfo（ActivityInfo）读元数据的，
+               只写在 <application> 下拿不到，实测 env 仍是 1；两处都写才稳妥。 -->
+          <meta-data
+                android:name="android.app.background_running"
+                android:value="true" />
         </activity>
 
         <!-- 播放前台服务：常驻媒体通知 + MediaSession，供通知栏/锁屏/耳机/车机控制。

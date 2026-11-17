@@ -73,6 +73,10 @@ struct Playable {
     QString message;            // 给 UI 的提示（如"VIP 歌曲，已由本地音源替代"）
     QString reason;             // 内部原因标记：vip / unavailable / empty
     QVariantMap headers;        // 播放时附带的请求头
+    // 该直链由哪个「脚本音源 + 平台」提供（内置平台的为空）。AppController 用它把
+    // 「真的播出来了」回写到成绩表 —— 只靠「取到地址」记分会让坏源长期霸榜。
+    QString engineId;
+    QString platformKey;
 };
 
 struct LyricLine {

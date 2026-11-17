@@ -13,12 +13,52 @@ rem bin_qt5 per version, never overwriting each other.
 setlocal
 set "ROOT=%~dp0..\.."
 set "SRC=%ROOT%\src"
-set "QT6_DIR=E:\programes\Qt\Qt\6.11.1\mingw_64"
-set "MINGW6_DIR=E:\programes\Qt\Qt\Tools\mingw1310_64"
-set "QT5_DIR=E:\programes\Qt\Qt\5.15.2\mingw81_64"
-set "MINGW5_DIR=E:\programes\Qt\Qt\Tools\mingw810_64"
-set "CMAKE_DIR=E:\programes\Qt\Qt\Tools\CMake_64\bin"
-set "NINJA_DIR=E:\programes\Qt\Qt\Tools\Ninja"
+rem ---------- toolchain discovery ----------
+rem Qt lives under different roots on different machines (E:\programes\Qt\Qt on the
+rem original workstation, D:\software\Qt elsewhere). Probe the known roots instead of
+rem hard-coding one, so this script runs unchanged on every build box.
+rem Plain ASCII on purpose: cmd.exe parses .bat files in byte chunks and non-ASCII
+rem bytes desynchronise the parser.
+set "QTROOT="
+set "QT6_VER="
+for %%R in ("E:\programes\Qt\Qt" "D:\software\Qt" "C:\Qt") do (
+    if not defined QT6_VER (
+        for %%V in (6.11.3 6.11.1 6.11.2 6.10.0) do (
+            if not defined QT6_VER if exist "%%~R\%%V\mingw_64\bin\windeployqt.exe" (
+                set "QTROOT=%%~R"
+                set "QT6_VER=%%V"
+            )
+        )
+    )
+)
+if not defined QT6_VER (
+    echo [error] Qt 6 mingw_64 not found under the known roots.
+    echo         Edit the probe list at the top of this script.
+    goto :fail
+)
+set "QT6_DIR=%QTROOT%\%QT6_VER%\mingw_64"
+set "CMAKE_DIR=%QTROOT%\Tools\CMake_64\bin"
+set "NINJA_DIR=%QTROOT%\Tools\Ninja"
+
+rem MinGW that pairs with Qt 6 (13.1 in current installers). Same layout across
+rem revisions, so take the newest candidate that is installed.
+set "MINGW6_DIR="
+for %%M in (mingw1310_64 mingw13_64 mingw1210_64 mingw1120_64 mingw_64) do (
+    if not defined MINGW6_DIR if exist "%QTROOT%\Tools\%%M\bin\g++.exe" set "MINGW6_DIR=%QTROOT%\Tools\%%M"
+)
+if not defined MINGW6_DIR (
+    echo [error] MinGW toolchain for Qt 6 not found under %QTROOT%\Tools.
+    goto :fail
+)
+
+rem Qt 5 compatibility build (opt-in via FURUI_BUILD_QT5=1). Needs Qt 5.15.2 + MinGW 8.1;
+rem both are optional, so a missing pair only disables that branch.
+set "QT5_DIR="
+if exist "%QTROOT%\5.15.2\mingw81_64\bin\qmake.exe" set "QT5_DIR=%QTROOT%\5.15.2\mingw81_64"
+set "MINGW5_DIR="
+for %%M in (mingw810_64) do (
+    if not defined MINGW5_DIR if exist "%QTROOT%\Tools\%%M\bin\g++.exe" set "MINGW5_DIR=%QTROOT%\Tools\%%M"
+)
 set "PATH=%QT6_DIR%\bin;%MINGW6_DIR%\bin;%CMAKE_DIR%;%NINJA_DIR%;%PATH%"
 
 if not exist "%ROOT%\bin_qt6" mkdir "%ROOT%\bin_qt6"
