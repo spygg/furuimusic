@@ -1,7 +1,11 @@
 {
-  "version": "1.4.22",
-  "desc": "修复\n- 搜索时播放栏遮挡搜索结果：曲库页进入搜索态后自动隐藏迷你播放条/底部播放栏，给搜索结果和软键盘腾出空间；清空搜索即恢复\n新增\n- 播放时屏幕常亮（设置页开关，仅移动端、默认开）：前台播放时保持屏幕不熄灭，暂停或关闭开关立即恢复；用系统 FLAG_KEEP_SCREEN_ON，无需额外权限\n- 搜索结果「加入队列」升级为开关：已在队列中的歌按钮变成高亮「✓」，再点即移除；按 uid 去重，连点不会重复入队\n",
+  "version": "1.4.23",
+  "desc": "新增\n- 取链顺序设置：平台优先 / VIP 优先（默认）/ 全部自定义。VIP 或平台已判定不可播的歌默认跳过注定失败的原平台直链，直接从在线音源取链；自定义失败再回落原平台\n- 在线音源跨平台兜底：同曲在别的平台搜索匹配后再取链，按「脚本 × 平台」成绩排序，坏地址记入本首黑名单并重度扣分，避免反复撞同一个无效源；脚本返回的防盗链请求头一起透传给播放器\n\n修复\n- 播放结束后又重播当前歌（在线流 EOF 报 \"Internal error / Failed to read\" 被当成故障重新取链）：结尾报错按正常播完处理；切歌取链空窗期忽略播放命令；媒体键在 JNI 线程触发的切歌/播完播放回主线程执行；上一首不再「播过 5 秒就先重头播」，点一次就是切上一首\n- Qt 5 qmake 桌面/Android 构建链接失败：.pro 源文件清单漏了 AndroidMediaSession.cpp/.h（main.cpp 无条件调用 install），已补齐并重跑 qmake 验证\n- Android 切后台后播完一首不自动下一首：AndroidManifest 在 application 与 activity 两处补 android.app.background_running=true，后台不冻结 Qt 事件循环（真机验证 env=0）\n- Android 安全区/软键盘把界面挤成顶部薄条：Qt Quick 已处理系统栏时不再重复内缩，键盘可见时清零底部边距，异常边距（超窗口 40%）整组丢弃；竖屏顶部/横屏左侧留白恢复正常\n- 浅色主题 VIP 替代角标几乎读不清：降低底色透明度并加深文字；播放页按窗口高度分档收紧布局，矮屏主按钮不再被底部栏切掉\n- 曲库页软键盘收起后搜索态残留导致迷你播放条不回来；横竖屏切换覆盖用户选择的卡片/列表视图；构建脚本改为自动探测 Qt/SDK/NDK/JDK 安装路径",
   "history": [
+    {
+      "version": "1.4.22",
+      "desc": "修复\n- 搜索时播放栏遮挡搜索结果：曲库页进入搜索态后自动隐藏迷你播放条/底部播放栏，给搜索结果和软键盘腾出空间；清空搜索即恢复\n新增\n- 播放时屏幕常亮（设置页开关，仅移动端、默认开）：前台播放时保持屏幕不熄灭，暂停或关闭开关立即恢复；用系统 FLAG_KEEP_SCREEN_ON，无需额外权限\n- 搜索结果「加入队列」升级为开关：已在队列中的歌按钮变成高亮「✓」，再点即移除；按 uid 去重，连点不会重复入队\n"
+    },
     {
       "version": "1.4.21",
       "desc": "修复\n- 锁屏界面 / 通知栏 / 耳机线控点击播放、暂停无反应：媒体按键命令原本经 Qt 事件循环排队处理，息屏时该事件循环被系统挂起约 5 秒才响应，用户误以为点击无效；改为在 JNI 回调线程同步执行媒体命令，即时响应，并用互斥锁串行化避免连点竞态\n"
@@ -104,9 +108,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.22/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.22/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.22/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.22/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.23/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.23/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.23/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.23/FuruiMusic-android-arm64-v8a.apk"
   }
 }
