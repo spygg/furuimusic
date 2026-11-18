@@ -221,6 +221,8 @@ void Library::savePlaylist(const Playlist &p)
     q.addBindValue(p.type);
     q.addBindValue(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(p.extra)).toJson(QJsonDocument::Compact)));
     if (!q.exec()) qWarning() << "[FuruiMusic] savePlaylist:" << q.lastError().text();
+    // 同 saveAccount：歌单同步结果也是用户可感知的高价值数据，写入后立即 checkpoint
+    exec(QStringLiteral("PRAGMA wal_checkpoint(PASSIVE)"));
 }
 
 void Library::savePlaylists(const QVector<Playlist> &list)
@@ -246,6 +248,8 @@ void Library::savePlaylists(const QVector<Playlist> &list)
         if (!q.exec()) qWarning() << "[FuruiMusic] savePlaylists:" << q.lastError().text();
     }
     m_db.commit();
+    // 账号整库同步的低频大批量写入：checkpoint 防止 SIGKILL 后 WAL 数据蒸发
+    exec(QStringLiteral("PRAGMA wal_checkpoint(PASSIVE)"));
     emit changed();
 }
 
@@ -456,6 +460,11 @@ void Library::saveAccount(const Account &a)
     q.addBindValue(QDateTime::currentMSecsSinceEpoch());
     q.addBindValue(a.status);
     if (!q.exec()) qWarning() << "[FuruiMusic] saveAccount:" << q.lastError().text();
+    // 登录态是最贵的数据（汽水/网易云都要用户手动扫码）：
+    // WAL 模式下它可能长期只存在于 -wal 文件里，进程被 SIGKILL（Android 装
+    // 覆盖包、强杀、闪退）后 WAL 一旦被判无效，登录态直接蒸发。
+    // 关键低频写入后立刻做一次 checkpoint，把页压回主库文件。
+    exec(QStringLiteral("PRAGMA wal_checkpoint(PASSIVE)"));
     emit changed();
 }
 

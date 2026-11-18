@@ -542,7 +542,9 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: platformMenu.popup(platformBtn)
+                    // 显式定位到按钮正下方：默认 popup(item) 会顶到按钮左上角并向上回让，
+                // Android 上页面头部贴近屏幕顶，菜单会被顶得过于靠上甚至越过头部
+                onClicked: platformMenu.popup(platformBtn, 0, platformBtn.height + 6)
                 }
 
                 ToolTip.visible: platformMa.containsMouse

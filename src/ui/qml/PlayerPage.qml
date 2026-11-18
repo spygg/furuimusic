@@ -36,6 +36,9 @@ Item {
     // 但窗口可能只剩一个竖长条，按屏幕方向会错判成横屏双栏。
     readonly property bool wide: (root.width >= root.height ? root.width >= 520
                                                             : root.width >= 760)
+    // 宽窄形态切换时收起音量弹层：两个形态各有一个弹层实例，切换后旧实例已隐藏，
+    // 不复位会让新形态的弹层莫名保持展开
+    onWideChanged: volumePopupOpen = false
     // 竖屏分屏/窄矮窗口：页面高度只剩 250dp 上下时，封面+歌词会把进度和控件顶出可视区
     // （底部标签栏再把它们盖住）。这种高度下让封面/歌词让位，保证播放控件始终可点。
     readonly property bool compactTiny: !root.wide && root.height < 420
@@ -282,19 +285,20 @@ Item {
             visible: root.wide
 
             // 封面边长：由「左列宽度」和「扣除信息区后的剩余高度」共同决定，避免小窗口把按钮挤出去。
-            // 预留 236 = 标题区 ~89 + 进度 34 + 控件两行（控制行 + 常驻音量行，实测 ~94）+ 间距 12，
-            // 使矮横屏（车机分屏常只有 300~500 高）也能整列放下，而不是把音量行推出可视区
+            // 预留 206 = 标题区 ~89 + 进度 34 + 控件单行 ~48 + 间距 12 + 少量余量，
+            // 使矮横屏（车机分屏常只有 300~500 高）也能整列放下，而不是把控件行推出可视区
             readonly property bool shortRow: height < 420
-            // 短屏（手机横屏 336dp 高）里封面再占 84 会把最后的音量行挤出可视区，
+            // 短屏（手机横屏 336dp 高）里封面再占 84 会把最后的控件行挤出可视区，
             // 下限收到 60；其余高度按可用高度反推，保证整列放得下。
             readonly property real coverSide: Math.max(widePane.shortRow ? 60 : 84,
-                                                       Math.min(width * 0.40, height - 236, 390))
+                                                       Math.min(width * 0.40, height - 206, 390))
 
             RowLayout {
                 anchors.fill: parent
                 spacing: Math.max(32, Math.min(72, widePane.width * 0.06))
 
                 Item {
+                    id: wideLeft
                     // 左列至少留出控件行所需宽度(~296)，否则窄横屏下播放控件会被压成竖线
                     Layout.preferredWidth: Math.max(300, Math.min(widePane.coverSide + 24, widePane.width * 0.46))
                     Layout.fillHeight: true
@@ -341,10 +345,9 @@ Item {
                             Item { width: 1; height: widePane.shortRow ? 6 : 10 }
 
                             Loader {
+                                id: wideControlsLoader
                                 width: parent.width
-                                // 宽屏控件块含「控制行 + 常驻音量行」两行，实测约 94 高；
-                                // 写死 72/86 会让音量行溢出 Loader 自身高度，被外层 Flickable 裁掉，
-                                // 横屏滚到底也看不到音量条。按内容实际高度给位。
+                                // 控件行高度按内容实际给位；写死会把行挤出 Loader 被 Flickable 裁掉
                                 height: item ? item.implicitHeight : (widePane.shortRow ? 72 : 86)
                                 sourceComponent: controlsComp
                             }
@@ -357,6 +360,25 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                 }
+            }
+
+            // 弹层打开时点任意空白处收起（弹层自身 z 更高，不受影响）
+            MouseArea {
+                anchors.fill: parent
+                z: 4
+                visible: root.volumePopupOpen
+                onClicked: root.volumePopupOpen = false
+            }
+
+            // 宽屏垂直音量弹层：与竖屏同一交互（点音量按钮弹出），
+            // 浮在左列控件行正上方、水平居中于左列
+            Loader {
+                width: theme.touchMin
+                height: 160
+                z: 5
+                sourceComponent: volPopupComp
+                x: wideLeft.x + (wideLeft.width - width) / 2
+                y: (leftCol.y - leftFlick.contentY + wideControlsLoader.y) - height - 8
             }
         }
 
@@ -471,107 +493,116 @@ Item {
             }
 
             // 垂直音量滑块：浮在控制行（62 高）正上方，居中收放
-            Rectangle {
-                id: compactVolPopup
+            Loader {
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: 76
-                // 宽度跟触控最小值：底部的静音按钮要整块可点，窄了会溢出圆角
                 width: theme.touchMin
                 height: 160
-                radius: width / 2
                 z: 2
-                color: root.isDark ? Qt.rgba(0.13, 0.14, 0.17, 0.95)
-                                   : Qt.rgba(1, 1, 1, 0.95)
-                border.color: root.isDark ? Qt.rgba(1, 1, 1, 0.14) : Qt.rgba(0, 0, 0, 0.10)
-                border.width: 1
-                opacity: root.volumePopupOpen ? 1 : 0
-                visible: opacity > 0.01 && !root.wide
-                scale: 0.92 + 0.08 * opacity
-                transformOrigin: Item.Bottom
-                Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
-
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.top: parent.top
-                    anchors.topMargin: 7
-                    text: app.volume + "%"
-                    color: root.inkSub
-                    font.pixelSize: theme.fontXs
-                    font.bold: true
-                }
-
-                // 与 PlayBar.qml 的桌面竖滑块同一套定位逻辑。
-                // 注意：Qt 竖向 Slider 的 visualPosition 是翻转的（1 - position），
-                // 直接用它会让 80% 显示在下方 20%；这里统一用逻辑 position。
-                Slider {
-                    id: compactVolSlider
-                    orientation: Qt.Vertical
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.top: parent.top
-                    anchors.topMargin: 24
-                    width: 26
-                    // 行程底部让给静音按钮（touchMin 高 + 8 间隙），否则两者热区重叠
-                    height: parent.height - 24 - theme.touchMin - 8
-                    padding: 0
-                    from: 0
-                    to: 100
-                    stepSize: 1
-                    value: app.volume
-                    onMoved: app.setVolume(value)
-                    onPressedChanged: {
-                        if (!pressed)
-                            value = Qt.binding(function () { return app.volume })
-                    }
-                    background: Rectangle {
-                        x: (compactVolSlider.width - width) / 2
-                        y: 0
-                        width: 4
-                        height: compactVolSlider.availableHeight
-                        radius: 2
-                        color: root.inkFaint
-                        Rectangle {
-                            width: parent.width
-                            height: compactVolSlider.position * parent.height
-                            radius: 2
-                            color: root.cPrimary
-                            anchors.bottom: parent.bottom
-                        }
-                    }
-                    handle: Rectangle {
-                        x: (compactVolSlider.width - width) / 2
-                        y: Math.max(0, Math.min(compactVolSlider.availableHeight - height,
-                                                (1 - compactVolSlider.position) * compactVolSlider.availableHeight - height / 2))
-                        width: 12
-                        height: 12
-                        radius: 6
-                        color: root.cPrimary
-                    }
-                }
-
-                // 底部一键静音 / 恢复
-                Item {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.bottom: parent.bottom
-                    width: theme.touchMin
-                    height: theme.touchMin
-                    GlyphIcon {
-                        anchors.centerIn: parent
-                        name: app.volume > 0 ? "volume" : "volumeMute"
-                        size: 13
-                        color: root.inkSub
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: app.toggleMute()
-                    }
-                }
+                sourceComponent: volPopupComp
             }
         }
     }
 
 
+
+    // ================= 可复用：垂直音量弹层（竖屏 / 宽屏共用） =================
+    Component {
+        id: volPopupComp
+        Rectangle {
+            // 宽度跟触控最小值：底部的静音按钮要整块可点，窄了会溢出圆角
+            width: theme.touchMin
+            height: 160
+            radius: width / 2
+            color: root.isDark ? Qt.rgba(0.13, 0.14, 0.17, 0.95)
+                               : Qt.rgba(1, 1, 1, 0.95)
+            border.color: root.isDark ? Qt.rgba(1, 1, 1, 0.14) : Qt.rgba(0, 0, 0, 0.10)
+            border.width: 1
+            opacity: root.volumePopupOpen ? 1 : 0
+            visible: opacity > 0.01
+            scale: 0.92 + 0.08 * opacity
+            transformOrigin: Item.Bottom
+            Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                anchors.topMargin: 7
+                text: app.volume + "%"
+                color: root.inkSub
+                font.pixelSize: theme.fontXs
+                font.bold: true
+            }
+
+            // 与 PlayBar.qml 的桌面竖滑块同一套定位逻辑。
+            // 注意：Qt 竖向 Slider 的 visualPosition 是翻转的（1 - position），
+            // 直接用它会让 80% 显示在下方 20%；这里统一用逻辑 position。
+            Slider {
+                id: compactVolSlider
+                orientation: Qt.Vertical
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                anchors.topMargin: 24
+                width: 26
+                // 行程底部让给静音按钮（touchMin 高 + 8 间隙），否则两者热区重叠
+                height: parent.height - 24 - theme.touchMin - 8
+                padding: 0
+                from: 0
+                to: 100
+                stepSize: 1
+                value: app.volume
+                onMoved: app.setVolume(value)
+                onPressedChanged: {
+                    if (!pressed)
+                        value = Qt.binding(function () { return app.volume })
+                }
+                background: Rectangle {
+                    x: (compactVolSlider.width - width) / 2
+                    y: 0
+                    width: 4
+                    height: compactVolSlider.availableHeight
+                    radius: 2
+                    color: root.inkFaint
+                    Rectangle {
+                        width: parent.width
+                        height: compactVolSlider.position * parent.height
+                        radius: 2
+                        color: root.cPrimary
+                        anchors.bottom: parent.bottom
+                    }
+                }
+                handle: Rectangle {
+                    x: (compactVolSlider.width - width) / 2
+                    y: Math.max(0, Math.min(compactVolSlider.availableHeight - height,
+                                            (1 - compactVolSlider.position) * compactVolSlider.availableHeight - height / 2))
+                    width: 12
+                    height: 12
+                    radius: 6
+                    color: root.cPrimary
+                }
+            }
+
+            // 底部一键静音 / 恢复
+            Item {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                width: theme.touchMin
+                height: theme.touchMin
+                GlyphIcon {
+                    anchors.centerIn: parent
+                    name: app.volume > 0 ? "volume" : "volumeMute"
+                    size: 13
+                    color: root.inkSub
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: app.toggleMute()
+                }
+            }
+        }
+    }
 
     // ================= 可复用：封面 =================
     Component {
@@ -929,11 +960,10 @@ Item {
                     }
                 }
 
-                // 音量：窄屏收成控制行里的一枚按钮，点开垂直滑块弹层；
-                // 宽屏下方已有常驻音量滑条，这里不再重复显示
+                // 音量：点开垂直滑块弹层（竖屏浮在控制行上方、宽屏浮在控件块上方，
+                // 同一个 volPopupComp；不再用宽屏常驻横条）
                 Item {
                     width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
-                    visible: !root.wide
                     Rectangle {
                         anchors.fill: parent
                         radius: height / 2
@@ -955,72 +985,6 @@ Item {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: root.volumePopupOpen = !root.volumePopupOpen
                     }
-                }
-            }
-
-            // 音量：宽屏仍保留常驻横条；竖屏收成按钮 + 垂直弹层（见 compactVolPopup）
-            Row {
-                anchors.horizontalCenter: parent.horizontalCenter
-                spacing: 8
-                topPadding: 2
-                height: 20
-                visible: root.wide
-
-                GlyphIcon {
-                    anchors.verticalCenter: parent.verticalCenter
-                    name: app.volume > 0 ? "volume" : "volumeMute"
-                    size: 15
-                    color: root.inkSub
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: app.toggleMute()
-                    }
-                }
-
-                Slider {
-                    id: vol
-                    width: root.wide ? 132 : 160
-                    height: 16
-                    padding: 0
-                    anchors.verticalCenter: parent.verticalCenter
-                    from: 0; to: 100; stepSize: 1
-                    value: app.volume
-                    onMoved: app.setVolume(value)
-                    onPressedChanged: {
-                        if (!pressed)
-                            value = Qt.binding(function () { return app.volume })
-                    }
-                    background: Rectangle {
-                        x: 0
-                        y: (vol.height - height) / 2
-                        width: vol.availableWidth
-                        height: 3
-                        radius: 1.5
-                        color: root.inkFaint
-                        Rectangle {
-                            width: vol.visualPosition * parent.width
-                            height: parent.height
-                            radius: 1.5
-                            color: root.ink
-                            opacity: 0.55
-                        }
-                    }
-                    handle: Rectangle {
-                        x: Math.max(0, Math.min(vol.availableWidth - width,
-                                                 vol.visualPosition * vol.availableWidth - width / 2))
-                        y: (vol.height - height) / 2
-                        width: 10; height: 10; radius: 5
-                        color: root.ink
-                        opacity: vol.pressed ? 1 : 0
-                    }
-                }
-
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: app.volume + "%"
-                    color: root.inkSub
-                    font.pixelSize: theme.fontXs
                 }
             }
         }

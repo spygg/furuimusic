@@ -864,8 +864,36 @@ void AppController::applyPlaylistFilter()
     m_playlists->setPlaylists(list);
     // 未登录 / 该平台无本地歌单时，回退展示其公开默认榜单（洛雪式：未登录也按平台给默认歌单）。
     // 点开榜单走 rankDetail/playlistDetail 公共端点，不依赖账号。
-    if (list.isEmpty() && !d->playlistFilter.isEmpty())
+    if (list.isEmpty() && !d->playlistFilter.isEmpty()) {
         loadRank(d->playlistFilter);
+    } else if (!d->playlistFilter.isEmpty()) {
+        // 已登录该平台：本地歌单照常显示，再把默认榜单追加在后面（用户要求两者共存）
+        appendDefaultBoards(d->playlistFilter, list);
+    }
+}
+
+// 追加公开默认榜单到当前平台歌单视图。数据源与未登录回退（loadRank）一致：
+// rank 端点被反爬/失效时由 MusicSource::rank 回退静态 defaultBoards，保证总有内容。
+// 榜单保持「每次拉取的公开数据」不落库（理由同 loadRank 注释：落库会污染「我的歌单」）。
+void AppController::appendDefaultBoards(const QString &sourceId,
+                                        const QVector<Playlist> &local)
+{
+    // applyPlaylistFilter 进入时已 ++playlistGen；用户再切平台/刷新即作废本回调
+    const quint64 gen = d->playlistGen;
+    SourceManager::instance()->rank(sourceId, 100,
+        [this, gen, local](const QVector<Playlist> &rankList) {
+            if (gen != d->playlistGen || rankList.isEmpty()) return;
+            QVector<Playlist> merged = local;
+            for (const Playlist &rp : rankList) {
+                bool dup = false;
+                for (const Playlist &lp : merged)
+                    if (lp.uid == rp.uid) { dup = true; break; }
+                if (!dup) merged << rp;
+            }
+            if (merged.size() == local.size()) return;
+            m_playlists->setPlaylists(merged);
+            emit playlistsLoaded();
+        });
 }
 
 void AppController::refreshPlaylists()

@@ -385,6 +385,9 @@ private:
     void syncAccountModel();
     // 按 Impl::playlistFilter 把本地全部歌单过滤后写入模型
     void applyPlaylistFilter();
+    // 平台筛选视图：在用户本地歌单后面追加该平台公开默认榜单（与未登录回退同一数据源），
+    // 让登录用户同时看到「我的歌单」与「不登录时显示的默认歌单」。榜单不落库。
+    void appendDefaultBoards(const QString &sourceId, const QVector<Playlist> &local);
     void syncCustomModel();
     // 有新操作接管列表时调用：作废挂起的搜索，并补发终止信号，避免界面卡在「正在搜索…」
     void cancelPendingSearch();

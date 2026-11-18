@@ -1,7 +1,11 @@
 {
-  "version": "1.4.25",
-  "desc": "修复\n- 在线更新会下载到上一个版本而不是最新版：清单里的下载直链没随发版同步（v1.4.24 的清单版本号已是 1.4.24，但下载地址仍指向 v1.4.23 的安装包）。现在下载前会自动把直链里的版本与检测到的最新版本对齐；清单直链也支持 {version} 占位符，发版脚本漏同步也不会再下错\n- v1.4.24 安装包内部版本号误写为 1.4.23（发版时漏跑同步脚本），装完会一直提示有更新；本次由发版脚本统一升版\n- 更新检查的下载地址兜底：即使拉到的是旧镜像的过期清单，也会按 GitHub 最新发布版本下载",
+  "version": "1.4.26",
+  "desc": "新增\n- 平板/横屏播放页的音量改为与竖屏一致的交互：点音量按钮弹出垂直音量弹层（百分比+竖向滑块+底部静音），移除原来的常驻横向音量条\n- 「我的歌单」按平台筛选时，在用户自己的歌单后面追加该平台的默认榜单/歌单（未登录也能看到的公开内容），不再二选一\n修复\n- 曲库页「我的歌单」上方的平台筛选菜单弹出位置太靠上（Android 上会顶到页头），改为从筛选按钮正下方展开\n- 数据加固：登录态、歌单同步这类关键写入后立即做 SQLite WAL checkpoint，避免进程被强杀（Android 覆盖安装/闪退）时 WAL 数据被判无效导致登录态和歌单丢失\n",
   "history": [
+    {
+      "version": "1.4.25",
+      "desc": "修复\n- 在线更新会下载到上一个版本而不是最新版：清单里的下载直链没随发版同步（v1.4.24 的清单版本号已是 1.4.24，但下载地址仍指向 v1.4.23 的安装包）。现在下载前会自动把直链里的版本与检测到的最新版本对齐；清单直链也支持 {version} 占位符，发版脚本漏同步也不会再下错\n- v1.4.24 安装包内部版本号误写为 1.4.23（发版时漏跑同步脚本），装完会一直提示有更新；本次由发版脚本统一升版\n- 更新检查的下载地址兜底：即使拉到的是旧镜像的过期清单，也会按 GitHub 最新发布版本下载"
+    },
     {
       "version": "1.4.24",
       "desc": "修复\n- 编译级跨平台问题：PlayerController 尾部余量计算 qMin/qMax 模板类型不一致，Qt5/MinGW 编译报「deduced conflicting types」失败（Qt6 因实现宽松未暴露），显式统一 qint64\n- Qt5 Android 构建：AndroidMediaSession.cpp 缺 Qt 6 版本守卫，Qt5 Android qmake 会误编 Qt6 专属 JNI API 而失败；补齐守卫与工程内其它文件一致\n- Android 后台连播：Qt5 Manifest 里 background_running=true 被模板原有的 false 覆盖，删掉重复项让后台事件循环正常\n- 播放失败误吞：stale 错误判据移除 Failed to read/I/O error（真实坏链首播最常见的错误文本），只保留有实测证据的 Demux，避免真实首播失败被当成旧流迟到错误吞掉而 15s 不换源\n- JSON 字段路径越界：valueAt() 数组下标未校验上界，外部音源配置写了越界下标会触发 QJsonArray::at() 未定义行为\n- 下载超时文案：download() 超时先 abort 再 finish，错误被 Operation canceled 抢占，改为与 request() 一致先 finish"
@@ -116,9 +120,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.25/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.25/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.25/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.25/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.26/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.26/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.26/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.26/FuruiMusic-android-arm64-v8a.apk"
   }
 }
