@@ -5,9 +5,11 @@ QT += core network sql multimedia qml quick quickcontrols2
 CONFIG += c++14
 TEMPLATE = app
 # 桌面主交付已切 Qt 6（QtMultimedia 官方 FFmpeg 后端，见 scripts/build_windows.bat）。
-# Qt 5 qmake 保留为兼容构建，可用 FURUI_QT5_OUTDIR 指定独立输出目录，
-# 避免覆盖 bin 里的 Qt 6 产物（Qt5/Qt6 运行库混放会互相污染）。
+# Qt 5 qmake 保留为兼容构建。桌面（win32 非 Android）产物默认进 build/desktop-qt5，
+# 部署到 bin_qt5 由 scripts/build_windows.bat 统一完成（含 windeployqt）；
+# 可用 FURUI_QT5_OUTDIR 覆盖。Android qmake 走 APK 链路，保持默认 DESTDIR。
 DESTDIR = $$PWD/../bin
+win32:!android: DESTDIR = $$PWD/../build/desktop-qt5
 !isEmpty(FURUI_QT5_OUTDIR): DESTDIR = $$FURUI_QT5_OUTDIR
 win32: CONFIG += windows
 
