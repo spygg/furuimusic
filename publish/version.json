@@ -1,7 +1,11 @@
 {
-  "version": "1.4.26",
-  "desc": "新增\n- 平板/横屏播放页的音量改为与竖屏一致的交互：点音量按钮弹出垂直音量弹层（百分比+竖向滑块+底部静音），移除原来的常驻横向音量条\n- 「我的歌单」按平台筛选时，在用户自己的歌单后面追加该平台的默认榜单/歌单（未登录也能看到的公开内容），不再二选一\n修复\n- 曲库页「我的歌单」上方的平台筛选菜单弹出位置太靠上（Android 上会顶到页头），改为从筛选按钮正下方展开\n- 数据加固：登录态、歌单同步这类关键写入后立即做 SQLite WAL checkpoint，避免进程被强杀（Android 覆盖安装/闪退）时 WAL 数据被判无效导致登录态和歌单丢失\n",
+  "version": "1.4.27",
+  "desc": "新增\n- Android 音频焦点接管（参考主流播放器/洛雪音乐）：其它应用开始播放音视频时本 App 自动暂停；来电、语音助手等短暂占用结束后自动续播；地图导航播报等场景不暂停、只把音量压低到 30%，播报完恢复\n- 播放时向系统申请独占音频焦点，停止播放时归还；通知栏/锁屏媒体卡片与焦点状态保持一致\n",
   "history": [
+    {
+      "version": "1.4.26",
+      "desc": "新增\n- 平板/横屏播放页的音量改为与竖屏一致的交互：点音量按钮弹出垂直音量弹层（百分比+竖向滑块+底部静音），移除原来的常驻横向音量条\n- 「我的歌单」按平台筛选时，在用户自己的歌单后面追加该平台的默认榜单/歌单（未登录也能看到的公开内容），不再二选一\n修复\n- 曲库页「我的歌单」上方的平台筛选菜单弹出位置太靠上（Android 上会顶到页头），改为从筛选按钮正下方展开\n- 数据加固：登录态、歌单同步这类关键写入后立即做 SQLite WAL checkpoint，避免进程被强杀（Android 覆盖安装/闪退）时 WAL 数据被判无效导致登录态和歌单丢失\n"
+    },
     {
       "version": "1.4.25",
       "desc": "修复\n- 在线更新会下载到上一个版本而不是最新版：清单里的下载直链没随发版同步（v1.4.24 的清单版本号已是 1.4.24，但下载地址仍指向 v1.4.23 的安装包）。现在下载前会自动把直链里的版本与检测到的最新版本对齐；清单直链也支持 {version} 占位符，发版脚本漏同步也不会再下错\n- v1.4.24 安装包内部版本号误写为 1.4.23（发版时漏跑同步脚本），装完会一直提示有更新；本次由发版脚本统一升版\n- 更新检查的下载地址兜底：即使拉到的是旧镜像的过期清单，也会按 GitHub 最新发布版本下载"
@@ -120,9 +124,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.26/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.26/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.26/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.26/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.27/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.27/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.27/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.27/FuruiMusic-android-arm64-v8a.apk"
   }
 }
