@@ -1,7 +1,11 @@
 {
-  "version": "1.4.24",
-  "desc": "修复\n- 编译级跨平台问题：PlayerController 尾部余量计算 qMin/qMax 模板类型不一致，Qt5/MinGW 编译报「deduced conflicting types」失败（Qt6 因实现宽松未暴露），显式统一 qint64\n- Qt5 Android 构建：AndroidMediaSession.cpp 缺 Qt 6 版本守卫，Qt5 Android qmake 会误编 Qt6 专属 JNI API 而失败；补齐守卫与工程内其它文件一致\n- Android 后台连播：Qt5 Manifest 里 background_running=true 被模板原有的 false 覆盖，删掉重复项让后台事件循环正常\n- 播放失败误吞：stale 错误判据移除 Failed to read/I/O error（真实坏链首播最常见的错误文本），只保留有实测证据的 Demux，避免真实首播失败被当成旧流迟到错误吞掉而 15s 不换源\n- JSON 字段路径越界：valueAt() 数组下标未校验上界，外部音源配置写了越界下标会触发 QJsonArray::at() 未定义行为\n- 下载超时文案：download() 超时先 abort 再 finish，错误被 Operation canceled 抢占，改为与 request() 一致先 finish",
+  "version": "1.4.25",
+  "desc": "修复\n- 在线更新会下载到上一个版本而不是最新版：清单里的下载直链没随发版同步（v1.4.24 的清单版本号已是 1.4.24，但下载地址仍指向 v1.4.23 的安装包）。现在下载前会自动把直链里的版本与检测到的最新版本对齐；清单直链也支持 {version} 占位符，发版脚本漏同步也不会再下错\n- v1.4.24 安装包内部版本号误写为 1.4.23（发版时漏跑同步脚本），装完会一直提示有更新；本次由发版脚本统一升版\n- 更新检查的下载地址兜底：即使拉到的是旧镜像的过期清单，也会按 GitHub 最新发布版本下载",
   "history": [
+    {
+      "version": "1.4.24",
+      "desc": "修复\n- 编译级跨平台问题：PlayerController 尾部余量计算 qMin/qMax 模板类型不一致，Qt5/MinGW 编译报「deduced conflicting types」失败（Qt6 因实现宽松未暴露），显式统一 qint64\n- Qt5 Android 构建：AndroidMediaSession.cpp 缺 Qt 6 版本守卫，Qt5 Android qmake 会误编 Qt6 专属 JNI API 而失败；补齐守卫与工程内其它文件一致\n- Android 后台连播：Qt5 Manifest 里 background_running=true 被模板原有的 false 覆盖，删掉重复项让后台事件循环正常\n- 播放失败误吞：stale 错误判据移除 Failed to read/I/O error（真实坏链首播最常见的错误文本），只保留有实测证据的 Demux，避免真实首播失败被当成旧流迟到错误吞掉而 15s 不换源\n- JSON 字段路径越界：valueAt() 数组下标未校验上界，外部音源配置写了越界下标会触发 QJsonArray::at() 未定义行为\n- 下载超时文案：download() 超时先 abort 再 finish，错误被 Operation canceled 抢占，改为与 request() 一致先 finish"
+    },
     {
       "version": "1.4.23",
       "desc": "新增\n- 取链顺序设置：平台优先 / VIP 优先（默认）/ 全部自定义。VIP 或平台已判定不可播的歌默认跳过注定失败的原平台直链，直接从在线音源取链；自定义失败再回落原平台\n- 在线音源跨平台兜底：同曲在别的平台搜索匹配后再取链，按「脚本 × 平台」成绩排序，坏地址记入本首黑名单并重度扣分，避免反复撞同一个无效源；脚本返回的防盗链请求头一起透传给播放器\n\n修复\n- 播放结束后又重播当前歌（在线流 EOF 报 \"Internal error / Failed to read\" 被当成故障重新取链）：结尾报错按正常播完处理；切歌取链空窗期忽略播放命令；媒体键在 JNI 线程触发的切歌/播完播放回主线程执行；上一首不再「播过 5 秒就先重头播」，点一次就是切上一首\n- Qt 5 qmake 桌面/Android 构建链接失败：.pro 源文件清单漏了 AndroidMediaSession.cpp/.h（main.cpp 无条件调用 install），已补齐并重跑 qmake 验证\n- Android 切后台后播完一首不自动下一首：AndroidManifest 在 application 与 activity 两处补 android.app.background_running=true，后台不冻结 Qt 事件循环（真机验证 env=0）\n- Android 安全区/软键盘把界面挤成顶部薄条：Qt Quick 已处理系统栏时不再重复内缩，键盘可见时清零底部边距，异常边距（超窗口 40%）整组丢弃；竖屏顶部/横屏左侧留白恢复正常\n- 浅色主题 VIP 替代角标几乎读不清：降低底色透明度并加深文字；播放页按窗口高度分档收紧布局，矮屏主按钮不再被底部栏切掉\n- 曲库页软键盘收起后搜索态残留导致迷你播放条不回来；横竖屏切换覆盖用户选择的卡片/列表视图；构建脚本改为自动探测 Qt/SDK/NDK/JDK 安装路径"
@@ -112,9 +116,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.23/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.23/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.23/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.23/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.25/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.25/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.25/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.25/FuruiMusic-android-arm64-v8a.apk"
   }
 }

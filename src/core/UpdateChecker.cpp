@@ -16,6 +16,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QUrl>
 
@@ -339,8 +340,25 @@ QString UpdateChecker::downloadUrlFor(const QString &version) const
 {
     // manifest 里声明了当前平台直链则优先（可发版时远程换镜像），否则按 CI 产物名拼默认地址
     const QString fromManifest = m_downloads.value(platformKey()).toString();
-    if (!fromManifest.isEmpty())
-        return fromManifest;
+    if (!fromManifest.isEmpty()) {
+        QString url = fromManifest;
+        // 清单直链支持 {version}/{v} 占位符：模板写一次，发版不再需要逐条改 URL
+        if (url.contains(QLatin1Char('{'))) {
+            url.replace(QLatin1String("{version}"), version);
+            url.replace(QLatin1String("{v}"), version);
+        }
+        // 兜底：直链里写死的版本目录与本次检测到的最新版本不符时（发版脚本漏同步
+        // downloads 就会出现——v1.4.24 实际发生过：清单 version=1.4.24 但下载地址
+        // 还指 v1.4.23，用户「检查到新版本却下载到上一个版本」），按最新版本重写。
+        // 这条同时救了手里还拿着旧硬编码清单的存量老客户端。
+        static const QRegularExpression re(
+            QStringLiteral("(/releases/download/v)(\\d+(?:\\.\\d+)+)(/)"));
+        const QRegularExpressionMatch m = re.match(url);
+        if (m.hasMatch() && m.captured(2) != version)
+            url.replace(m.capturedStart(0), m.capturedLength(0),
+                        m.captured(1) + version + m.captured(3));
+        return url;
+    }
     return QStringLiteral("https://github.com/spygg/furuimusic/releases/download/v%1/%2")
         .arg(version, releaseAssetFor(platformKey()));
 }
