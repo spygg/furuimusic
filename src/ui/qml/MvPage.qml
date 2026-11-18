@@ -120,13 +120,24 @@ Rectangle {
               : "MvMedia5.qml"
         onItemChanged: {
             if (!item) return
-            // Loader.item 的属性不能在声明式里直接绑定，用 Qt.binding 补上
-            item.volume = Qt.binding(function() { return root.volume })
+            // Loader.item 的属性不能在声明式里直接绑定，用 Qt.binding 补上。
+            // app.ducked：Android 音频焦点 CAN_DUCK（导航播报）时把 MV 音量也压到 30%
+            item.volume = Qt.binding(function() { return root.volume * (app.ducked ? 0.3 : 1.0) })
             item.muted = Qt.binding(function() { return root.muted })
             if (root.pendingUrl.length > 0) {
                 item.open(root.pendingUrl)
                 root.pendingUrl = ""
             }
+        }
+    }
+
+    // Android 音频焦点被其它应用抢走时（LOSS/LOSS_TRANSIENT），音乐播放器
+    // 与 MV 沉浸页一起暂停——不能只停音乐、MV 还在响
+    Connections {
+        target: app
+        function onMvPauseRequested() {
+            if (root._media && root._media.playing)
+                root.togglePlay()
         }
     }
 

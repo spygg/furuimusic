@@ -338,6 +338,7 @@ AppController::AppController(QObject *parent)
         emit positionChanged();
     });
     connect(player, &PlayerController::volumeChanged, this, [this] { emit volumeChanged(); });
+    connect(player, &PlayerController::duckedChanged, this, [this] { emit duckedChanged(); });
     connect(player, &PlayerController::lyricsChanged, this, [this] { emit lyricsChanged(); });
     connect(player, &PlayerController::queueChanged, this, [this] {
         syncQueueModel();
@@ -530,6 +531,7 @@ qint64 AppController::duration() const { return PlayerController::instance()->du
 int AppController::currentQueueIndex() const { return PlayerController::instance()->currentIndex(); }
 bool AppController::currentFavorite() const { return isFavoriteCurrent(); }
 int AppController::volume() const { return PlayerController::instance()->volume(); }
+bool AppController::ducked() const { return PlayerController::instance()->ducked(); }
 int AppController::playMode() const { return PlayerController::instance()->mode(); }
 QString AppController::playModeName() const { return PlayerController::instance()->modeName(); }
 QString AppController::lyricsText() const { return PlayerController::instance()->lyricsText(); }

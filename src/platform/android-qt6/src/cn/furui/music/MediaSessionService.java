@@ -9,6 +9,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.media.MediaMetadata;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
@@ -42,6 +45,9 @@ public class MediaSessionService extends Service {
     private static final int CMD_PREV = 4;
     private static final int CMD_SEEK = 5;
     private static final int CMD_STOP = 6;
+    // 音频焦点：导航播报等 CAN_DUCK 场景压低/恢复音量
+    private static final int CMD_DUCK = 7;
+    private static final int CMD_UNDUCK = 8;
 
     private static final String ACTION_PLAY = "cn.furui.music.action.PLAY";
     private static final String ACTION_PAUSE = "cn.furui.music.action.PAUSE";
@@ -121,6 +127,104 @@ public class MediaSessionService extends Service {
             service.shutdown();
     }
 
+    // ---------- 音频焦点 ----------
+    //
+    // 主流播放器行为：本应用播放时申请独占焦点；
+    //   其它应用开始播放 → LOSS：暂停（不自动恢复）；LOSS_TRANSIENT（来电、语音
+    //   助手）→ 暂停且焦点回来后自动续播；LOSS_TRANSIENT_CAN_DUCK（导航播报、
+    //   提醒音）→ 不暂停，只把音量压低（C++ 侧乘 0.3），焦点回来后恢复。
+    // Qt6 FFmpeg 后端的 QMediaPlayer 不申请焦点，所以必须自己向系统要。
+
+    private static AudioManager sAudioManager;
+    private static AudioFocusRequest sFocusRequest; // API 26+
+    private static boolean sFocused = false;
+    private static boolean sResumeOnGain = false;   // transient 丢失后 GAIN 自动续播
+
+    private static final AudioManager.OnAudioFocusChangeListener FOCUS_LISTENER =
+            new AudioManager.OnAudioFocusChangeListener() {
+        @Override
+        public void onAudioFocusChange(int change) {
+            switch (change) {
+                case AudioManager.AUDIOFOCUS_LOSS:
+                    // 永久丢失（如用户在别的播放器点了播放）：暂停且不自动恢复，释放焦点
+                    sResumeOnGain = false;
+                    sendCommand(CMD_PAUSE, 0);
+                    abandonFocusInternal();
+                    break;
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                    // 来电/语音助手等短暂占用：暂停，焦点回来后续播
+                    sResumeOnGain = sPlaying;
+                    sendCommand(CMD_PAUSE, 0);
+                    break;
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                    // 地图导航播报等：只压低音量，播报完恢复
+                    sendCommand(CMD_DUCK, 0);
+                    break;
+                case AudioManager.AUDIOFOCUS_GAIN:
+                    sendCommand(CMD_UNDUCK, 0);
+                    if (sResumeOnGain) {
+                        sResumeOnGain = false;
+                        sendCommand(CMD_PLAY, 0);
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+    };
+
+    /** 开始播放时申请焦点；焦点被别的媒体占着（返回 DELAYED/FAILED）就先不出声。 */
+    public static void acquireFocus(Context ctx) {
+        if (ctx == null || sFocused)
+            return;
+        AudioManager am = (AudioManager) ctx.getApplicationContext()
+                .getSystemService(Context.AUDIO_SERVICE);
+        if (am == null)
+            return;
+        sAudioManager = am;
+        sResumeOnGain = false;
+        int result;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            AudioFocusRequest request = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build())
+                    .setOnAudioFocusChangeListener(FOCUS_LISTENER)
+                    .build();
+            sFocusRequest = request;
+            result = am.requestAudioFocus(request);
+        } else {
+            // API 26 以下走老接口（26+ 标记 deprecated，但 minSdk 23 必须保留）
+            result = am.requestAudioFocus(FOCUS_LISTENER, AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN);
+        }
+        sFocused = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        if (!sFocused)
+            sendCommand(CMD_PAUSE, 0);
+    }
+
+    private static void abandonFocusInternal() {
+        try {
+            if (sAudioManager == null)
+                return;
+            if (sFocusRequest != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                sAudioManager.abandonAudioFocusRequest(sFocusRequest);
+                sFocusRequest = null;
+            } else {
+                sAudioManager.abandonAudioFocus(FOCUS_LISTENER);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "abandon focus failed", t);
+        }
+        sFocused = false;
+    }
+
+    /** 主动停止播放（清空队列等）时把焦点还给系统。 */
+    public static void releaseFocus() {
+        abandonFocusInternal();
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -194,7 +298,9 @@ public class MediaSessionService extends Service {
         return null;
     }
 
-    private void sendCommand(int action, long position) {
+    // static：音频焦点监听器与 acquireFocus 都在静态上下文里调用它，
+    // 而它本身只操作静态成员（sPlaying / onNativeCommand），没有实例依赖。
+    private static void sendCommand(int action, long position) {
         // 通知按下先在本地翻转状态，避免等 C++ 回推造成图标迟滞
         if (action == CMD_PLAY)
             sPlaying = true;
@@ -333,6 +439,8 @@ public class MediaSessionService extends Service {
     }
 
     private void shutdown() {
+        // 服务退出（主动停止或系统回收）时不再占着音频焦点
+        abandonFocusInternal();
         if (mSession != null) {
             mSession.setActive(false);
             mSession.release();

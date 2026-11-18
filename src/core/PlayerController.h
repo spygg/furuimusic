@@ -43,6 +43,11 @@ public:
     void setVolume(int value);       // 0..100
     void toggleMute();               // 静音并在再点一次时回到静音前的档位
     int volume() const { return m_volume; }
+    // Android 音频焦点 CAN_DUCK（导航播报、提醒音等）：临时把实际输出压到用户档位的
+    // 30%，不改 m_volume、不写设置持久化；焦点恢复后 setDucked(false)。
+    // QML（MV 音量）按「方法 + duckedChanged 信号」约定直接绑 app.ducked。
+    void setDucked(bool on);
+    bool ducked() const { return m_ducked; }
 
     void setQueue(const QVector<Song> &songs, int index);
     void addQueue(const QVector<Song> &songs);
@@ -92,6 +97,8 @@ signals:
     void stateChanged();
     // 音量单独走一个信号：拖动滑条时不应该让 UI 把整棵播放器状态重新绑定一遍
     void volumeChanged();
+    // Android 音频焦点 duck 状态变化：MV 的 AudioOutput 绑定 app.ducked 乘系数
+    void duckedChanged();
     void positionChanged();
     void mediaChanged();
     void queueChanged();
@@ -116,6 +123,8 @@ private:
     //（实测：换源成功后 3ms 到达的 "Demuxing failed"，pos 0 且状态 StalledMedia）。
     // 把它当新源失败上报会让刚换上的好源被误扣分/拉黑。
     bool isStaleSwitchError() const;
+    // 把用户档位 × duck 系数落到实际输出（Qt6 走 QAudioOutput，Qt5 走 QMediaPlayer）
+    void applyVolume();
     void finishAsEnded();
     // Qt 6 无法给 QMediaPlayer 注入请求头：防盗链直链在直连失败后，
     // 带 headers 流式下载到缓存再播放本地文件。
@@ -130,6 +139,8 @@ private:
     int m_mode = 1;          // 默认列表循环
     int m_volume = 80;
     int m_volumeBeforeMute = 0;
+    // Android 音频焦点 CAN_DUCK 状态：仅压低实际输出，不改变用户档位
+    bool m_ducked = false;
     QVariantMap m_headers;
     QVector<LyricLine> m_lyrics;
     QString m_lyricsText;

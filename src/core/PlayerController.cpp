@@ -738,13 +738,30 @@ void PlayerController::seek(qint64 ms)
 void PlayerController::setVolume(int value)
 {
     m_volume = qBound(0, value, 100);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    if (m_audio) m_audio->setVolume(qreal(m_volume) / 100.0);
-#else
-    m_player->setVolume(m_volume);
-#endif
+    applyVolume();
     Settings::set(QStringLiteral("volume"), m_volume);
     emit volumeChanged();
+}
+
+// 实际输出音量 = 用户档位 × duck 系数。压低音量（导航播报等场景）独立于用户
+// 档位：duck 期间用户拖滑条仍正常改 m_volume，焦点恢复后无缝回到原音量。
+void PlayerController::applyVolume()
+{
+    const qreal eff = qreal(m_volume) / 100.0 * (m_ducked ? 0.3 : 1.0);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    if (m_audio) m_audio->setVolume(eff);
+#else
+    m_player->setVolume(int(eff * 100.0 + 0.5));
+#endif
+}
+
+void PlayerController::setDucked(bool on)
+{
+    if (m_ducked == on)
+        return;
+    m_ducked = on;
+    applyVolume();
+    emit duckedChanged();
 }
 
 // 静音必须回到「静音前的档位」。以前界面各写一个常数（常驻栏 62、播放页 60），

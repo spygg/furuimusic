@@ -32,7 +32,11 @@ namespace {
 constexpr const char *kServiceClass = "cn/furui/music/MediaSessionService";
 
 // 与 MediaSessionService.java 中的 CMD_* 一一对应
-enum Command { CmdPlay = 1, CmdPause = 2, CmdNext = 3, CmdPrev = 4, CmdSeek = 5, CmdStop = 6 };
+enum Command {
+    CmdPlay = 1, CmdPause = 2, CmdNext = 3, CmdPrev = 4, CmdSeek = 5, CmdStop = 6,
+    // 音频焦点回调：其它应用开始播放时由 Java 监听器回传
+    CmdDuck = 7, CmdUnduck = 8
+};
 
 AndroidMediaSession *g_instance = nullptr;
 bool g_serviceStarted = false;
@@ -118,6 +122,24 @@ void applyKeepScreenOn(bool playing)
 // handleCommand 内发出的 Qt 信号由 AutoConnection 自动排队到接收者线程，不会
 // 在被占用的线程里直接执行槽函数。命令本身用 g_commandMutex 串行化，避免
 // 连点时多线程同时操作播放器。
+// 音频焦点：开始播放时向系统申请独占焦点（USAGE_MEDIA / AUDIOFOCUS_GAIN）。
+// 其它应用随后开始播放（视频、导航、来电、通知音）时，Java 侧监听器按焦点变化
+// 回传命令：LOSS/LOSS_TRANSIENT → 暂停；LOSS_TRANSIENT_CAN_DUCK → 压低音量继续播
+//（地图导航只压低不暂停的主流行为）；焦点回到本应用时恢复/解除压低。
+void acquireAudioFocus()
+{
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    if (!context.isValid())
+        return;
+    QJniObject::callStaticMethod<void>(kServiceClass, "acquireFocus",
+        "(Landroid/content/Context;)V", context.object());
+}
+
+void releaseAudioFocus()
+{
+    QJniObject::callStaticMethod<void>(kServiceClass, "releaseFocus", "()V");
+}
+
 void jniCommand(JNIEnv *, jclass, jint action, jlong position)
 {
     if (!g_instance)
@@ -157,8 +179,10 @@ void AndroidMediaSession::install()
         g_instance->syncCover(player->current());
         g_instance->pushMetadata();
         g_instance->pushPlayback();
-        if (player->playing())
+        if (player->playing()) {
             g_instance->ensureService();
+            acquireAudioFocus();
+        }
     }
     // 冷启动就常在播放（续播）：补一次常亮状态，避免要等下一次 stateChanged
     applyKeepScreenOn(player->playing());
@@ -177,13 +201,16 @@ AndroidMediaSession::AndroidMediaSession(QObject *parent) : QObject(parent)
             ensureService();
     });
 
-    // 播放/暂停/播完：刷新播放态、同步屏幕常亮；开始播放时确保服务已在前台
+    // 播放/暂停/播完：刷新播放态、同步屏幕常亮；开始播放时确保服务已在前台，
+    // 并向系统申请音频焦点（别的应用开始播放时本 App 会收到暂停/压低回调）
     connect(player, &PlayerController::stateChanged, this, [this] {
         const bool playing = PlayerController::instance()->playing();
         pushPlayback();
         applyKeepScreenOn(playing);
-        if (playing)
+        if (playing) {
             ensureService();
+            acquireAudioFocus();
+        }
     });
 
     // 设置页切换「播放时常亮」后立即生效（不必等下一次播放/暂停）
@@ -280,6 +307,18 @@ void AndroidMediaSession::handleCommand(int action, qint64 position)
     case CmdPause:
         if (player->playing())
             player->togglePause();
+        // 焦点被其它应用抢走（或通知栏统一暂停）时，MV 沉浸页一起停
+        emit AppController::instance()->mvPauseRequested();
+        break;
+    case CmdDuck:
+        // 导航播报等 CAN_DUCK 场景：只把音量压到 30%，不暂停。
+        // setDucked 会调 QAudioOutput::setVolume，跨线程无保障 → 排队到主线程执行
+        QMetaObject::invokeMethod(player, [player] { player->setDucked(true); },
+                                  Qt::QueuedConnection);
+        break;
+    case CmdUnduck:
+        QMetaObject::invokeMethod(player, [player] { player->setDucked(false); },
+                                  Qt::QueuedConnection);
         break;
     case CmdNext:
         player->next();
@@ -293,6 +332,8 @@ void AndroidMediaSession::handleCommand(int action, qint64 position)
     case CmdStop:
         player->stop();
         g_serviceStarted = false;
+        // 主动清空队列/停止时把焦点还给系统
+        releaseAudioFocus();
         break;
     default:
         break;

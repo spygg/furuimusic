@@ -107,6 +107,8 @@ class AppController : public QObject {
     Q_PROPERTY(bool currentFavorite READ currentFavorite NOTIFY playerChanged)
     Q_PROPERTY(QString theme READ theme NOTIFY settingsChanged)
     Q_PROPERTY(int volume READ volume NOTIFY volumeChanged)
+    // Android 音频焦点 CAN_DUCK：导航播报等场景压低音量（播放器与 MV 都乘 0.3）
+    Q_PROPERTY(bool ducked READ ducked NOTIFY duckedChanged)
     Q_PROPERTY(int playMode READ playMode NOTIFY settingsChanged)
     Q_PROPERTY(QString playModeName READ playModeName NOTIFY settingsChanged)
     Q_PROPERTY(QString lyricsText READ lyricsText NOTIFY lyricsChanged)
@@ -186,6 +188,7 @@ public:
     int currentQueueIndex() const;
     bool currentFavorite() const;
     int volume() const;
+    bool ducked() const;
     int playMode() const;
     QString playModeName() const;
     QString lyricsText() const;
@@ -343,6 +346,8 @@ signals:
     void playerChanged();
     void playingChanged();
     void volumeChanged();
+    // Android 音频焦点 duck 状态变化（MvPage 音量绑定 app.ducked 乘系数）
+    void duckedChanged();
     void positionChanged();
     void lyricsChanged();
     void settingsChanged();
@@ -367,6 +372,9 @@ signals:
     void mvOpened(const QVariantMap &mv);
     void mvListChanged();
     void mvContextChanged();
+    // Android 音频焦点被其它应用抢走（LOSS/LOSS_TRANSIENT）：音乐播放器暂停的同时，
+    // MV 沉浸页也一起暂停（MvPage 里 Connections 监听；普通暂停走它自己的按钮）
+    void mvPauseRequested();
 
 private:
     void setStatus(const QString &text);
