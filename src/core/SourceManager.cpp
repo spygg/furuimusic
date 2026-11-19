@@ -299,7 +299,11 @@ void SourceManager::resolve(const Song &song, const QString &quality, PlayableCa
         }
         if (!r.message.isEmpty()) r.message += QStringLiteral("。");
         r.message += QStringLiteral("可在「设置 → 在线音源」检查状态或换用其它音源");
-        if (Settings::boolean(QStringLiteral("autoToggleSource"), true))
+        // 「全部自定义」模式下不做内置跨源：用户明确要求所有取链只走自定义音源
+        const bool customOnly = Settings::boolean(QStringLiteral("vipSubstitute"), true)
+                && Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip"))
+                   == QLatin1String("custom");
+        if (!customOnly && Settings::boolean(QStringLiteral("autoToggleSource"), true))
             tryCrossSource(song, quality, r, cb);
         else if (cb)
             cb(r);
@@ -465,11 +469,25 @@ void SourceManager::resolveAlternate(const Song &song, const QStringList &exclud
     QStringList candidates;
     if (!exclude.contains(QStringLiteral("custom")))
         candidates << QStringLiteral("custom");
-    for (const QString &id : m_sourceOrder)
-        if (!exclude.contains(id) && source(id)) candidates << id;
-    for (MusicSource *s : m_sources)
-        if (!candidates.contains(s->id()) && !exclude.contains(s->id()))
-            candidates << s->id();
+
+    // 「取链顺序 = 全部自定义」（sourceFirst=custom）时，用户明确要求所有取链只走
+    // 自定义/在线音源。此前换源只读 sourceOrder、无视该设置，导致断流后仍跨到咪咕等
+    // 内置平台——与设置字面含义冲突，也是「设了全部自定义却还跨源」的根因。
+    // 这里让换源在该模式下严格只试自定义音源；自定义全失败则回调失败，由上层提示用户，
+    // 不再偷偷回落到内置平台。vip / platform 模式保持原有跨源行为不变。
+    const QString firstOrder = Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip"));
+    const bool customOnly = Settings::boolean(QStringLiteral("vipSubstitute"), true)
+                            && firstOrder == QLatin1String("custom");
+    if (customOnly) {
+        qInfo().noquote() << QStringLiteral("[换源] 取链顺序=全部自定义，仅尝试自定义音源，不跨内置平台");
+        if (candidates.isEmpty()) { if (cb) cb(Playable()); return; }
+    } else {
+        for (const QString &id : m_sourceOrder)
+            if (!exclude.contains(id) && source(id)) candidates << id;
+        for (MusicSource *s : m_sources)
+            if (!candidates.contains(s->id()) && !exclude.contains(s->id()))
+                candidates << s->id();
+    }
     if (candidates.isEmpty()) { if (cb) cb(Playable()); return; }
 
     auto attempt = std::make_shared<std::function<void(int)>>();
@@ -533,11 +551,126 @@ void SourceManager::related(const Song &song, int limit, SongsCallback cb)
 }
 
 void SourceManager::lyric(const Song &song, LyricCallback cb)
-{    MusicSource *s = source(song.source);
-    if (!s) { CustomSourceManager::instance()->lyric(song, cb); return; }
-    s->lyric(song, [song, cb](const QString &text, const QString &trans) {
-        if (!text.trimmed().isEmpty()) { if (cb) cb(text, trans); return; }
-        CustomSourceManager::instance()->lyric(song, cb);
+{
+    const quint64 gen = ++m_lyricGen;
+    MusicSource *s = source(song.source);
+
+    // 取词渠道顺序跟随「取链顺序」设置（sourceFirst）：
+    //   custom / vip —— 优先自定义（在线）音源取词，其次原平台，最后跨源匹配；
+    //   platform     —— 先原平台，其次自定义，最后跨源。
+    // 这一点很关键：播放走自定义音源替代时，原平台歌词接口（如咪咕）常被反爬返回
+    // HTML 页，若仍按 song.source 先取原平台歌词就会拿到「乱码」。自定义优先能从
+    // 根源避开；任何一层拿到有效歌词即止，无效则自动进入下一层。
+    const QString order = Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip"));
+    const bool customFirst = Settings::boolean(QStringLiteral("vipSubstitute"), true)
+                             && (order == QLatin1String("custom")
+                                 || (order == QLatin1String("vip") && song.vip));
+    QVector<QString> steps;
+    if (customFirst) {
+        steps << QStringLiteral("custom");
+        if (s) steps << QStringLiteral("platform");
+    } else {
+        if (s) steps << QStringLiteral("platform");
+        steps << QStringLiteral("custom");
+    }
+    steps << QStringLiteral("cross");   // 最后总是跨源智能匹配兜底
+
+    auto accept = [this, gen, cb](const QString &text, const QString &trans) -> bool {
+        if (gen != m_lyricGen) return true;              // 已切歌，停掉整条链
+        if (!isLyricsUsable(text)) return false;         // HTML 反爬页/错误体/空 → 下一层
+        if (cb) cb(text, trans);
+        return true;
+    };
+    auto run = std::make_shared<std::function<void(int)>>();
+    *run = [this, gen, song, cb, steps, run, accept](int i) {
+        if (gen != m_lyricGen) return;
+        if (i >= steps.size()) return;   // cross 是最后一步，它自己负责回调，不重复
+        const QString step = steps.at(i);
+        auto next = [run, i]() { (*run)(i + 1); };
+        if (step == QLatin1String("platform")) {
+            MusicSource *ps = source(song.source);
+            if (!ps) { next(); return; }
+            ps->lyric(song, [this, gen, accept, next](const QString &text, const QString &trans) {
+                if (gen != m_lyricGen) return;
+                if (!accept(text, trans)) next();
+            });
+        } else if (step == QLatin1String("custom")) {
+            CustomSourceManager::instance()->lyric(song,
+                [this, gen, accept, next](const QString &text, const QString &trans) {
+                    if (gen != m_lyricGen) return;
+                    if (!accept(text, trans)) next();
+                });
+        } else {   // cross
+            qWarning().noquote() << QStringLiteral("[歌词] 「%1 - %2」各渠道均未拿到有效歌词，跨源搜索")
+                                        .arg(song.title, song.artist);
+            lyricCrossSource(song, cb);
+        }
+    };
+    (*run)(0);
+}
+
+void SourceManager::lyricCrossSource(const Song &song, LyricCallback cb)
+{
+    const quint64 gen = m_lyricGen;
+    // 对标洛雪 findMusic：用「歌名 + 歌手」跨全部平台搜索（限 25 条），
+    // candidateScore 已含歌名相似度门槛 + 歌手/专辑/时长加权，是洛雪分层筛选的紧凑实现。
+    const QString keyword = (song.title + QLatin1Char(' ') + song.artist).trimmed();
+    const auto started = std::make_shared<bool>(false);
+    search(keyword, QString(), 25, [this, gen, song, cb, started](const QVector<Song> &list) {
+        if (*started || gen != m_lyricGen) return;
+        // 打分排序，先跳过原平台自己的重复结果
+        QVector<QPair<qreal, Song>> ranked;
+        for (const Song &c : list) {
+            if (c.source == song.source) continue;
+            const qreal score = candidateScore(song, c);
+            if (score > 0.55) ranked.append(qMakePair(score, c));
+        }
+        std::sort(ranked.begin(), ranked.end(),
+                  [](const QPair<qreal, Song> &a, const QPair<qreal, Song> &b) {
+                      return a.first > b.first;
+                  });
+        if (ranked.isEmpty()) return;   // 软刷新批次可能不全，等下一批
+        *started = true;                // 已有候选，兜底定时器不再触发
+
+        // 逐个候选源试歌词，拿到第一个带时间轴的有效歌词就收工。
+        // 用共享游标递归，避免为同一首歌并发取多个源。
+        struct Ctx {
+            QVector<QPair<qreal, Song>> ranked;
+            int index = 0;
+            bool done = false;
+        };
+        auto ctx = std::make_shared<Ctx>();
+        ctx->ranked = ranked;
+        auto tryNext = std::make_shared<std::function<void()>>();
+        *tryNext = [this, gen, song, cb, ctx, tryNext]() {
+            if (gen != m_lyricGen || ctx->done) return;
+            if (ctx->index >= ctx->ranked.size()) {
+                ctx->done = true;
+                if (cb) cb(QString(), QString());   // 全部候选都没有歌词
+                return;
+            }
+            const Song cand = ctx->ranked.at(ctx->index++).second;
+            MusicSource *target = source(cand.source);
+            if (!target) { (*tryNext)(); return; }
+            target->lyric(cand, [this, gen, song, cand, cb, ctx, tryNext](const QString &text,
+                                                                          const QString &trans) {
+                if (gen != m_lyricGen || ctx->done) return;
+                if (isLyricsUsable(text)) {
+                    ctx->done = true;
+                    qInfo().noquote() << QStringLiteral("[歌词] 跨源命中「%1 - %2」→ %3（%4，%5）")
+                                             .arg(song.title, song.artist, cand.title, cand.artist,
+                                                  cand.source);
+                    if (cb) cb(text, trans);
+                    return;
+                }
+                (*tryNext)();
+            });
+        };
+        (*tryNext)();
+    });
+    // 兜底收尾：search 各批次始终没匹配上时，明确回调空歌词，避免 UI 永远停在取词中
+    QTimer::singleShot(9000, this, [this, gen, cb, started]() {
+        if (!*started && gen == m_lyricGen && cb) cb(QString(), QString());
     });
 }
 
@@ -546,6 +679,13 @@ void SourceManager::cover(const Song &song, StringCallback cb)
     MusicSource *s = source(song.source);
     if (!s) { if (cb) cb(QString()); return; }
     s->cover(song, cb);
+}
+
+void SourceManager::comments(const Song &song, int page, CommentCallback cb)
+{
+    MusicSource *s = source(song.source);
+    if (!s) { if (cb) cb(QVector<Comment>(), -1); return; }
+    s->comments(song, page, std::move(cb));
 }
 
 void SourceManager::mv(const Song &song, MvCallback cb)

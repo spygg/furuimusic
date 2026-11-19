@@ -18,6 +18,11 @@ Item {
 
     property int pageIndex: 0
     property bool queueOpen: false
+    property bool commentsOpen: false
+    function openComments() {
+        commentsOpen = true
+        app.loadComments(1)
+    }
     // 播放页是沉浸页：从它退出时回到进入前的那一页
     property int lastContentPage: 0
     // MV 页同理：从哪页进的，返回键/关闭就回哪页
@@ -44,6 +49,10 @@ Item {
     function handleBack() {
         if (queueOpen) {
             queueOpen = false
+            return true
+        }
+        if (commentsOpen) {
+            commentsOpen = false
             return true
         }
         if (pageIndex === 4) {
@@ -268,16 +277,17 @@ Item {
                         anchors.fill: parent
                         onRequestClose: root.pageIndex = root.lastContentPage
                         onRequestSettings: root.pageIndex = 3
-                        onRequestQueue: root.queueOpen = !root.queueOpen
+                        onRequestQueue: { root.commentsOpen = false; root.queueOpen = !root.queueOpen }
+                        onRequestComments: { root.queueOpen = false; root.openComments() }
                     }
                 }
                 LoginPage { }
                 SettingsPage { }
             }
 
-            // 队列抽屉
+            // 队列 / 评论抽屉（共用右侧抽屉位，互斥显示）
             Rectangle {
-                property real drawerWidth: root.queueOpen ? 320 : 0
+                property real drawerWidth: (root.queueOpen || root.commentsOpen) ? 320 : 0
                 Behavior on drawerWidth {
                     NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
                 }
@@ -292,12 +302,22 @@ Item {
                     color: cLine
                 }
                 QueueDrawer {
+                    visible: root.queueOpen
                     width: 319
                     anchors.left: parent.left
                     anchors.leftMargin: 1
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     onCloseRequested: root.queueOpen = false
+                }
+                CommentDrawer {
+                    visible: root.commentsOpen
+                    width: 319
+                    anchors.left: parent.left
+                    anchors.leftMargin: 1
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    onCloseRequested: root.commentsOpen = false
                 }
             }
         }

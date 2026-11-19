@@ -114,6 +114,61 @@ QVector<LyricLine> parseLrc(const QString &lrc)
     return lines;
 }
 
+QVariantMap Comment::toVariant() const
+{
+    QVariantMap m;
+    m.insert(QStringLiteral("id"), id);
+    m.insert(QStringLiteral("text"), text);
+    m.insert(QStringLiteral("userName"), userName);
+    m.insert(QStringLiteral("avatar"), avatar);
+    m.insert(QStringLiteral("timeText"), timeText);
+    m.insert(QStringLiteral("likedCount"), likedCount);
+    m.insert(QStringLiteral("replyCount"), replyCount);
+    m.insert(QStringLiteral("replyText"), replyText);
+    m.insert(QStringLiteral("source"), source);
+    return m;
+}
+
+bool hasLrcTimeTag(const QString &text)
+{
+    // 洛雪 existTimeExp = /\[\d{1,2}:.*\d{1,4}\]/ 的等价实现：
+    // 只要出现一个形如 [mm:ss.xx] 的时间标签就认为有有效时间轴。
+    static const QRegularExpression timeTag(
+        QStringLiteral("\\[\\d{1,2}:[^\\]]*\\d{1,4}\\]"));
+    return timeTag.match(text).hasMatch();
+}
+
+bool isLyricsUsable(const QString &text)
+{
+    const QString t = text.trimmed();
+    if (t.isEmpty()) return false;
+    // 无歌词占位（各平台/自定义源的常见写法）
+    if (t == QLatin1String("暂无歌词") || t == QLatin1String("无歌词")
+        || t.compare(QLatin1String("no lyric"), Qt::CaseInsensitive) == 0
+        || t.compare(QLatin1String("null"), Qt::CaseInsensitive) == 0) return false;
+    const QString head = t.left(300);
+    // HTML 反爬页/错误页：真实歌词正文绝不会以标签开头，也不会整段是标签
+    if (head.contains(QLatin1String("<!doctype"), Qt::CaseInsensitive)
+        || head.contains(QLatin1String("<html"), Qt::CaseInsensitive)
+        || head.contains(QLatin1String("<head"), Qt::CaseInsensitive)
+        || head.contains(QLatin1String("<body"), Qt::CaseInsensitive)
+        || head.contains(QLatin1String("<script"), Qt::CaseInsensitive)) return false;
+    // JSON 错误体（歌词接口挂了返回 {"code":...}，不是歌词）
+    if ((head.startsWith(QLatin1Char('{')) || head.startsWith(QLatin1Char('[')))
+        && !hasLrcTimeTag(t)) return false;
+    // 有标准时间轴的一定可用
+    if (hasLrcTimeTag(t)) return true;
+    // 无时间轴的纯文本歌词：要求至少 2 行且不是明显的报错/网址，避免把
+    // 「请求过于频繁」「Access Denied」这类单行提示当歌词显示
+    const QStringList lines = t.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    if (lines.size() < 2) return false;
+    if (head.contains(QLatin1String("access denied"), Qt::CaseInsensitive)
+        || head.contains(QLatin1String("forbidden"), Qt::CaseInsensitive)
+        || head.contains(QLatin1String("请求过于频繁"))
+        || head.contains(QLatin1String("访问频繁"))) return false;
+    return true;
+}
+
 QString Song::normalizedKey() const
 {
     return normalize(title) + QLatin1Char('|') + normalize(artist);

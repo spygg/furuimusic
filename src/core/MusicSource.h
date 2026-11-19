@@ -51,6 +51,8 @@ public:
     void rankDetail(const QString &id, int limit, int offset, SongsCallback cb);
     void resolveUrl(const Song &song, const QString &quality, PlayableCallback cb);
     void lyric(const Song &song, LyricCallback cb);
+    // 歌曲评论（洛雪式）：不同平台接口/字段差异大，用专用解析，分页从 page=1 起。
+    void comments(const Song &song, int page, CommentCallback cb);
     // 搜索接口不返回封面时（网易云新版只给 album.picId），用配置里的
     // cover 端点按歌曲 id 单独补一张，避免播放页/播放栏一直是占位图。
     void cover(const Song &song, StringCallback cb);

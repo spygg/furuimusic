@@ -88,6 +88,24 @@ struct LyricLine {
 // 歌词回调：lrc = 原文 LRC（可含时间轴），trans = 平台翻译轨 LRC（无翻译为空串）
 using LyricCallback = std::function<void(const QString &lrc, const QString &trans)>;
 
+// 歌曲评论（洛雪式多平台评论）
+struct Comment {
+    QString id;
+    QString text;         // 评论正文
+    QString userName;
+    QString avatar;
+    QString timeText;     // 展示用时间字符串（已格式化）
+    qint64 time = 0;      // 毫秒时间戳（排序用）
+    int likedCount = 0;   // 点赞数
+    int replyCount = 0;   // 回复数
+    QString replyText;    // 被回复内容（若有）
+    QString source;       // 来源平台
+    QVariantMap toVariant() const;
+};
+
+// 评论回调：comments = 本页评论列表；total = 总数（-1 未知）；hot = 是否热门评论
+using CommentCallback = std::function<void(const QVector<Comment> &comments, int total)>;
+
 // 归一化字符串：去空白/标点/大小写/常见括号后缀
 QString normalize(const QString &s);
 // 编辑距离相似度 0..1
@@ -96,6 +114,12 @@ qreal similarity(const QString &a, const QString &b);
 qreal similarityNormalized(const QString &normalizedA, const QString &normalizedB);
 // 解析 LRC
 QVector<LyricLine> parseLrc(const QString &lrc);
+// 歌词有效性校验（洛雪 existTimeExp 思路）：
+// hasLrcTimeTag —— 文本里是否出现 [mm:ss.xx] 时间轴标签，有才是「可滚动的高质量歌词」。
+// isLyricsUsable —— 文本是否可当歌词展示：排除 HTML 反爬/错误页、JSON 错误体、
+//   「暂无歌词」占位等脏数据；无时间轴的纯文本歌词允许通过（由 UI 逐行兜底展示）。
+bool hasLrcTimeTag(const QString &text);
+bool isLyricsUsable(const QString &text);
 // 从 "a=1; b=2" 形式的 Cookie 串里按候选名（忽略大小写）取第一个非空值
 QString cookieValue(const QString &cookie, const QStringList &names);
 

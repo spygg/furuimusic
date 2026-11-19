@@ -167,6 +167,7 @@ CONFIG(legacy_widgets) {
         ui/qml/SettingsPage.qml \
         ui/qml/PlayBar.qml \
         ui/qml/QueueDrawer.qml \
+        ui/qml/CommentDrawer.qml \
         ui/qml/NavButton.qml \
         ui/qml/SongRow.qml \
         ui/qml/AlbumCard.qml \

@@ -1049,11 +1049,16 @@ void PlayerController::setLyrics(const QString &lrc, const QString &trans)
             line.remove(QLatin1Char('\r'));
             line.remove(metaTag);
             line = line.trimmed();
-            if (!line.isEmpty()) {
-                m_lyricLines << line;
-                m_lyricTransLines << QString();
-                m_lyricsText += line + QLatin1Char('\n');
-            }
+            if (line.isEmpty()) continue;
+            // 第二道防线：脚本/自定义音源可能绕过上游校验把 HTML 错误页塞进来，
+            // 这里逐行过滤标签行，避免「乱码」出现在歌词列表里。
+            if (line.startsWith(QLatin1Char('<')) || line.contains(QLatin1String("<!doctype"))
+                || line.contains(QLatin1String("<html")) || line.contains(QLatin1String("<script")))
+                continue;
+            if (line == QLatin1String("暂无歌词") || line == QLatin1String("null")) continue;
+            m_lyricLines << line;
+            m_lyricTransLines << QString();
+            m_lyricsText += line + QLatin1Char('\n');
         }
     } else {
         for (const LyricLine &l : m_lyrics) {

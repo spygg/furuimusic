@@ -20,6 +20,7 @@
         <file alias="SettingsPage.qml">qml/SettingsPage.qml</file>
         <file alias="PlayBar.qml">qml/PlayBar.qml</file>
         <file alias="QueueDrawer.qml">qml/QueueDrawer.qml</file>
+        <file alias="CommentDrawer.qml">qml/CommentDrawer.qml</file>
         <file alias="NavButton.qml">qml/NavButton.qml</file>
         <file alias="SongRow.qml">qml/SongRow.qml</file>
         <file alias="AlbumCard.qml">qml/AlbumCard.qml</file>

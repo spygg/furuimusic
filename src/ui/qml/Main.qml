@@ -37,6 +37,7 @@ ApplicationWindow {
     // 外壳（移动/桌面）切换会销毁重建子树，状态必须常驻在窗口层，否则切回来就回首页
     property int pageIndex: 0
     property bool queueOpen: false
+    property bool commentsOpen: false
     property int lastContentPage: 0
     // 反向同步时压制回写，避免 win <-> shell.item 互相触发形成循环
     property bool shellSyncing: false
@@ -140,6 +141,8 @@ ApplicationWindow {
         item.pageIndex = win.pageIndex
         if (item.queueOpen !== undefined)
             item.queueOpen = win.queueOpen
+        if (item.commentsOpen !== undefined)
+            item.commentsOpen = win.commentsOpen
         if (item.lastContentPage !== undefined)
             item.lastContentPage = win.lastContentPage
         win.shellSyncing = false
@@ -157,11 +160,18 @@ ApplicationWindow {
                 win.lastContentPage = item.lastContentPage
             if (item.queueOpen !== undefined)
                 win.queueOpen = item.queueOpen
+            if (item.commentsOpen !== undefined)
+                win.commentsOpen = item.commentsOpen
         }
         function onQueueOpenChanged() {
             const item = shell.item
             if (item && !win.shellSyncing)
                 win.queueOpen = item.queueOpen
+        }
+        function onCommentsOpenChanged() {
+            const item = shell.item
+            if (item && !win.shellSyncing)
+                win.commentsOpen = item.commentsOpen
         }
     }
 

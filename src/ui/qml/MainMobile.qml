@@ -25,6 +25,12 @@ Item {
 
     property int pageIndex: 0
     property bool queueOpen: false
+    property bool commentsOpen: false
+    // 打开评论抽屉时顺带拉取当前歌曲第一页评论
+    function openComments() {
+        commentsOpen = true
+        app.loadComments(1)
+    }
     // MV 页从哪页进的，返回键/关闭就回哪页
     property int mvReturnPage: 1
 
@@ -32,6 +38,10 @@ Item {
     function handleBack() {
         if (queueOpen) {
             queueOpen = false
+            return true
+        }
+        if (commentsOpen) {
+            commentsOpen = false
             return true
         }
         if (pageIndex === 4) {
@@ -142,7 +152,8 @@ Item {
             ownBackdrop: false
             onRequestClose: root.pageIndex = 0
             onRequestSettings: root.pageIndex = 3
-            onRequestQueue: root.queueOpen = !root.queueOpen
+            onRequestQueue: { root.commentsOpen = false; root.queueOpen = !root.queueOpen }
+            onRequestComments: { root.queueOpen = false; root.openComments() }
         }
         LoginPage { }
         SettingsPage { }
@@ -540,6 +551,37 @@ Item {
                 anchors.fill: parent
                 anchors.bottomMargin: queuePanel.corner
                 onCloseRequested: root.queueOpen = false
+            }
+        }
+    }
+
+    // 歌曲评论底部面板（与队列面板同款升降动画，互斥打开）
+    Rectangle {
+        id: commentSheet
+        anchors.fill: parent
+        color: "#66000000"
+        visible: opacity > 0
+        opacity: root.commentsOpen ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 150 } }
+        MouseArea {
+            anchors.fill: parent
+            onClicked: root.commentsOpen = false
+        }
+        Rectangle {
+            id: commentPanel
+            readonly property real corner: theme.radiusLg
+            radius: corner
+            color: theme.card
+            clip: true
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: Math.max(260, Math.min(parent.height - 8, parent.height * 0.72)) + corner
+            y: root.commentsOpen ? parent.height - height + corner : parent.height + corner
+            Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+            CommentDrawer {
+                anchors.fill: parent
+                anchors.bottomMargin: commentPanel.corner
+                onCloseRequested: root.commentsOpen = false
             }
         }
     }

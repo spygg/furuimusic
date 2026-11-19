@@ -12,6 +12,7 @@
 
 #include "JsonMapper.h"
 #include "KugouProtocol.h"
+#include "NeteaseCrypto.h"
 #include "Settings.h"
 #include <QRegularExpression>
 
@@ -585,9 +586,13 @@ void MusicSource::lyric(const Song &song, LyricCallback cb)
     if (!ep.valid()) { if (cb) cb(QString(), QString()); return; }
     call(ep, songVars(song, QStringLiteral("standard")), [this, ep, cb](const HttpClient::Reply &r) {
         QString out;
-        if (r.ok) out = Json::firstString(Json::rootOf(r.json), ep.resultPaths);
-        if (out.isEmpty() && !r.body.isEmpty() && r.json.isEmpty())
-            out = QString::fromUtf8(r.body);
+        // 只认从 JSON 结构里解析出的歌词字段。此前这里有一段
+        // `if (out.isEmpty() && r.json.isEmpty()) out = QString::fromUtf8(r.body)` 的
+        // 裸 body 回退：咪咕/网易云的歌词端点被反爬时返回的是完整 HTML 页（HTTP 200），
+        // JSON 解析为空 → 整段 HTML 被当成歌词塞给 parseLrc，界面就显示成「乱码」。
+        // 删掉裸回退：拿不到结构化歌词就返回空，交给上游跨源兜底。
+        if (r.ok) out = Json::firstString(Json::rootOf(r.json), ep.resultPaths).trimmed();
+        if (!isLyricsUsable(out)) out.clear();
         // 翻译轨：tlyric/translateLyric/trans 等候选路径，空串表示平台没给翻译。
         QString trans;
         if (r.ok && !ep.transPaths.isEmpty())
@@ -599,6 +604,173 @@ void MusicSource::lyric(const Song &song, LyricCallback cb)
         }
         if (cb) cb(out, trans);
     });
+}
+
+// 把秒级时间戳格式化为「昨天/MM-DD HH:mm」这类展示文本
+static QString commentTimeText(qint64 ms)
+{
+    if (ms <= 0) return QString();
+    const QDateTime dt = QDateTime::fromMSecsSinceEpoch(ms);
+    const QDateTime now = QDateTime::currentDateTime();
+    const qint64 days = dt.daysTo(now);
+    if (days == 0) return QStringLiteral("今天 ") + dt.toString(QStringLiteral("HH:mm"));
+    if (days == 1) return QStringLiteral("昨天 ") + dt.toString(QStringLiteral("HH:mm"));
+    if (days < 7) return dt.toString(QStringLiteral("MM-DD HH:mm"));
+    return dt.toString(QStringLiteral("yyyy-MM-dd"));
+}
+
+void MusicSource::comments(const Song &song, int page, CommentCallback cb)
+{
+    auto done = [cb](const QVector<Comment> &list, int total) {
+        if (cb) cb(list, total);
+    };
+    const QString id = song.sourceId;
+    if (id.isEmpty() || page < 1) { done(QVector<Comment>(), -1); return; }
+    const int pageSize = 20;
+
+    if (m_desc.driver == QLatin1String("migu")) {
+        // 咪咕评论：GET app.c.nf.migu.cn/MIGUM3.0/user/comment/stack/v1.0
+        // 成功码字符串 "000000"，热评 queryType=2、最新 queryType=1，游标分页。
+        const QString url = QStringLiteral("https://app.c.nf.migu.cn/MIGUM3.0/user/comment/stack/v1.0")
+            + QStringLiteral("?pageSize=%1&queryType=%2&resourceId=%3&resourceType=2&commentId=")
+                  .arg(pageSize).arg(page == 1 ? 2 : 1).arg(id);
+        QVariantMap h;
+        h.insert(QStringLiteral("User-Agent"), QStringLiteral("Mozilla/5.0"));
+        h.insert(QStringLiteral("Referer"), QStringLiteral("https://app.c.nf.migu.cn/"));
+        HttpClient::instance()->request(QStringLiteral("GET"), QUrl(url), h, QByteArray(),
+            [done](const HttpClient::Reply &r) {
+                QVector<Comment> out;
+                int total = -1;
+                if (r.ok) {
+                    const QJsonValue root = Json::rootOf(r.json);
+                    if (Json::stringAt(root, QStringLiteral("code")) == QLatin1String("000000")) {
+                        const QJsonValue data = Json::valueAt(root, QStringLiteral("data"));
+                        total = Json::stringAt(data, QStringLiteral("commentNums")).toInt();
+                        const QJsonArray arr = Json::arrayAt(data, QStringLiteral("comments"));
+                        for (const QJsonValue &v : arr) {
+                            Comment c;
+                            c.source = QStringLiteral("migu");
+                            c.id = Json::stringAt(v, QStringLiteral("commentId"));
+                            c.text = Json::stringAt(v, QStringLiteral("content"));
+                            c.userName = Json::firstString(v, {QStringLiteral("nickname"), QStringLiteral("userName")});
+                            c.avatar = Json::firstString(v, {QStringLiteral("avatar"), QStringLiteral("userAvatar")});
+                            const qint64 sec = Json::stringAt(v, QStringLiteral("createTime")).toLongLong();
+                            c.time = sec > 0 ? sec * 1000 : 0;
+                            c.timeText = commentTimeText(c.time);
+                            c.likedCount = Json::stringAt(v, QStringLiteral("likeCount")).toInt();
+                            c.replyCount = Json::stringAt(v, QStringLiteral("replyCount")).toInt();
+                            if (!c.text.isEmpty()) out << c;
+                        }
+                    }
+                }
+                done(out, total);
+            });
+        return;
+    }
+
+    if (m_desc.driver == QLatin1String("kuwo")) {
+        // 酷我评论：GET ncomment.kuwo.cn/com.s，无签名。第 1 页取热评+最新，后续取最新。
+        const int start = (page - 1) * pageSize;
+        const QString url = QStringLiteral("http://ncomment.kuwo.cn/com.s?f=web&type=%1")
+            + QStringLiteral("&aapiver=1&prod=kwplayer_ar_10.5.2.0&digest=15&sid=%2&start=%3")
+                  .arg(page == 1 ? QStringLiteral("get_rec_comment") : QStringLiteral("get_comment"),
+                       id, QString::number(start))
+            + QStringLiteral("&msgflag=1&count=%1&newver=3&uid=0").arg(pageSize);
+        QVariantMap h;
+        h.insert(QStringLiteral("User-Agent"), QStringLiteral("Dalvik/2.1.0 (Linux; U; Android 9;)"));
+        HttpClient::instance()->request(QStringLiteral("GET"), QUrl(url), h, QByteArray(),
+            [done](const HttpClient::Reply &r) {
+                QVector<Comment> out;
+                int total = -1;
+                if (r.ok) {
+                    const QJsonValue root = Json::rootOf(r.json);
+                    if (Json::stringAt(root, QStringLiteral("code")) == QLatin1String("200")) {
+                        total = Json::stringAt(root, QStringLiteral("comments_counts")).toInt();
+                        QJsonArray arr = Json::arrayAt(root, QStringLiteral("hot_comments"));
+                        if (arr.isEmpty()) arr = Json::arrayAt(root, QStringLiteral("comments"));
+                        for (const QJsonValue &v : arr) {
+                            Comment c;
+                            c.source = QStringLiteral("kuwo");
+                            c.id = Json::stringAt(v, QStringLiteral("id"));
+                            c.text = Json::stringAt(v, QStringLiteral("msg"));
+                            c.userName = Json::stringAt(v, QStringLiteral("u_name"));
+                            c.avatar = Json::stringAt(v, QStringLiteral("u_pic"));
+                            const qint64 sec = Json::stringAt(v, QStringLiteral("time")).toLongLong();
+                            c.time = sec > 0 ? sec * 1000 : 0;
+                            c.timeText = commentTimeText(c.time);
+                            c.likedCount = Json::stringAt(v, QStringLiteral("like_num")).toInt();
+                            if (!c.text.isEmpty()) out << c;
+                        }
+                    }
+                }
+                done(out, total);
+            });
+        return;
+    }
+
+    if (m_desc.driver == QLatin1String("netease")) {
+        // 网易云评论：POST weapi/comment/resource/comments/get，rid = R_SO_4_<songId>
+        // 用项目已有的 NeteaseCrypto::weapiForm 生成 {params, encSecKey} 表单。
+        const QString rid = QStringLiteral("R_SO_4_") + id;
+        const qint64 offset = (page - 1) * pageSize;
+        QJsonObject payload;
+        payload.insert(QStringLiteral("rid"), rid);
+        payload.insert(QStringLiteral("threadId"), rid);
+        payload.insert(QStringLiteral("cursor"), offset);
+        payload.insert(QStringLiteral("offset"), offset);
+        payload.insert(QStringLiteral("orderType"), 1);
+        payload.insert(QStringLiteral("pageNo"), page);
+        payload.insert(QStringLiteral("pageSize"), pageSize);
+        // payload 字段与洛雪 wy/comment.js 的 weapi 参数逐项一致，不额外塞 total/csrf_token
+        const QByteArray body = Netease::weapiForm(payload);
+        QVariantMap h;
+        h.insert(QStringLiteral("User-Agent"),
+                 QStringLiteral("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.90 Safari/537.36"));
+        h.insert(QStringLiteral("Origin"), QStringLiteral("https://music.163.com"));
+        h.insert(QStringLiteral("Referer"), QStringLiteral("http://music.163.com/"));
+        h.insert(QStringLiteral("Content-Type"), QStringLiteral("application/x-www-form-urlencoded"));
+        HttpClient::instance()->request(QStringLiteral("POST"),
+            QUrl(QStringLiteral("https://music.163.com/weapi/comment/resource/comments/get")),
+            h, body, [done](const HttpClient::Reply &r) {
+                QVector<Comment> out;
+                int total = -1;
+                if (r.ok) {
+                    const QJsonValue root = Json::rootOf(r.json);
+                    if (Json::stringAt(root, QStringLiteral("code")).toInt() == 200) {
+                        const QJsonValue data = Json::valueAt(root, QStringLiteral("data"));
+                        total = Json::stringAt(data, QStringLiteral("totalCount")).toInt();
+                        const QJsonArray hot = Json::arrayAt(data, QStringLiteral("hotComments"));
+                        const QJsonArray arr = Json::arrayAt(data, QStringLiteral("comments"));
+                        auto parse = [&out](const QJsonArray &a) {
+                            for (const QJsonValue &v : a) {
+                                Comment c;
+                                c.source = QStringLiteral("netease");
+                                c.id = Json::stringAt(v, QStringLiteral("commentId"));
+                                c.text = Json::stringAt(v, QStringLiteral("content"));
+                                const QJsonValue u = Json::valueAt(v, QStringLiteral("user"));
+                                c.userName = Json::stringAt(u, QStringLiteral("nickname"));
+                                c.avatar = Json::stringAt(u, QStringLiteral("avatarUrl"));
+                                const qint64 sec = Json::stringAt(v, QStringLiteral("time")).toLongLong();
+                                c.time = sec > 0 ? sec : 0;
+                                c.timeText = commentTimeText(c.time);
+                                c.likedCount = Json::stringAt(v, QStringLiteral("likedCount")).toInt();
+                                const QJsonValue rsp = Json::valueAt(v, QStringLiteral("reply"));
+                                c.replyCount = Json::stringAt(rsp, QStringLiteral("replyCount")).toInt();
+                                c.replyText = Json::stringAt(rsp, QStringLiteral("content"));
+                                if (!c.text.isEmpty()) out << c;
+                            }
+                        };
+                        if (Json::arrayAt(data, QStringLiteral("hotComments")).size() > 0) parse(hot);
+                        parse(arr);
+                    }
+                }
+                done(out, total);
+            });
+        return;
+    }
+
+    // 其它平台（QQ/酷狗/汽水）暂未配置评论解析，明确回空，UI 显示「该平台暂无评论」
+    done(QVector<Comment>(), -1);
 }
 
 void MusicSource::cover(const Song &song, StringCallback cb)

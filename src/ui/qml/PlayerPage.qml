@@ -20,6 +20,7 @@ Item {
     signal requestClose()
     signal requestSettings()
     signal requestQueue()
+    signal requestComments()
 
     // 兼容旧调用点：播放页现在始终自带控件，这个属性只为老外壳不报错
     property bool showControls: true
@@ -238,6 +239,7 @@ Item {
             // 队列 / MV / 设置：与参考项目右上角一样是小的半透明方按钮
             Repeater {
                 model: [
+                    { icon: "comment", tip: "评论" },
                     { icon: "list", tip: "播放队列" },
                     { icon: "video", tip: "播放 MV" },
                     { icon: "settings", tip: "设置" }
@@ -263,8 +265,9 @@ Item {
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
-                            if (index === 0) root.requestQueue()
-                            else if (index === 1) app.playMvCurrent()
+                            if (index === 0) root.requestComments()
+                            else if (index === 1) root.requestQueue()
+                            else if (index === 2) app.playMvCurrent()
                             else root.requestSettings()
                         }
                     }

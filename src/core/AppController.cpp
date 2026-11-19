@@ -1402,6 +1402,41 @@ void AppController::loadMvList(const QString &area, bool append)
         });
 }
 
+void AppController::loadComments(int page)
+{
+    if (m_commentsLoading || page < 1) return;
+    const Song song = d->currentSong;
+    if (song.sourceId.isEmpty() || song.title.isEmpty()) {
+        emit notify(QStringLiteral("请先播放一首歌曲再查看评论"), QStringLiteral("info"));
+        return;
+    }
+    m_commentsLoading = true;
+    const bool append = (page > 1);
+    if (!append) {
+        m_comments.clear();
+        m_commentTotal = -1;
+    }
+    m_commentPage = page;
+    m_commentSourceName = sourceName(song.source);
+    emit commentsChanged();
+
+    SourceManager::instance()->comments(song, page,
+        [this, page, append, song](const QVector<Comment> &list, int total) {
+            m_commentsLoading = false;
+            if (append) {
+                for (const Comment &c : list) m_comments.append(c.toVariant());
+            } else {
+                m_comments.clear();
+                for (const Comment &c : list) m_comments.append(c.toVariant());
+            }
+            if (total >= 0) m_commentTotal = total;
+            emit commentsChanged();
+            if (m_comments.isEmpty() && page == 1)
+                emit notify(QStringLiteral("「%1」暂无评论或该平台未开放评论").arg(song.title),
+                            QStringLiteral("info"));
+        });
+}
+
 void AppController::playMvItem(int index)
 {
     if (index < 0 || index >= m_mvList.size()) return;

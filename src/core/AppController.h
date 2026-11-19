@@ -188,6 +188,11 @@ class AppController : public QObject {
     Q_PROPERTY(bool mvHasMore READ mvHasMore NOTIFY mvListChanged)
     Q_PROPERTY(bool mvHasPrev READ mvHasPrev NOTIFY mvContextChanged)
     Q_PROPERTY(bool mvHasNext READ mvHasNext NOTIFY mvContextChanged)
+    // ---- 歌曲评论 ----
+    Q_PROPERTY(QVariantList comments READ comments NOTIFY commentsChanged)
+    Q_PROPERTY(bool commentsLoading READ commentsLoading NOTIFY commentsChanged)
+    Q_PROPERTY(int commentTotal READ commentTotal NOTIFY commentsChanged)
+    Q_PROPERTY(QString commentSourceName READ commentSourceName NOTIFY commentsChanged)
     // ---- 应用信息 ----
     Q_PROPERTY(QString appName READ appName CONSTANT)
     Q_PROPERTY(QString version READ version CONSTANT)
@@ -262,6 +267,10 @@ public:
     bool mvHasMore() const { return m_mvHasMore; }
     bool mvHasPrev() const { return m_mvIndex > 0; }
     bool mvHasNext() const { return m_mvIndex >= 0 && m_mvIndex + 1 < m_mvList.size(); }
+    QVariantList comments() const { return m_comments; }
+    bool commentsLoading() const { return m_commentsLoading; }
+    int commentTotal() const { return m_commentTotal; }
+    QString commentSourceName() const { return m_commentSourceName; }
     QString appName() const { return QStringLiteral("福瑞音乐"); }
     QString version() const { return QStringLiteral(FURUI_APP_VERSION); }
 
@@ -309,6 +318,8 @@ public:
     Q_INVOKABLE void playMvCurrent();
     // MV 榜单：按地区分页拉取；append=true 用于滚到底自动续页
     Q_INVOKABLE void loadMvList(const QString &area, bool append = false);
+    // 评论：loadComments(page) 拉当前播放歌曲的评论（page 从 1 起），append=true 加载更多
+    Q_INVOKABLE void loadComments(int page = 1);
     // 从榜单封面进入沉浸式播放器，并记住上下曲上下文
     Q_INVOKABLE void playMvItem(int index);
     Q_INVOKABLE void playMvNext();
@@ -404,6 +415,7 @@ signals:
     // MV 解析成功后外壳切到 MV 页（url/title/artist/cover/source/hasPrev/hasNext）
     void mvOpened(const QVariantMap &mv);
     void mvListChanged();
+    void commentsChanged();
     void mvContextChanged();
     // Android 音频焦点被其它应用抢走（LOSS/LOSS_TRANSIENT）：音乐播放器暂停的同时，
     // MV 沉浸页也一起暂停（MvPage 里 Connections 监听；普通暂停走它自己的按钮）
@@ -447,6 +459,12 @@ private:
     int m_mvIndex = -1;
     bool m_mvLoading = false;
     bool m_mvHasMore = true;
+    // 评论分页状态
+    QVariantList m_comments;
+    int m_commentPage = 1;
+    int m_commentTotal = -1;
+    bool m_commentsLoading = false;
+    QString m_commentSourceName;
     static AppController *s_instance;
 };
 
