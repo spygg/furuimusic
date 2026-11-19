@@ -285,13 +285,18 @@ Item {
             visible: root.wide
 
             // 封面边长：由「左列宽度」和「扣除信息区后的剩余高度」共同决定，避免小窗口把按钮挤出去。
-            // 预留 206 = 标题区 ~89 + 进度 34 + 控件单行 ~48 + 间距 12 + 少量余量，
-            // 使矮横屏（车机分屏常只有 300~500 高）也能整列放下，而不是把控件行推出可视区
-            readonly property bool shortRow: height < 420
+            // 预留量必须按实际内容高度反推——以前写死 206，但「标题+艺人+两枚角标」实测约 89，
+            // 加进度 34、控件 86 与两处间距共 229，车机横屏（可用高 ~500）时整列溢出，
+            // 底部主播放按钮被裁掉一截。改成读 Loader 的真实高度，加载前后都有保守兜底。
+            readonly property bool shortRow: height < 520
+            readonly property real metaH: wideMetaLoader.item ? wideMetaLoader.item.implicitHeight : (widePane.shortRow ? 89 : 89)
+            readonly property real ctrlH: wideControlsLoader.item ? wideControlsLoader.item.implicitHeight : (widePane.shortRow ? 72 : 86)
+            readonly property real reserved: widePane.metaH + (widePane.shortRow ? 6 : 10) + 34
+                                             + (widePane.shortRow ? 6 : 10) + widePane.ctrlH + 10
             // 短屏（手机横屏 336dp 高）里封面再占 84 会把最后的控件行挤出可视区，
             // 下限收到 60；其余高度按可用高度反推，保证整列放得下。
             readonly property real coverSide: Math.max(widePane.shortRow ? 60 : 84,
-                                                       Math.min(width * 0.40, height - 206, 390))
+                                                       Math.min(width * 0.40, height - widePane.reserved, 390))
 
             RowLayout {
                 anchors.fill: parent
@@ -327,6 +332,7 @@ Item {
                             }
 
                             Loader {
+                                id: wideMetaLoader
                                 width: parent.width
                                 // 固定 56/72 装不下「标题 + 艺人 + 两枚角标」三行（实测约 89），
                                 // 多出来的部分会直接压在下面的歌词/进度上；按内容实际高度给位
