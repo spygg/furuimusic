@@ -717,7 +717,7 @@ Item {
                 Item {
                     ListView {
                         id: playlistList
-                            cacheBuffer: height * 2   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
+                            cacheBuffer: visible ? height * 2 : 100   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
                         anchors.fill: parent
                         clip: true
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
@@ -969,7 +969,7 @@ Item {
 
                         ListView {
                             id: detailList
-                                cacheBuffer: height * 2   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
+                                cacheBuffer: visible ? height * 2 : 100   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
@@ -1022,7 +1022,7 @@ Item {
                 Item {
                     ListView {
                         id: favoriteList
-                            cacheBuffer: height * 2   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
+                            cacheBuffer: visible ? height * 2 : 100   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
                         anchors.fill: parent
                         clip: true
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
@@ -1062,7 +1062,7 @@ Item {
                 Item {
                     ListView {
                         id: historyList
-                            cacheBuffer: height * 2   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
+                            cacheBuffer: visible ? height * 2 : 100   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
                         anchors.fill: parent
                         clip: true
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
@@ -1102,7 +1102,7 @@ Item {
                 Item {
                     ListView {
                         id: queueList
-                            cacheBuffer: height * 2   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
+                            cacheBuffer: visible ? height * 2 : 100   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
                         anchors.fill: parent
                         clip: true
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
@@ -1232,6 +1232,10 @@ Item {
                                         anchors.fill: parent
                                         source: model.cover
                                         fillMode: Image.PreserveAspectCrop
+                                        // 这里只显示 46px 的小图，没必要把整张榜单封面解进显存
+                                        sourceSize.width: 96
+                                        sourceSize.height: 96
+                                        cache: true
                                         visible: status === Image.Ready
                                         asynchronous: true
                                     }
@@ -1354,7 +1358,7 @@ Item {
 
                         ListView {
                             id: discoveryDetail
-                                cacheBuffer: height * 2   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
+                                cacheBuffer: visible ? height * 2 : 100   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
@@ -1718,7 +1722,7 @@ Item {
                             // 歌曲（列表）
                             ListView {
                                 id: searchSongList
-                                cacheBuffer: height * 2
+                                cacheBuffer: visible ? height * 2 : 100
                                 anchors.fill: parent
                                 clip: true
                                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
@@ -1775,7 +1779,7 @@ Item {
                             // 歌单（列表）
                             ListView {
                                 id: searchPlaylistList
-                                cacheBuffer: height * 2
+                                cacheBuffer: visible ? height * 2 : 100
                                 anchors.fill: parent
                                 clip: true
                                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }

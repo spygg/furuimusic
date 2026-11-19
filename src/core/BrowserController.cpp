@@ -17,19 +17,31 @@
 // 本工程的 Qt 5 Android qmake 链路也要编这个文件，必须加版本守卫，
 // 否则 Qt5 Android 构建在 include 处直接 fatal error（与 UpdateChecker.cpp 同款写法）。
 #include <QJniObject>
+// QNativeInterface::QAndroidApplication 的真实头文件；QNativeInterface/QAndroidApplication
+// 这个前向路径 Qt 6.9+ 才有，6.8.3 的 android kit 里没有（CI 实测 fatal error）
+#include <QtCore/qcoreapplication_platform.h>
 #endif
 
 namespace Furui {
 namespace {
 
 // 用户可能直接粘 "music.163.com"，补上 https 并保证没有尾部空白。
+// 判定用 "://" 而不是 ":"：主机带端口的写法（127.0.0.1:8080）里也有冒号，
+// 按 ":" 判会把它当成「已有协议」原样交给 QUrl，解析出的 scheme 变成 "127.0.0.1"。
 QString normalizeUrl(const QString &raw)
 {
     QString url = raw.trimmed();
     if (url.isEmpty())
         return url;
-    if (!url.contains(QLatin1Char(':')))
-        url.prepend(QStringLiteral("https://"));
+    if (url.indexOf(QStringLiteral("://")) <= 0) {
+        // 不带 "//" 的合法协议（about:blank / data: / file:）原样保留
+        const bool schemeless = url.startsWith(QLatin1String("about:"))
+                || url.startsWith(QLatin1String("data:"))
+                || url.startsWith(QLatin1String("file:"))
+                || url.startsWith(QLatin1String("javascript:"));
+        if (!schemeless)
+            url.prepend(QStringLiteral("https://"));
+    }
     return QUrl(url).toString();
 }
 
@@ -94,6 +106,21 @@ QString androidCookies(const QString &url)
             "getCookie", "(Ljava/lang/String;)Ljava/lang/String;",
             jUrl.object<jstring>());
     return cookies.isValid() ? cookies.toString() : QString();
+}
+#endif
+
+#if defined(Q_OS_ANDROID) && defined(FURUI_HAVE_WEBVIEW) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+// 系统 WebView 默认拒绝 https 页面里的 http 图片（MIXED_CONTENT_NEVER_ALLOW），
+// 音乐站封面大量是 http://，不放开就是「网页正常、图片全空」。Qt 的 Android 后端
+// 没暴露这个开关，只能调 App 自己的 Java 助手去遍历视图树改设置。
+void enableAndroidMixedContent()
+{
+    const QJniObject activity = QNativeInterface::QAndroidApplication::context();
+    if (!activity.isValid())
+        return;
+    QJniObject::callStaticMethod<void>(
+            "cn/furui/music/WebViewTweaks", "enableMixedContent",
+            "(Landroid/app/Activity;)V", activity.object());
 }
 #endif
 
@@ -392,12 +419,55 @@ void BrowserController::open(const QString &url, const QString &mode)
     m_opened = true;
     emit urlChanged();
     emit openedChanged();
+#if defined(Q_OS_ANDROID) && defined(FURUI_HAVE_WEBVIEW) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // QML 收到 openedChanged 后会新建一个 WebView；这里让原生侧放开混合内容，
+    // 否则 https 页面里的 http 封面图全部被系统拦掉（图片空白）。
+    prepareWebView();
+#endif
 }
 
 void BrowserController::navigate(const QString &url)
 {
     m_url = normalizeUrl(url);
     emit urlChanged();
+}
+
+void BrowserController::prepareWebView()
+{
+#if defined(Q_OS_ANDROID) && defined(FURUI_HAVE_WEBVIEW) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    enableAndroidMixedContent();
+#endif
+}
+
+bool BrowserController::webCanGoBack() const
+{
+#if defined(Q_OS_ANDROID) && defined(FURUI_HAVE_WEBVIEW) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const QJniObject activity = QNativeInterface::QAndroidApplication::context();
+    if (!activity.isValid())
+        return false;
+    // 这里调 Java 助手：JNI 调用跑在 qtMainLoopThread，Java 侧会 post 到 Android
+    // UI 线程再查 WebView（WebView 方法只允许在 UI 线程调用），并把 Qt 后端 250ms
+    // 的等待放宽到 1500ms，避免 UI 线程忙时误判「没有历史」。
+    return QJniObject::callStaticMethod<jboolean>(
+            "cn/furui/music/WebViewTweaks", "canGoBack",
+            "(Landroid/app/Activity;)Z", activity.object());
+#else
+    return false;
+#endif
+}
+
+bool BrowserController::webCanGoForward() const
+{
+#if defined(Q_OS_ANDROID) && defined(FURUI_HAVE_WEBVIEW) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const QJniObject activity = QNativeInterface::QAndroidApplication::context();
+    if (!activity.isValid())
+        return false;
+    return QJniObject::callStaticMethod<jboolean>(
+            "cn/furui/music/WebViewTweaks", "canGoForward",
+            "(Landroid/app/Activity;)Z", activity.object());
+#else
+    return false;
+#endif
 }
 
 void BrowserController::close()

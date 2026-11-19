@@ -17,7 +17,9 @@ import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.util.Log;
+import android.view.KeyEvent;
 
 /**
  * 播放器前台服务 + 系统 MediaSession。
@@ -59,6 +61,10 @@ public class MediaSessionService extends Service {
     private static native void onNativeCommand(int action, long position);
 
     private static MediaSessionService sInstance;
+    // 三条命令通路（MediaSession 回调 / MEDIA_BUTTON 广播 / Activity 媒体键）可能在
+    // 同一次语音指令里同时到达；DES 车机上就会出现「一句话切两首」。统一在命令
+    // 入口按 350ms 去抖，只作用于切歌，暂停/播放不受影响。
+    private static long sLastSkipAt = 0;
 
     // C++ 可能先 start() 再 update*()，而服务 onCreate 是异步的，
     // 所以状态同时存一份静态副本，onCreate 时用它构建首个通知。
@@ -243,10 +249,17 @@ public class MediaSessionService extends Service {
             public void onPause() { sendCommand(CMD_PAUSE, 0); }
 
             @Override
-            public void onSkipToNext() { sendCommand(CMD_NEXT, 0); }
+            public void onSkipToNext() {
+                // 车机语音调试：确认小迪走的是 MediaSession transport controls
+                Log.w(TAG, "session skip next");
+                sendCommand(CMD_NEXT, 0);
+            }
 
             @Override
-            public void onSkipToPrevious() { sendCommand(CMD_PREV, 0); }
+            public void onSkipToPrevious() {
+                Log.w(TAG, "session skip prev");
+                sendCommand(CMD_PREV, 0);
+            }
 
             @Override
             public void onSeekTo(long pos) { sendCommand(CMD_SEEK, pos); }
@@ -298,9 +311,46 @@ public class MediaSessionService extends Service {
         return null;
     }
 
+    // 车机实体媒体键：部分车机（比亚迪等）把 NEXT/PREV 当作普通 KeyEvent
+    // 发给前台 Activity，而不走 MediaSession 的 onSkipToNext/onSkipToPrevious。
+    // 这里给 Activity 一个统一入口：无论服务是否已经起来，都直接把命令送到
+    // 已注册的 JNI 回调（sendCommand 本身就是静态的，不依赖服务实例）。
+    public static boolean handleMediaKey(int keyCode) {
+        if (keyCode == KeyEvent.KEYCODE_MEDIA_NEXT
+                || keyCode == KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD) {
+            sendCommand(CMD_NEXT, 0);
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                || keyCode == KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD) {
+            sendCommand(CMD_PREV, 0);
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY) {
+            sendCommand(CMD_PLAY, 0);
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE) {
+            sendCommand(CMD_PAUSE, 0);
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+            sendCommand(sPlaying ? CMD_PAUSE : CMD_PLAY, 0);
+            return true;
+        }
+        return false;
+    }
+
     // static：音频焦点监听器与 acquireFocus 都在静态上下文里调用它，
     // 而它本身只操作静态成员（sPlaying / onNativeCommand），没有实例依赖。
     private static void sendCommand(int action, long position) {
+        if (action == CMD_NEXT || action == CMD_PREV) {
+            final long now = SystemClock.elapsedRealtime();
+            if (now - sLastSkipAt < 350)
+                return;
+            sLastSkipAt = now;
+            Log.w(TAG, "skip command=" + action);
+        }
         // 通知按下先在本地翻转状态，避免等 C++ 回推造成图标迟滞
         if (action == CMD_PLAY)
             sPlaying = true;

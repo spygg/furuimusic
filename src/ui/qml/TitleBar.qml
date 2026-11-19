@@ -21,7 +21,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 1
-        color: theme.line
+        color: theme.lineStrong
     }
 
     // 拖动区：铺满整条标题栏，窗口按钮声明在后面自然盖住它。

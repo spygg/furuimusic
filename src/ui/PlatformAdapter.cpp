@@ -15,6 +15,7 @@
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QCoreApplication>   // QNativeInterface::QAndroidApplication（Android 上随它引入）
 #include <QJniObject>
+#include <QtCore/qcoreapplication_platform.h>
 #endif
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QInputDevice>
@@ -240,6 +241,24 @@ void PlatformAdapter::closeWindow(QQuickWindow *window)
     if (!window)
         return;
     window->close();
+}
+
+bool PlatformAdapter::isMultiWindow(QQuickWindow *window) const
+{
+    bool multi = false;
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // API 24+：Activity.isInMultiWindowMode() 是判断分屏/自由窗口最准的接口；
+    // 车机 OEM 有时不按标准上报，所以再叠加一个「窗口明显窄于屏幕」的兜底。
+    const QJniObject activity = QNativeInterface::QAndroidApplication::context();
+    if (activity.isValid() && QNativeInterface::QAndroidApplication::sdkVersion() >= 24)
+        multi = activity.callMethod<jboolean>("isInMultiWindowMode", "()Z");
+#endif
+    if (!multi && isMobile() && window && window->screen()) {
+        const int screenWidth = window->screen()->geometry().width();
+        if (screenWidth > 0 && window->width() > 0 && screenWidth >= window->width() * 1.2)
+            multi = true;
+    }
+    return multi;
 }
 
 void PlatformAdapter::refreshInsets(QQuickWindow *window)

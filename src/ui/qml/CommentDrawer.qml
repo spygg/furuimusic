@@ -117,6 +117,11 @@ Item {
                                 anchors.fill: parent
                                 source: model.avatar || ""
                                 fillMode: Image.PreserveAspectCrop
+                                // 列表里按原图同步解码会卡滚动；头像显示只有 36px
+                                sourceSize.width: 72
+                                sourceSize.height: 72
+                                asynchronous: true
+                                cache: true
                                 visible: model.avatar !== ""
                                 onStatusChanged: { if (status === Image.Error) visible = false }
                             }

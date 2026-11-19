@@ -668,6 +668,10 @@ Item {
                     source: root.artSource
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true
+                    // 封面显示最大约 390px；不限源尺寸会把 CDN 原图（数千像素）
+                    // 整张解码进显存，宽/窄两份歌词页各一张，低端 Android 易 OOM。
+                    sourceSize.width: 780
+                    sourceSize.height: 780
                     visible: status === Image.Ready
                 }
 
@@ -1040,7 +1044,7 @@ Item {
                     id: lyricView
                     anchors.fill: parent
                     // 预渲染两屏：默认只多备 100px，长歌词自动滚动时委托反复重建
-                    cacheBuffer: height * 2
+                    cacheBuffer: visible ? height * 2 : 100
                     model: app.lyricLines
                     // 时间轴只在换行时（lyricsChanged）重新取一次，不要让每次
                     // positionChanged 都回到 C++ 重建一整个 list
@@ -1068,7 +1072,11 @@ Item {
                         interval: 60
                         repeat: true
                         triggeredOnStart: true
+                        // 两个窗格各有一份歌词组件，页面被 StackLayout 隐藏时
+                        // visible 会变 false；不判断可见性的话只要音乐在放，
+                        // 两个 60ms 定时器就会在后台一直刷新整棵歌词绑定。
                         running: lyricView.timed && app.playing
+                                 && root.visible && lyricView.visible
                         onTriggered: {
                             const ahead = Date.now() - lyricView.anchorStamp
                             lyricView.shownPos = lyricView.anchorPos

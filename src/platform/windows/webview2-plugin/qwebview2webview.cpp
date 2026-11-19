@@ -247,9 +247,10 @@ void QWebView2WebViewPrivate::initialize(HWND hWnd)
                 EventRegistrationToken token;
                 hr = m_webview->add_NavigationStarting(
                         Microsoft::WRL::Callback<ICoreWebView2NavigationStartingEventHandler>(
-                                [this](ICoreWebView2 *webview,
+                                [thisPtr](ICoreWebView2 *webview,
                                        ICoreWebView2NavigationStartingEventArgs *args) -> HRESULT {
-                                    return this->onNavigationStarting(webview, args);
+                                    if (thisPtr.isNull()) return S_OK;
+                                    return thisPtr->onNavigationStarting(webview, args);
                                 })
                                 .Get(),
                         &token);
@@ -257,9 +258,10 @@ void QWebView2WebViewPrivate::initialize(HWND hWnd)
 
                 hr = m_webview->add_NavigationCompleted(
                         Microsoft::WRL::Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                                [this](ICoreWebView2 *webview,
+                                [thisPtr](ICoreWebView2 *webview,
                                        ICoreWebView2NavigationCompletedEventArgs *args) -> HRESULT {
-                                    return this->onNavigationCompleted(webview, args);
+                                    if (thisPtr.isNull()) return S_OK;
+                                    return thisPtr->onNavigationCompleted(webview, args);
                                 })
                                 .Get(),
                         &token);
@@ -267,19 +269,21 @@ void QWebView2WebViewPrivate::initialize(HWND hWnd)
 
                 m_webview->add_WebResourceRequested(
                         Microsoft::WRL::Callback<ICoreWebView2WebResourceRequestedEventHandler>(
-                                [this](ICoreWebView2 *webview,
+                                [thisPtr](ICoreWebView2 *webview,
                                        ICoreWebView2WebResourceRequestedEventArgs *args)
                                         -> HRESULT {
-                                    return this->onWebResourceRequested(webview, args);
+                                    if (thisPtr.isNull()) return S_OK;
+                                    return thisPtr->onWebResourceRequested(webview, args);
                                 })
                                 .Get(),
                         &token);
 
                 hr = m_webview->add_ContentLoading(
                         Microsoft::WRL::Callback<ICoreWebView2ContentLoadingEventHandler>(
-                                [this](ICoreWebView2 *webview,
+                                [thisPtr](ICoreWebView2 *webview,
                                        ICoreWebView2ContentLoadingEventArgs *args) -> HRESULT {
-                                    return this->onContentLoading(webview, args);
+                                    if (thisPtr.isNull()) return S_OK;
+                                    return thisPtr->onContentLoading(webview, args);
                                 })
                                 .Get(),
                         &token);
@@ -287,9 +291,10 @@ void QWebView2WebViewPrivate::initialize(HWND hWnd)
 
                 hr = m_webview->add_NewWindowRequested(
                         Microsoft::WRL::Callback<ICoreWebView2NewWindowRequestedEventHandler>(
-                                [this](ICoreWebView2 *webview,
+                                [thisPtr](ICoreWebView2 *webview,
                                        ICoreWebView2NewWindowRequestedEventArgs *args) -> HRESULT {
-                                    return this->onNewWindowRequested(webview, args);
+                                    if (thisPtr.isNull()) return S_OK;
+                                    return thisPtr->onNewWindowRequested(webview, args);
                                 })
                                 .Get(),
                         &token);
@@ -443,9 +448,11 @@ bool QWebView2WebViewPrivate::canGoForward() const
 QString QWebView2WebViewPrivate::title() const
 {
     if (m_webviewController) {
-        wchar_t *title;
+        wchar_t *title = nullptr;
         HRESULT hr = m_webview->get_DocumentTitle(&title);
-        Q_ASSERT_SUCCEEDED(hr);
+        // Q_ASSERT_SUCCEEDED 在 Release 下是空操作：COM 失败时 title 可能是野指针，
+        // 直接 QString(title) 会崩（旁边 userAgent 那处已经按这个写法修过）。
+        if (FAILED(hr) || !title) return QString();
         QString titleString(title);
         CoTaskMemFree(title);
         return titleString;
@@ -547,11 +554,14 @@ void QWebView2WebViewPrivate::deleteCookie(const QString &domainName, const QStr
             QString uri = domainName;
             if (!uri.startsWith("http"))
                 uri = "https://" + uri;
+            // WebView2 的完成回调可能在控制器销毁后才投递；裸 this 会变成野指针。
+            QPointer<QWebView2WebViewPrivate> thisPtr = this;
             HRESULT hr = m_cookieManager->GetCookies((wchar_t*)uri.utf16(),
             Microsoft::WRL::Callback<ICoreWebView2GetCookiesCompletedHandler>(
-            [cookieName, domainName, this]
+            [cookieName, domainName, thisPtr]
             (HRESULT result, ICoreWebView2CookieList* cookieList)->HRESULT
             {
+                if (thisPtr.isNull() || FAILED(result) || !cookieList) return S_OK;
                 UINT count = 0;
                 cookieList->get_Count(&count);
                 for (UINT i = 0; i < count; ++i) {
@@ -566,7 +576,7 @@ void QWebView2WebViewPrivate::deleteCookie(const QString &domainName, const QStr
                             CoTaskMemFree(namePtr);
                             CoTaskMemFree(domainPtr);
                             if (domainName == domain && cookieName == name) {
-                                emit q_ptr->cookieRemoved(domain, cookieName);
+                                emit thisPtr->q_ptr->cookieRemoved(domain, cookieName);
                                 return S_OK;
                             }
                         }
@@ -591,10 +601,12 @@ void QWebView2WebViewPrivate::deleteAllCookies()
 {
     if (m_webview) {
         if (m_cookieManager) {
+            QPointer<QWebView2WebViewPrivate> thisPtr = this;
             HRESULT hr = m_cookieManager->GetCookies(L"",
             Microsoft::WRL::Callback<ICoreWebView2GetCookiesCompletedHandler>(
-            [this](HRESULT result, ICoreWebView2CookieList* cookieList) -> HRESULT
+            [thisPtr](HRESULT result, ICoreWebView2CookieList* cookieList) -> HRESULT
             {
+                if (thisPtr.isNull() || FAILED(result) || !cookieList) return S_OK;
                 UINT count = 0;
                 cookieList->get_Count(&count);
                 for (UINT i = 0; i < count; ++i) {
@@ -604,7 +616,7 @@ void QWebView2WebViewPrivate::deleteAllCookies()
                         wchar_t *name;
                         if (SUCCEEDED(cookie->get_Domain(&domain))) {
                             if (SUCCEEDED(cookie->get_Name(&name))) {
-                                emit q_ptr->cookieRemoved(QString(domain), QString(name));
+                                emit thisPtr->q_ptr->cookieRemoved(QString(domain), QString(name));
                                 CoTaskMemFree(name);
                             }
                             CoTaskMemFree(domain);
@@ -624,9 +636,9 @@ void QWebView2WebViewPrivate::deleteAllCookies()
 
 HRESULT QWebView2WebViewPrivate::onNavigationStarting(ICoreWebView2* webview, ICoreWebView2NavigationStartingEventArgs* args)
 {
-    wchar_t *uri;
+    wchar_t *uri = nullptr;
     HRESULT hr = args->get_Uri(&uri);
-    Q_ASSERT_SUCCEEDED(hr);
+    if (FAILED(hr) || !uri) return S_OK;
     std::wstring_view source(uri);
     m_url.setUrl(QString(source));
     emit q_ptr->urlChanged(m_url);
@@ -669,9 +681,7 @@ HRESULT QWebView2WebViewPrivate::onWebResourceRequested(ICoreWebView2* sender, I
     ComPtr<ICoreWebView2WebResourceResponse> response;
     HRESULT hr = args->get_Request(&request);
     Q_ASSERT_SUCCEEDED(hr);
-    wchar_t *uri;
-    hr = request->get_Uri(&uri);
-    std::wstring_view source(uri);
+    if (!request) return S_OK;
 
     if (!m_settings->allowFileAccess()) {
         ComPtr<ICoreWebView2Environment> environment;
@@ -685,7 +695,6 @@ HRESULT QWebView2WebViewPrivate::onWebResourceRequested(ICoreWebView2* sender, I
         Q_ASSERT_SUCCEEDED(hr)
     }
 
-    CoTaskMemFree(uri);
     return S_OK;
 }
 

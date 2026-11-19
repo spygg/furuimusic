@@ -1003,9 +1003,9 @@ Item {
                 color: "#FFFFFF"
                 radius: 10
                 // 浅色主题下页面背景（theme.bg）也是纯白，卡片边界完全看不出来：
-                // 补一圈 1px 描边把网页区框出来（深色主题下 theme.line 同样成立）。
+                // 补一圈 1px 描边把网页区框出来（line 太淡，用 lineStrong）。
                 border.width: 1
-                border.color: theme.line
+                border.color: theme.lineStrong
             }
             Loader {
                 id: webLoader

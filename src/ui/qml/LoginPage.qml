@@ -59,6 +59,8 @@ Item {
         // 先让 WebView2 后端知道「下一个 WebView 的首帧要先蒙白纱」：
         // 官网首页会先渲染再被裁剪，中间那一瞬用户会看到导航/播放器闪过去。
         browser.setLoginVeil(true)
+        // Android 侧放开混合内容：官网首页的 http 封面图默认会被系统拦掉。
+        browser.prepareWebView()
         root.webLoginActive = true
     }
 
@@ -1470,6 +1472,12 @@ Item {
         z: 900
         active: root.webLoginActive && root.webLoginAvailable && root.visible
         source: active ? "qrc:/qml/WebLoginView.qml" : ""
+        // 覆盖层被强制卸载（切页、页面隐藏）时也必须掀纱：白纱是一次性名额，
+        // 漏掉一个就会让下一个普通浏览 WebView 首帧全白（表现为「页面/图片不显示」）。
+        onActiveChanged: {
+            if (!active)
+                browser.setLoginVeil(false)
+        }
         onLoaded: {
             item.sourceId = Qt.binding(function () { return root.selectedSource })
             item.sourceName = Qt.binding(function () {

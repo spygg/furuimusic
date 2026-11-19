@@ -84,7 +84,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                cacheBuffer: height * 2   // 预渲染两屏：默认只多备 100px，长队列滚动时委托反复重建
+                cacheBuffer: visible ? height * 2 : 100   // 预渲染两屏：默认只多备 100px，长队列滚动时委托反复重建
                 model: app.queue
                 spacing: 2
                 topMargin: 6

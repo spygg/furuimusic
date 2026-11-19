@@ -104,6 +104,10 @@ public:
     // 重新计算安全区边距：窗口尺寸、可见状态、屏幕或 DPR 变化时由 QML 调用
     Q_INVOKABLE void refreshInsets(QQuickWindow *window);
 
+    // 是否处于分屏/多窗口（Android 原生 isInMultiWindowMode + 窗口/屏幕宽度兜底）。
+    // 车机上分屏后的窗口仍可能很宽（半屏 960dp），单靠宽度阈值会误选桌面壳。
+    Q_INVOKABLE bool isMultiWindow(QQuickWindow *window) const;
+
     // 系统级窗口操作：由 QQmlWindow/QQuickWindow 原生接管，比在 QML 里模拟更稳
     Q_INVOKABLE bool startSystemMove(QQuickWindow *window);
     Q_INVOKABLE bool startSystemResize(QQuickWindow *window, int edges);

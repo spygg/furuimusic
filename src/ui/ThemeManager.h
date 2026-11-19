@@ -23,6 +23,9 @@ class ThemeManager : public QObject {
     Q_PROPERTY(QColor subText READ subText NOTIFY paletteChanged)
     Q_PROPERTY(QColor mutedText READ mutedText NOTIFY paletteChanged)
     Q_PROPERTY(QColor line READ line NOTIFY paletteChanged)
+    // 强边界色：分隔线用 line 就够淡，但窗口外框、区块边界在纯白浅色底上看不见，
+    // 这一档专门给「必须看得见的边界」用（比 line 深一档，仍不抢内容）
+    Q_PROPERTY(QColor lineStrong READ lineStrong NOTIFY paletteChanged)
     Q_PROPERTY(QColor accent READ accent NOTIFY paletteChanged)
     Q_PROPERTY(QColor accentSoft READ accentSoft NOTIFY paletteChanged)
     Q_PROPERTY(QColor accentAlt READ accentAlt NOTIFY paletteChanged)
@@ -78,6 +81,9 @@ public:
     QColor subText() const { return isDark() ? QColor("#A1A1AA") : QColor("#6B7280"); }
     QColor mutedText() const { return isDark() ? QColor("#71717A") : QColor("#9CA3AF"); }
     QColor line() const { return isDark() ? QColor("#2A2A2F") : QColor("#E8EAED"); }
+    // 浅色下 #E8EAED 与纯白底几乎同色，无边框窗口/白底区块的边界会完全消失；
+    // 这一档取 gray-300 / zinc-700，肉眼可见又不至于像分割线那么抢眼
+    QColor lineStrong() const { return isDark() ? QColor("#3F3F46") : QColor("#D1D5DB"); }
     // Alger 品牌绿：浅深同色，弱化底用浅绿/深绿
     QColor accent() const { return QColor("#22C55E"); }
     QColor accentSoft() const { return isDark() ? QColor("#12301E") : QColor("#DCFCE7"); }

@@ -243,7 +243,10 @@ void HttpClient::download(const QUrl &url, const QVariantMap &headers,
         guard->abort();
     });
 
-    connect(reply, &QNetworkReply::readyRead, this, [reply, file]() {
+    connect(reply, &QNetworkReply::readyRead, this, [reply, file, done]() {
+        // 超时已经 cancelWriting() 后 abort() 仍可能送来 readyRead/finished，
+        // 往已取消的 QSaveFile 里写只会浪费磁盘 I/O
+        if (*done) return;
         file->write(reply->readAll());
     });
 
@@ -252,8 +255,9 @@ void HttpClient::download(const QUrl &url, const QVariantMap &headers,
                 [progress](qint64 received, qint64 total) { progress(received, total); });
     }
 
-    connect(reply, &QNetworkReply::finished, this, [reply, finish, file]() {
-        file->write(reply->readAll());
+    connect(reply, &QNetworkReply::finished, this, [reply, finish, file, done]() {
+        if (!*done)
+            file->write(reply->readAll());
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const bool ok = reply->error() == QNetworkReply::NoError
                         && (status == 0 || status < 400);

@@ -81,6 +81,16 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
+        <!-- 车机语音助手常把「下一首/上一首」转成 MEDIA_BUTTON 广播（而不是调用
+             MediaSession transport controls）。没有它时仅在 App 前台才能响应语音。 -->
+        <receiver
+            android:name="cn.furui.music.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.qtprovider"

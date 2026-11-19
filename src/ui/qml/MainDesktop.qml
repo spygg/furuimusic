@@ -14,6 +14,8 @@ Item {
     readonly property color cText: theme.text
     readonly property color cSub: theme.subText
     readonly property color cLine: theme.line
+    // 区块边界（导航栏/播放栏/抽屉）用强一档的线，浅色纯白底上才看得见
+    readonly property color cLineStrong: theme.lineStrong
     readonly property color cSoft: theme.accentSoft
 
     property int pageIndex: 0
@@ -45,8 +47,13 @@ Item {
         }
     }
 
-    // 返回键 / Esc：队列 → MV → 播放页 → 首页，逐级回退；已在首页则交还系统
+    // 返回键 / Esc：内置浏览器 → 队列 → MV → 播放页 → 首页，逐级回退；已在首页则交还系统
+    // 由 Main.qml 注入：先走网页历史后退，退无可退才关浏览器
+    property var browserBack: function() { return false }
     function handleBack() {
+        if (browserBack()) {
+            return true
+        }
         if (queueOpen) {
             queueOpen = false
             return true
@@ -254,7 +261,7 @@ Item {
             Rectangle {
                 Layout.preferredWidth: 1
                 Layout.fillHeight: true
-                color: cLine
+                color: cLineStrong
             }
 
             // 页面区：各页面自带主标题，桌面不再额外叠一层重复的标题栏
@@ -299,7 +306,7 @@ Item {
                 Rectangle {
                     width: 1
                     height: parent.height
-                    color: cLine
+                    color: cLineStrong
                 }
                 QueueDrawer {
                     visible: root.queueOpen

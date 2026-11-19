@@ -155,6 +155,9 @@ Rectangle {
         source: root.mvCover
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
+        // 只是半透明背景，按显示容器缩到 320x180 就够，别解整张高清封面
+        sourceSize.width: 320
+        sourceSize.height: 180
         opacity: root._media && root._media.busy && root.mvCover.length > 0 ? 0.26 : 0
         visible: opacity > 0.01
         Behavior on opacity { NumberAnimation { duration: 320 } }
@@ -635,7 +638,10 @@ Rectangle {
         id: endWatch
         interval: 260
         repeat: true
-        running: root.visible && root._media
+        // 外壳用 opacity 而不是 visible 隐藏 MV（保住 video sink，ColorOS 上
+        // visible=false 会 SIGABRT），所以光看 visible 会以为它一直开着；
+        // 不判断 opacity 的话这个 260ms 定时器从启动起就一直跑。
+        running: root.visible && root.opacity > 0.01 && root._media
         onTriggered: {
             const m = root._media
             if (!m) return

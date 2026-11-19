@@ -39,6 +39,15 @@ public:
     Q_INVOKABLE void open(const QString &url, const QString &mode = QStringLiteral("browse"));
     Q_INVOKABLE void close();
     Q_INVOKABLE void navigate(const QString &url);
+    // 新建一个原生 WebView 之前调用：Android 侧放开混合内容（https 页面里的
+    // http 封面图默认会被系统拦掉，表现为图片全空白）。open() 已自动调用，
+    // 账号页里不走 open() 的登录 WebView 需要显式调一次。
+    Q_INVOKABLE void prepareWebView();
+
+    // 网页历史是否可后退/前进。桌面走 WebView.canGoBack（QML 直接读），
+    // Android 必须走原生（Qt 的 canGoBack 在该平台恒为 false，原因见 cpp 注释）。
+    Q_INVOKABLE bool webCanGoBack() const;
+    Q_INVOKABLE bool webCanGoForward() const;
 
     // 同步返回该 URL 可用的整串 Cookie（"name=value; name2=value2"）；
     // 平台不支持或没有 Cookie 时返回空串。调用频率由 QML 定时器控制。

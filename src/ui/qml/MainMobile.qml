@@ -34,8 +34,15 @@ Item {
     // MV 页从哪页进的，返回键/关闭就回哪页
     property int mvReturnPage: 1
 
-    // Android 返回键：队列面板 → MV 页 → 播放页 → 音乐库 → 首页，逐级回退
+    // Android 返回键：内置浏览器 → 队列面板 → MV 页 → 播放页 → 音乐库 → 首页，逐级回退
+    // 由 Main.qml 注入：先走网页历史后退，退无可退才关浏览器
+    property var browserBack: function() { return false }
+    // 由 Main.qml 注入：分屏/多窗口时保持竖屏那套底部标签栏布局
+    property bool inMultiWindow: false
     function handleBack() {
+        if (browserBack()) {
+            return true
+        }
         if (queueOpen) {
             queueOpen = false
             return true
@@ -87,7 +94,11 @@ Item {
     // 竖排导航（平板横屏 / 手机横屏）：这些形态高度本来就紧张（手机横屏逻辑高度
     // 只剩 270dp 上下），底部标签栏再吃掉 56dp 就没什么内容区了，把导航挪到左侧
     // 换回高度。竖屏仍用底部标签栏（拇指可达、且高度充裕）。
-    readonly property bool sideNav: root.width >= 400 && root.width > root.height * 1.12
+    // 车机分屏同样是「宽而矮」，但用户明确要求跟竖屏一致（底部标签栏），
+    // 所以多窗口时不再切左侧导航。
+    readonly property bool sideNav: !root.inMultiWindow
+                                    && root.width >= 400
+                                    && root.width > root.height * 1.12
     // 竖排导航宽度：手机横屏 76dp 够用，平板/车机（>=900dp）给到 92dp，
     // 图标和文字都要按设备尺寸放大，否则 12 寸屏上侧栏像一根细线
     readonly property int navRailWidth: root.width >= 900 ? 92

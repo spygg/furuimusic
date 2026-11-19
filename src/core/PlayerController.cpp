@@ -268,7 +268,13 @@ PlayerController::PlayerController(QObject *parent)
     connect(this, &PlayerController::stateChanged, this, &PlayerController::saveState);
     if (QCoreApplication::instance())
         connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
-                this, &PlayerController::saveState);
+                this, [this] {
+                    saveState();
+                    // Settings::Store 更早注册了 aboutToQuit -> flush()，Qt 按连接
+                    // 顺序执行：它先 sync 完，我们后写的续播状态就没人落盘了
+                    // （Store 故意 new 出来不析构，没有析构兜底）。这里补一次。
+                    Settings::flush();
+                });
 }
 
 // 校验式断点续播：在线直链刚 Loaded/Buffered 时，后端（尤其 Android MediaPlayer /
