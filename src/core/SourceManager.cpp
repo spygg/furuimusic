@@ -720,7 +720,53 @@ void SourceManager::mv(const Song &song, MvCallback cb)
         if (cb) cb(false, QUrl(), QStringLiteral("未知音源，无法播放 MV"));
         return;
     }
-    s->mv(song, std::move(cb));
+    // 只有网易云配置了 mvUrl/mvInfo 端点；其它平台（酷狗/QQ/酷我…）直接查会被
+    // 判定「该平台暂未配置 MV」。先试本平台，失败再按歌名+歌手去网易云跨源匹配。
+    s->mv(song, [this, song, cb](bool ok, const QUrl &url, const QString &error) {
+        if (ok) { if (cb) cb(true, url, error); return; }
+        mvCrossSource(song, cb);
+    });
+}
+
+void SourceManager::mvCrossSource(const Song &song, MvCallback cb)
+{
+    MusicSource *netease = source(QStringLiteral("netease"));
+    if (!netease) {
+        if (cb) cb(false, QUrl(), QStringLiteral("没有可用的 MV 匹配源"));
+        return;
+    }
+    const QString keyword = (song.title + QLatin1Char(' ') + song.artist).trimmed();
+    const auto started = std::make_shared<bool>(false);
+    search(keyword, QStringLiteral("netease"), 20,
+           [this, song, netease, cb, started](const QVector<Song> &list) {
+        if (*started) return;
+        qreal best = 0.6;
+        QString mvid;
+        Song matched;
+        for (const Song &c : list) {
+            // 网易云搜索把原始 JSON 存进了 extra，mvid 不在字段映射里，直接读原值
+            const QString id = c.extra.value(QStringLiteral("mvid")).toString();
+            if (id.isEmpty() || id == QLatin1String("0")) continue;
+            const qreal sc = candidateScore(song, c);
+            if (sc > best) { best = sc; mvid = id; matched = c; }
+        }
+        if (mvid.isEmpty() || matched.title.isEmpty()) return;
+        *started = true;
+        qInfo().noquote() << QStringLiteral("[MV] 跨源命中「%1 - %2」→ 网易云 MV %3（%4）")
+                                 .arg(song.title, song.artist, mvid).arg(best, 0, 'f', 2);
+        Song target = matched;
+        target.source = QStringLiteral("netease");
+        target.extra.insert(QStringLiteral("mvid"), mvid);
+        netease->mv(target, cb);
+    });
+    // search 的多次软刷新回调都没有匹配时兜底收尾，避免 MV 按钮一直转圈
+    QTimer::singleShot(8500, this, [song, cb, started]() {
+        if (!*started && cb) {
+            qInfo().noquote() << QStringLiteral("[MV] 跨源搜索「%1 %2」无匹配")
+                                     .arg(song.title, song.artist);
+            cb(false, QUrl(), QStringLiteral("没有找到匹配的 MV"));
+        }
+    });
 }
 
 void SourceManager::mvList(const QString &sourceId, const QString &area, int limit,

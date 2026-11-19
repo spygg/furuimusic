@@ -54,6 +54,9 @@ public:
     void related(const Song &song, int limit, SongsCallback cb);
     void cover(const Song &song, StringCallback cb);
     void mv(const Song &song, MvCallback cb);
+    // 当前平台没有 MV 时，按「歌名+歌手」到网易云搜索带 mvid 的同名歌曲，
+    // 再走网易云 mvUrl 取播放地址（实测命中率约 6 成，匹配失败的歌照旧提示无 MV）
+    void mvCrossSource(const Song &song, MvCallback cb);
     void mvList(const QString &sourceId, const QString &area, int limit, int offset,
                 MvListCallback cb);
 
