@@ -1629,6 +1629,59 @@
           }
         }
       },
+      "defaultBoards": [
+        {
+          "_note": "汽水官方推荐歌单静态兜底：discover/mix 发现流失败/被限流/真机取不到时用它，id 均实测可出歌、封面可访问（2026-11）"
+        },
+        {
+          "title": "日语恋爱·可爱浪漫氛围",
+          "id": "7031084003572074533",
+          "count": 48,
+          "cover": "https://p3-luna.douyinpic.com/img/ies-music/pgc_cover_fe3cd2d803426f7d4bf342f5b51ef0d6~tplv-b829550vbb-resize:240:240.jpeg"
+        },
+        {
+          "title": "欧美民谣·净化心灵",
+          "id": "7031085158876137480",
+          "count": 21,
+          "cover": "https://p3-luna.douyinpic.com/img/ies-music/pgc_cover_80f6539b9e6ab7370990400c6f254ba1~tplv-b829550vbb-resize:240:240.jpeg"
+        },
+        {
+          "title": "离不开的民谣·离不开的吉他",
+          "id": "7031086059618437134",
+          "count": 15,
+          "cover": "https://p3-luna.douyinpic.com/img/ies-music/pgc_cover_optimize_7d3ad4ef3fbe16066055e38e84906843~tplv-b829550vbb-resize:240:240.jpeg"
+        },
+        {
+          "title": "Hip-Hop人生态度·够酷够洒脱",
+          "id": "7031081024517326885",
+          "count": 16,
+          "cover": "https://p3-luna.douyinpic.com/img/ies-music/pgc_cover_ff0894fd4d163b1960921c634a728417~tplv-b829550vbb-resize:240:240.jpeg"
+        },
+        {
+          "title": "吉他女声·民谣故事还有梦",
+          "id": "7031079769492670495",
+          "count": 15,
+          "cover": "https://p3-luna.douyinpic.com/img/ies-music/0BD4CB26-F0BB-4C42-BEB4-5F3BE3C3D922_1_201_a.jpeg~tplv-b829550vbb-resize:240:240.jpeg"
+        },
+        {
+          "title": "与雨有关的摇滚乐",
+          "id": "7031089147701266445",
+          "count": 18,
+          "cover": "https://p3-luna.douyinpic.com/img/ies-music/pgc_cover_ce373ec71751208d544696d9efaa4108~tplv-b829550vbb-resize:240:240.jpeg"
+        },
+        {
+          "title": "治愈系·你已经做得很好了",
+          "id": "7031087145603368967",
+          "count": 17,
+          "cover": "https://p3-luna.douyinpic.com/img/ies-music/pgc_cover_d36392a0c7f877635d91a6317aa618f7~tplv-b829550vbb-resize:240:240.jpeg"
+        },
+        {
+          "title": "后摇·穿越星际",
+          "id": "7031074411749459976",
+          "count": 49,
+          "cover": "https://p3-luna.douyinpic.com/img/ies-music/pgc_cover_cf359ca70c6bf2c88b6fe71f4302d31c~tplv-b829550vbb-resize:240:240.jpeg"
+        }
+      ],
       "login": {
         "methods": [
           "password"

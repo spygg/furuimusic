@@ -968,24 +968,43 @@ void MusicSource::qishuiRank(int limit, int offset, PlaylistsCallback cb)
     v.insert(QStringLiteral("limit"), QString::number(limit));
     v.insert(QStringLiteral("offset"), QString::number(offset));
     v.insert(QStringLiteral("page"), QString::number(offset / qMax(1, limit) + 1));
-    call(ep, v, [this, cb](const HttpClient::Reply &r) {
+
+    // 发现流结构：inner_block[].resources[].entity.playlist
+    const auto parse = [this](const HttpClient::Reply &r) {
         QVector<Playlist> out;
-        if (r.ok) {
-            const QJsonValue root = Json::rootOf(r.json);
-            // 发现流结构：inner_block[].resources[].entity.playlist
-            const QJsonArray blocks = Json::arrayAt(root, QStringLiteral("inner_block"));
-            for (const QJsonValue &b : blocks) {
-                const QJsonArray res = Json::arrayAt(b, QStringLiteral("resources"));
-                for (const QJsonValue &rsc : res) {
-                    const QJsonValue p = qishuiUnwrapPlaylist(rsc);
-                    if (!p.isNull() && !Json::stringAt(p, QStringLiteral("id")).isEmpty()
-                        && !Json::stringAt(p, QStringLiteral("title")).isEmpty())
-                        out << qishuiPlaylistToPlaylist(p, m_desc.id);
-                }
+        if (!r.ok) return out;
+        const QJsonValue root = Json::rootOf(r.json);
+        const QJsonArray blocks = Json::arrayAt(root, QStringLiteral("inner_block"));
+        for (const QJsonValue &b : blocks) {
+            const QJsonArray res = Json::arrayAt(b, QStringLiteral("resources"));
+            for (const QJsonValue &rsc : res) {
+                const QJsonValue p = qishuiUnwrapPlaylist(rsc);
+                if (!p.isNull() && !Json::stringAt(p, QStringLiteral("id")).isEmpty()
+                    && !Json::stringAt(p, QStringLiteral("title")).isEmpty())
+                    out << qishuiPlaylistToPlaylist(p, m_desc.id);
             }
         }
+        return out;
+    };
+
+    // 真机实测：beta-luna.douyin.com 在部分网络下 DNS/连接失败，导致「我的歌单」
+    // 里汽水一个官方歌单都没有。api.qishui.com 是搜索/详情/账号共用的主域名，
+    // 同样支持 /luna/discover/mix（实测返回 8 个推荐歌单），真机网络必通。
+    // 故配置端点（beta-luna）失败或空时，改打主域名重试一次，再回退静态 defaultBoards。
+    call(ep, v, [this, cb, ep, v, parse](const HttpClient::Reply &r) {
+        const QVector<Playlist> first = parse(r);
+        if (!first.isEmpty()) { if (cb) cb(first); return; }
+        if (!ep.path.startsWith(m_desc.base, Qt::CaseInsensitive)) {
+            Endpoint fallback = ep;
+            fallback.path = m_desc.base + QStringLiteral("/luna/discover/mix");
+            call(fallback, v, [this, cb, parse](const HttpClient::Reply &r2) {
+                const QVector<Playlist> second = parse(r2);
+                if (cb) cb(second.isEmpty() ? defaultBoards() : second);
+            });
+            return;
+        }
         // 接口偶发失败/被限流时回退静态默认榜单，避免空白
-        if (cb) cb(out.isEmpty() ? defaultBoards() : out);
+        if (cb) cb(defaultBoards());
     });
 }
 
