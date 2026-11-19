@@ -195,6 +195,12 @@ Item {
             placeholderTextColor: theme.mutedText
             font.pixelSize: 12
             leftPadding: 12
+            // 地址栏是网址输入：关掉预测/联想和自动大写，否则候选词（com/co 之类）
+            // 会被塞进输入框，退格时看起来像删不掉、还有残余字母
+            inputMethodHints: Qt.ImhUrlCharactersOnly
+                              | Qt.ImhNoPredictiveText
+                              | Qt.ImhNoAutoUppercase
+                              | Qt.ImhSensitiveData
             // 不用 text: browser.url 绑定：用户一输入就会打断绑定，之后再打开
             // 浏览器地址栏还停在上一次的旧内容上。改为在下面显式同步。
             background: Rectangle {
