@@ -24,7 +24,16 @@ public class MediaButtonReceiver extends BroadcastReceiver {
             key = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent.class);
         else
             key = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
-        if (key == null || key.getAction() != KeyEvent.ACTION_DOWN)
+        // 网易云车机版实测：车机发出的 MEDIA_BUTTON 广播可能只有 ACTION_UP
+        // （其 MediaButtonEventReceiver 就只处理 ACTION_UP）。DOWN 和 UP 都接，
+        // 由 MediaSessionService 的 500ms 去抖保证一次按键只切一首。
+        if (key == null
+                || (key.getAction() != KeyEvent.ACTION_DOWN
+                    && key.getAction() != KeyEvent.ACTION_UP))
+            return;
+
+        // MEDIA_BUTTON 是全系统广播：别的应用正在放歌时不要跟着切歌
+        if (!MediaSessionService.hasAudioFocus())
             return;
 
         MediaSessionService.handleMediaKey(key.getKeyCode());

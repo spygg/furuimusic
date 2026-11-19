@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
@@ -62,8 +63,8 @@ public class MediaSessionService extends Service {
 
     private static MediaSessionService sInstance;
     // 三条命令通路（MediaSession 回调 / MEDIA_BUTTON 广播 / Activity 媒体键）可能在
-    // 同一次语音指令里同时到达；DES 车机上就会出现「一句话切两首」。统一在命令
-    // 入口按 350ms 去抖，只作用于切歌，暂停/播放不受影响。
+    // 同一次语音指令里同时到达；对照网易云车机版 MediaButtonEventReceiver 的 500ms
+    // 去抖，这里也用 500ms（且广播 DOWN/UP 都会进来），只作用于切歌，暂停/播放不受影响。
     private static long sLastSkipAt = 0;
 
     // C++ 可能先 start() 再 update*()，而服务 onCreate 是异步的，
@@ -231,6 +232,9 @@ public class MediaSessionService extends Service {
         abandonFocusInternal();
     }
 
+    /** MEDIA_BUTTON 广播是全系统广播：别的应用在放歌时不该被我们切歌。 */
+    public static boolean hasAudioFocus() { return sFocused; }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -271,6 +275,20 @@ public class MediaSessionService extends Service {
             }
         });
         mSession.setSessionActivity(launchAppIntent());
+        // 让系统把媒体按钮/语音助手的媒体命令路由到本 App 的接收器：
+        // dumpsys media_session 里主流音乐 App 都有 mediaButtonReceiver，没有的话
+        // 「媒体按钮会话」会落到别的应用，车机语音下一首就控制不到我们。
+        Intent mbrIntent = new Intent(Intent.ACTION_MEDIA_BUTTON);
+        mbrIntent.setPackage(getPackageName());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            mSession.setMediaButtonBroadcastReceiver(
+                    new ComponentName(this, MediaButtonReceiver.class));
+        } else {
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                flags |= PendingIntent.FLAG_IMMUTABLE;
+            mSession.setMediaButtonReceiver(PendingIntent.getBroadcast(this, 0, mbrIntent, flags));
+        }
         mSession.setActive(true);
 
         pushSessionState();
@@ -346,7 +364,7 @@ public class MediaSessionService extends Service {
     private static void sendCommand(int action, long position) {
         if (action == CMD_NEXT || action == CMD_PREV) {
             final long now = SystemClock.elapsedRealtime();
-            if (now - sLastSkipAt < 350)
+            if (now - sLastSkipAt < 500)
                 return;
             sLastSkipAt = now;
             Log.w(TAG, "skip command=" + action);

@@ -1,7 +1,11 @@
 {
-  "version": "1.4.29",
-  "desc": "新增\n- Android 车机实体媒体键（上一首/下一首/播放暂停）支持：Activity 拦截媒体 KeyEvent、新增 MEDIA_BUTTON 广播接收器，与原有 MediaSession transport controls 统一走一条命令入口并做 350ms 去抖，为小迪等车机语音控制打好基础\n- 分屏/多窗口自动切换为竖屏同款布局：车机半屏不再因窗口仍够宽而误用桌面壳，也不再切成左侧导航\n- 内置浏览器改全屏铺满（移动端），地址栏可输入任意网址并在跳转后同步最终 URL，Android 上网页内的 http 封面图正常显示\n修复\n- 桌面浅色模式窗口/区域边界看不清：新增 lineStrong 描边色并用于窗口外框、标题栏、导航分隔线等\n- 桌面窗口无法关闭：onClosing 不再无条件拒绝关闭事件\n- 内置浏览器返回键：先走网页历史后退、退无可退才关闭浮层，且不会误退背后的页面；Android 后退按钮可用\n- 歌词/ MV 定时器在后台空转、隐藏列表缓存过大、多处图片按原尺寸解码等性能问题\n- 退出时续播状态未落盘、下载超时后继续写已取消文件、WebView2 若干崩溃隐患、登录覆盖层卸载时白纱未清除\n",
+  "version": "1.4.30",
+  "desc": "新增\n- 车机语音控制基础能力对齐比亚迪网易云车机版：MediaSession 设置 mediaButtonReceiver，系统/语音助手可直接下发 transport controls；MEDIA_BUTTON 广播同时接收 DOWN/UP，切歌去抖放宽到 500ms，并增加音频焦点判断避免干扰其它播放器\n- 车机实体媒体键（上一首/下一首/播放暂停）支持：Activity 拦截媒体 KeyEvent，与广播、MediaSession 三条通路统一到同一命令入口\n- 分屏/多窗口自动切换为竖屏同款布局：车机半屏不再因窗口仍够宽而误用桌面壳，也不再切成左侧导航\n- 内置浏览器改全屏铺满（移动端），地址栏可输入任意网址并在跳转后同步最终 URL，Android 上网页内的 http 封面图正常显示\n修复\n- 桌面浅色模式窗口/区域边界看不清：新增 lineStrong 描边色并用于窗口外框、标题栏、导航分隔线等\n- 桌面窗口无法关闭：onClosing 不再无条件拒绝关闭事件\n- 内置浏览器返回键：先走网页历史后退、退无可退才关闭浮层，且不会误退背后的页面；Android 后退按钮可用\n- 歌词/MV 定时器在后台空转、隐藏列表缓存过大、多处图片按原尺寸解码等性能问题\n- 退出时续播状态未落盘、下载超时后继续写已取消文件、WebView2 若干崩溃隐患、登录覆盖层卸载时白纱未清除\n",
   "history": [
+    {
+      "version": "1.4.29",
+      "desc": "新增\n- Android 车机实体媒体键（上一首/下一首/播放暂停）支持：Activity 拦截媒体 KeyEvent、新增 MEDIA_BUTTON 广播接收器，与原有 MediaSession transport controls 统一走一条命令入口并做 500ms 去抖，为小迪等车机语音控制打好基础\n- 分屏/多窗口自动切换为竖屏同款布局：车机半屏不再因窗口仍够宽而误用桌面壳，也不再切成左侧导航\n- 内置浏览器改全屏铺满（移动端），地址栏可输入任意网址并在跳转后同步最终 URL，Android 上网页内的 http 封面图正常显示\n修复\n- 桌面浅色模式窗口/区域边界看不清：新增 lineStrong 描边色并用于窗口外框、标题栏、导航分隔线等\n- 桌面窗口无法关闭：onClosing 不再无条件拒绝关闭事件\n- 内置浏览器返回键：先走网页历史后退、退无可退才关闭浮层，且不会误退背后的页面；Android 后退按钮可用\n- 歌词/MV 定时器在后台空转、隐藏列表缓存过大、多处图片按原尺寸解码等性能问题\n- 退出时续播状态未落盘、下载超时后继续写已取消文件、WebView2 若干崩溃隐患、登录覆盖层卸载时白纱未清除\n"
+    },
     {
       "version": "1.4.28",
       "desc": "新增\n- 歌单内搜索：歌单列表行右侧（封面网格卡片右上角）新增放大镜按钮，点进去只搜索本歌单的歌曲（按歌名/歌手），清空即恢复完整列表\n- 打开歌单自动定位当前正在播放的歌曲：滚动到该行并高亮，正在播放时切到所属歌单即可看到\n修复\n- 换源聚合卡死：某个音源挂起时最终结果要等所有源返回，日志里跳歌前干等 31 秒；现在聚合搜索加 8 秒硬超时，到点用已返回的结果继续，迟到回调被丢弃\n- 酷狗搜索接口 songsearch.kugou.com/song_search_v2 已下线（404），迁移到可用的 v3 移动端接口；酷我/咪咕的匿名搜索接口被上游封死，超时机制保证它们不再拖慢流程\n- 网页播放页歌词与设备端不一致：默认显示翻译行；逐行高亮和滚动改为跟随服务端行号（此前时间轴歌词的高亮只在初次加载时动一次，滚动不跟随播放）\n"
@@ -132,9 +136,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.29/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.29/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.29/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.29/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.30/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.30/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.30/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.30/FuruiMusic-android-arm64-v8a.apk"
   }
 }
