@@ -973,6 +973,7 @@ void AppController::refreshAccounts() { syncAccountModel(); }
 
 void AppController::backgroundApp()
 {
+    Logger::write(QStringLiteral("I"), QStringLiteral("[返回] 首页返回键 → moveTaskToBack 退到后台（进程保留）"));
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     // Activity.moveTaskToBack(true) 只把整个 task 切到后台：播放/媒体会话继续存活，
     // 与主流播放器「首页按返回=退到后台」一致。必须在 Android 主线程调用。

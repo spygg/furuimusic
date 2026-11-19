@@ -100,8 +100,19 @@ ApplicationWindow {
         Keys.onReleased: function(event) {
             if (event.key === Qt.Key_Back || event.key === Qt.Key_Escape) {
                 const item = shell.item
-                if (item && item.handleBack && item.handleBack())
+                // 关键：Android 上必须无条件 accept 返回键。若 handleBack() 返回 false
+                // （例如桌面壳已在首页）却又不 accept，事件会落到 Qt Android 默认处理
+                // → finish() 直接杀进程。这就是全面屏手势偶发「滑一下就退出」的根因；
+                // 正确行为是退到后台，播放/媒体会话继续存活。
+                const handled = item && item.handleBack && item.handleBack()
+                console.log("[返回] shell Keys 捕获 Back，handled=", handled,
+                            "platform=", Qt.platform.os)
+                if (handled) {
                     event.accepted = true
+                } else if (Qt.platform.os === "android") {
+                    app.backgroundApp()
+                    event.accepted = true
+                }
             }
         }
         onLoaded: {

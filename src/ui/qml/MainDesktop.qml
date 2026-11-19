@@ -60,6 +60,12 @@ Item {
             pageIndex = 0
             return true
         }
+        // 首页（含手机横屏/车机用桌面壳的场景）：Android 上退到后台而不是退出，
+        // 与 MainMobile 保持一致。否则事件落到 Qt 默认 finish()，表现为「滑一下就没了」。
+        if (Qt.platform.os === "android") {
+            app.backgroundApp()
+            return true
+        }
         return false
     }
 
