@@ -219,8 +219,10 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 onClicked: {
-                    root.loadUrl(address.text)
+                    // 先收起输入法，强制把组合输入（下划线候选词）提交进 text，
+                    // 再读取，避免取到未提交的半成品网址
                     if (platform.isMobile) address.focus = false
+                    root.loadUrl(address.text)
                 }
             }
         }
