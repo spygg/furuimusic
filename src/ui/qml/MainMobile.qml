@@ -182,19 +182,33 @@ Item {
                      // 曲库页搜索时隐藏：软键盘弹出会把页面区压扁，播放栏再占位就盖住搜索结果
                      && !(root.pageIndex === 0 && app.searchActive)
 
-            // 底部内嵌细进度（胶囊内缩 14，避免圆角处溢出）
-            Rectangle {
+            // 底部内嵌进度：低对比底槽 + 半透明进度填充。
+            // 之前是单个满饱和绿 Rectangle 且同时设了 anchors.left/right 与 width——
+            // QML 里 anchors 会覆盖 width，所以进度线永远满宽、不随播放变化，
+            // 看起来就是一根常亮绿条。现在外层负责定位、内层只绑 width 表达进度。
+            Item {
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.leftMargin: 14
-                anchors.rightMargin: 14
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: 2
                 height: 2
-                radius: 1
-                width: (parent.width - 28) * (app.duration > 0 ? Math.min(1, app.position / app.duration) : 0)
-                color: cPrimary
-                visible: app.currentTitle.length > 0
+                visible: app.currentTitle.length > 0 && app.duration > 0
+
+                Rectangle {   // 底槽
+                    anchors.fill: parent
+                    radius: height / 2
+                    color: Qt.rgba(cPrimary.r, cPrimary.g, cPrimary.b, theme.dark ? 0.20 : 0.13)
+                }
+                Rectangle {   // 进度
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: parent.width * Math.min(1, app.position / app.duration)
+                    radius: height / 2
+                    color: Qt.rgba(cPrimary.r, cPrimary.g, cPrimary.b, 0.55)
+                }
             }
 
             RowLayout {
