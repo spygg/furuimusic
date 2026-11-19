@@ -18,6 +18,11 @@ Item {
     readonly property color cLine: theme.line
     readonly property color cPrimarySoft: theme.accentSoft
 
+    function fmtTime(ms) {
+        var t = Math.max(0, Math.floor(ms / 1000))
+        return ("0" + Math.floor(t / 60)).slice(-2) + ":" + ("0" + (t % 60)).slice(-2)
+    }
+
     property int pageIndex: 0
     property bool queueOpen: false
     // MV 页从哪页进的，返回键/关闭就回哪页
@@ -217,8 +222,12 @@ Item {
                 anchors.rightMargin: 10
                 spacing: theme.spaceSm
 
+                // 左侧信息区：封面 + 曲名/艺人。宽屏（车机/平板横屏）不再吃掉整行，
+                // 给中间的歌词/时间腾出空间；窄屏仍 fillWidth 占满。
                 Item {
-                    Layout.fillWidth: true
+                    Layout.fillWidth: !midInfo.visible
+                    Layout.preferredWidth: midInfo.visible
+                                           ? Math.max(240, Math.min(300, miniBar.width * 0.26)) : -1
                     Layout.fillHeight: true
 
                     RowLayout {
@@ -284,6 +293,41 @@ Item {
                         }
                     }
 
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: root.pageIndex = 1
+                    }
+                }
+
+                // 中间空白区（车机/平板横屏才显示）：当前歌词 + 播放进度时间。
+                // 竖屏手机宽度不够，留空给左侧信息区，避免把歌名/艺人挤成省略号。
+                Item {
+                    id: midInfo
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    visible: miniBar.width >= 620 && app.currentTitle.length > 0
+
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        width: parent.width - 16
+                        spacing: 1
+                        Text {
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignHCenter
+                            text: app.currentLyricLine.length > 0 ? app.currentLyricLine : "♪"
+                            color: cSub
+                            font.pixelSize: theme.fontSm
+                            elide: Text.ElideRight
+                            maximumLineCount: 1
+                        }
+                        Text {
+                            Layout.alignment: Qt.AlignHCenter
+                            text: root.fmtTime(app.position) + " / " + root.fmtTime(app.duration)
+                            color: cSub
+                            opacity: 0.7
+                            font.pixelSize: theme.fontXs
+                        }
+                    }
                     MouseArea {
                         anchors.fill: parent
                         onClicked: root.pageIndex = 1
