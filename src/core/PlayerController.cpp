@@ -260,12 +260,19 @@ PlayerController::PlayerController(QObject *parent)
                 this, &PlayerController::saveState);
 }
 
-void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers)
+void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers, qint64 resumeMs)
 {
     if (!url.isValid()) {
         emit errorOccurred(QStringLiteral("无效的播放地址"));
         return;
     }
+    // 换源续播：在线直链在曲中断流（如咪咕/网易云临时链时效到期）时，AppController
+    // 记下断流前的 position 传进来；这里塞进 m_pendingSeek，媒体 Loaded/Buffered 后
+    // setPosition 到断点，听感上就是「卡一下接着放」，而不是从头重来一遍。
+    // 只有显式传了 resumeMs（>=0）才写：默认 -1 时绝不能碰 m_pendingSeek，否则会把
+    // restoreState() 设好的「启动续播位置」清成 0（否则重启后会从头播）。
+    if (resumeMs >= 0)
+        m_pendingSeek = resumeMs;
     // 网易云等平台返回的播放直链常为 http://（如 http://m?.music.126.net/...）。
     // Android 9+ 默认禁止明文流量、桌面 Qt 部分环境也会拒绝 http 拉流，表现为
     // "Error transferring http://..."。与封面统一策略（MusicSource::mvCoverThumb）对齐，

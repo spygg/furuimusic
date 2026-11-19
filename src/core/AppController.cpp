@@ -1086,6 +1086,9 @@ void AppController::onPlayerError(const QString &msg)
     // d->inFallback 为 true 表示正处于上一次换源的解析过程中或已成功换源正在播放，
     // 不再二次触发；只有用户主动切歌（resolveAndPlay）才会清掉它。
     Song song = d->currentSong;
+    // 断流前的位置：在线直链（咪咕/网易云临时链）常在曲中断掉，换源时要把进度带过去，
+    // 否则听感上就是「播到一半突然从头再来」。position() 在 error 到达时仍是断流点。
+    const qint64 failedPos = PlayerController::instance()->position();
     // QMediaPlayer 的错误原文（"Error transferring http://... - server replied ..."）
     // 又长又没信息量：状态栏留给排查，提示只保留一句，免得糊满屏幕
     const QString brief = QStringLiteral("播放失败");
@@ -1106,7 +1109,10 @@ void AppController::onPlayerError(const QString &msg)
                   QStringLiteral("播放失败：%1 - %2（%3）").arg(song.title, song.artist, msg));
     if (song.title.isEmpty() || d->inFallback) {
         setStatus(msg);
-        emit toast(brief);
+        // 换源解析/播放期间，被 stop 掉的旧流会持续投递迟到的 error（真机日志里
+        // 同一秒刷了 20+ 条 "Demuxing failed"）。此时弹「播放失败」是误导——换源
+        // 很可能马上成功。真正的失败由 resolveAlternate 的失败回调 autoAdvanceAfterFailure
+        // 统一提示；这里只更新状态栏，不弹 toast。
         return;
     }
     d->inFallback = true;
@@ -1124,7 +1130,7 @@ void AppController::onPlayerError(const QString &msg)
                                 .arg(d->inFallback ? 1 : 0)
                                 .arg(d->triedFallback.values().join(QStringLiteral(",")));
     SourceManager::instance()->resolveAlternate(song, exclude, d->quality,
-        [this, gen, msg, song, brief](const Playable &r) {
+        [this, gen, msg, song, brief, failedPos](const Playable &r) {
             if (gen != d->fallbackGen) return;     // 期间用户已切到别的歌，丢弃迟到结果
             if (r.ok) {
                 d->consecutiveFailures = 0;        // 换源后能播了，失败链结束
@@ -1148,7 +1154,9 @@ void AppController::onPlayerError(const QString &msg)
                 // 放开 inFallback：若本次换源播放仍失败，errorOccurred 会再次进来试下一源；
                 // 试过的源已记入 triedFallback，不会重复，也不会死循环。
                 d->inFallback = false;
-                PlayerController::instance()->playUrl(r.url, r.headers);
+                // 从断流位置续播，而不是从头开始；新源正在加载，Loaded/Buffered 后
+                // 由 PlayerController 的 m_pendingSeek 一次性 setPosition 到 failedPos
+                PlayerController::instance()->playUrl(r.url, r.headers, failedPos);
                 Library::instance()->addHistory(song);
                 setStatus(r.message.isEmpty()
                               ? QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist)

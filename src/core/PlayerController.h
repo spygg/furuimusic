@@ -22,7 +22,10 @@ class PlayerController : public QObject {
 public:
     static PlayerController *instance();
 
-    void playUrl(const QUrl &url, const QVariantMap &headers = QVariantMap());
+    // resumeMs >= 0：换源/断流续播时指定从哪个毫秒继续（媒体加载完成后由
+    // m_pendingSeek 应用一次）。默认 -1 表示从头播，保持原有调用点不变。
+    void playUrl(const QUrl &url, const QVariantMap &headers = QVariantMap(),
+                 qint64 resumeMs = -1);
     void togglePause();
     void stop();
     // 切歌取链的空窗期专用：先停掉旧流并标记「正在切换」。

@@ -432,13 +432,46 @@ Item {
                     visible: !root.compactTiny
                     clip: true
 
-                    // 第 1 页：封面居中，边长随页高自适应
+                    // 第 1 页：封面保持正方形，整体略上移，封面下方显示当前一两句歌词，
+                    // 填掉高屏上封面与页底之间的空白（封面边长封顶 300）
                     Item {
+                        id: compactCoverPage
+                        // 封面边长：不超过页宽 92%、页高扣除歌词行，封顶 300，保持正方形
+                        readonly property real coverSide: Math.min(parent.width * 0.92,
+                                                                   parent.height - 64, 300)
                         Item {
-                            anchors.centerIn: parent
-                            width: Math.min(parent.width * 0.92, parent.height * 0.94, 300)
-                            height: width
+                            id: compactCoverSlot
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            // 封面 + 歌词作为一组在页内垂直居中，避免封面顶天、歌词贴底
+                            anchors.top: parent.top
+                            anchors.topMargin: Math.max(0, (compactCoverPage.height - compactCoverPage.coverSide - 64) / 2)
+                            width: compactCoverPage.coverSide
+                            height: compactCoverPage.coverSide
                             Loader { anchors.fill: parent; sourceComponent: coverComp }
+                        }
+                        // 当前歌词：跟随播放进度，最多两行，居中渐隐色；无歌词时留白不占位
+                        Item {
+                            id: lyricPeek
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.top: compactCoverSlot.bottom
+                            anchors.topMargin: 8
+                            width: parent.width * 0.88
+                            height: 48
+                            // 只有真的有歌词时才显示（currentLyricLine 无歌词会返回「暂无歌词」）
+                            visible: app.lyricsTimed || app.lyricsText.length > 0
+                            Text {
+                                anchors.fill: parent
+                                text: app.currentLyricLine.length > 0
+                                      ? app.currentLyricLine : "♪"
+                                color: root.inkSub
+                                font.pixelSize: 14
+                                font.bold: true
+                                wrapMode: Text.Wrap
+                                maximumLineCount: 2
+                                elide: Text.ElideRight
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignTop
+                            }
                         }
                     }
 
