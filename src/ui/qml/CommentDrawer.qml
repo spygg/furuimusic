@@ -115,20 +115,20 @@ Item {
                             clip: true
                             Image {
                                 anchors.fill: parent
-                                source: model.avatar || ""
+                                source: modelData.avatar || ""
                                 fillMode: Image.PreserveAspectCrop
                                 // 列表里按原图同步解码会卡滚动；头像显示只有 36px
                                 sourceSize.width: 72
                                 sourceSize.height: 72
                                 asynchronous: true
                                 cache: true
-                                visible: model.avatar !== ""
+                                visible: modelData.avatar !== ""
                                 onStatusChanged: { if (status === Image.Error) visible = false }
                             }
                             Text {
                                 anchors.centerIn: parent
-                                visible: !model.avatar
-                                text: (model.userName || "?").slice(0, 1)
+                                visible: !modelData.avatar
+                                text: (modelData.userName || "?").slice(0, 1)
                                 color: cPrimary
                                 font.pixelSize: 15
                                 font.bold: true
@@ -141,7 +141,7 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 Text {
-                                    text: model.userName || qsTr("匿名")
+                                    text: modelData.userName || qsTr("匿名")
                                     color: cPrimary
                                     font.pixelSize: 12
                                     font.bold: true
@@ -149,14 +149,14 @@ Item {
                                     Layout.fillWidth: true
                                 }
                                 Text {
-                                    text: model.timeText || ""
+                                    text: modelData.timeText || ""
                                     color: cSub
                                     font.pixelSize: 10
                                 }
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: model.text || ""
+                                text: modelData.text || ""
                                 color: cText
                                 font.pixelSize: 13
                                 wrapMode: Text.Wrap
@@ -164,8 +164,8 @@ Item {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                visible: model.replyText && model.replyText !== ""
-                                text: qsTr("回复 ") + (model.replyText || "")
+                                visible: modelData.replyText && modelData.replyText !== ""
+                                text: qsTr("回复 ") + (modelData.replyText || "")
                                 color: cSub
                                 font.pixelSize: 11
                                 wrapMode: Text.WordWrap
@@ -183,13 +183,13 @@ Item {
                                         color: cSub
                                     }
                                     Text {
-                                        text: String(model.likedCount || 0)
+                                        text: String(modelData.likedCount || 0)
                                         color: cSub
                                         font.pixelSize: 10
                                     }
                                 }
                                 RowLayout {
-                                    visible: (model.replyCount || 0) > 0
+                                    visible: (modelData.replyCount || 0) > 0
                                     spacing: 3
                                     GlyphIcon {
                                         name: "comment"
@@ -197,7 +197,7 @@ Item {
                                         color: cSub
                                     }
                                     Text {
-                                        text: String(model.replyCount)
+                                        text: String(modelData.replyCount)
                                         color: cSub
                                         font.pixelSize: 10
                                     }
