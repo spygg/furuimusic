@@ -16,8 +16,11 @@ Item {
     property color textColor: theme.text
     property color subColor: theme.subText
     property color lineColor: theme.line
+    // 歌单网格卡片：显示「歌单内搜索」角标（榜单/搜索结果的网格不需要）
+    property bool searchable: false
 
     signal clicked()
+    signal searchRequested()
 
     // 封面宽度 = delegate 宽 - card 的 6*2 margins - ColumnLayout 的 10*2 margins
     readonly property real innerWidth: Math.max(40, width - 32)
@@ -151,6 +154,31 @@ Item {
                         text: "▶"
                         color: "#FFFFFF"
                         font.pixelSize: 14
+                    }
+                }
+
+                // 歌单内搜索角标（封面右上，与左上的平台角标对称）；桌面 hover 浮现，
+                // 触屏常显；不可见时禁点，避免误触一个看不见的按钮
+                Rectangle {
+                    width: 30
+                    height: 30
+                    radius: 15
+                    visible: root.searchable
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 8
+                    color: Qt.rgba(0, 0, 0, 0.46)
+                    opacity: (hover.hovered || platform.isMobile) ? 1 : 0
+                    enabled: opacity > 0.5
+                    Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                    Text {
+                        anchors.centerIn: parent
+                        text: "🔍"
+                        font.pixelSize: 13
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: root.searchRequested()
                     }
                 }
             }

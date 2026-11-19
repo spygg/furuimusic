@@ -733,17 +733,21 @@
       "endpoints": {
         "search": {
           "method": "GET",
-          "path": "/song_search_v2/keyword/{keyword}/page/{page}/pagesize/{limit}",
+          "_note": "songsearch.kugou.com 的 /song_search_v2/keyword/... 实测 404（接口下线）；改用移动端 v3 接口（游客态 200，与 rank 同域），字段 hash/songname/singername/album_name/duration(秒)",
+          "path": "http://mobilecdnbj.kugou.com/api/v3/search/song",
           "params": {
-            "platform": "WebFilter"
+            "format": "json",
+            "keyword": "{keyword}",
+            "page": "{page}",
+            "pagesize": "{limit}"
           },
-          "root": "data.lists",
+          "root": "data.info",
           "fields": {
-            "id": "FileHash",
-            "title": "SongName",
-            "artist": "SingerName",
-            "album": "AlbumName",
-            "duration": "Duration",
+            "id": "hash",
+            "title": "songname",
+            "artist": "singername",
+            "album": "album_name",
+            "duration": "duration",
             "durationScale": 1000
           }
         },

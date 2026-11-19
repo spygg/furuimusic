@@ -5,6 +5,7 @@
 #include <QAbstractListModel>
 #include <QObject>
 #include <QSet>
+#include <QSortFilterProxyModel>
 #include <QVariant>
 #include <QVariantList>
 
@@ -19,7 +20,10 @@ public:
     enum Roles {
         UidRole = Qt::UserRole + 1, TitleRole, ArtistRole, AlbumRole, DurationRole,
         CoverRole, SourceRole, SourceNameRole, VipRole, BadgeRole, SourceIdRole,
-        FavoriteRole, InQueueRole
+        FavoriteRole, InQueueRole,
+        // 源模型行号：歌单详情视图挂在过滤代理上，QML 拿到的 index 是代理行；
+        // playResult/toggleFavoriteResult 这些按源模型下标取歌的调用都用本角色对齐
+        RowRole
     };
     Q_ENUM(Roles)
     explicit SongListModel(QObject *parent = nullptr);
@@ -39,6 +43,24 @@ public:
 private:
     QVector<Song> m_songs;
     QSet<QString> m_queueUids;
+};
+
+// 歌单内搜索的过滤代理：包住 m_results，只按歌名/歌手「包含」过滤（大小写无关）。
+// QML 里 detailList 挂本模型；delegate 的 index 是过滤后的行，取歌请用 row 角色。
+class SongFilterModel : public QSortFilterProxyModel {
+    Q_OBJECT
+    // 空串 = 不过滤（原样透出全部行）
+    Q_PROPERTY(QString filter READ filter WRITE setFilter NOTIFY filterChanged)
+public:
+    explicit SongFilterModel(QObject *parent = nullptr);
+    QString filter() const { return m_filter; }
+    void setFilter(const QString &f);
+signals:
+    void filterChanged();
+protected:
+    bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
+private:
+    QString m_filter;
 };
 
 class PlaylistListModel : public QAbstractListModel {
@@ -90,6 +112,8 @@ class AppController : public QObject {
     Q_PROPERTY(SongListModel *results READ results CONSTANT)
     Q_PROPERTY(SongListModel *queue READ queue CONSTANT)
     Q_PROPERTY(PlaylistListModel *playlists READ playlists CONSTANT)
+    // 歌单详情视图（m_results 的过滤代理）：歌单内搜索过滤歌名/歌手，空 filter = 全部
+    Q_PROPERTY(SongFilterModel *playlistDetailSongs READ playlistDetailSongs CONSTANT)
     // 公开榜单/推荐歌单：不依赖任何账号登录，未登录时音乐库也有内容
     Q_PROPERTY(PlaylistListModel *discovery READ discovery CONSTANT)
     Q_PROPERTY(bool discoveryLoading READ discoveryLoading NOTIFY discoveryChanged)
@@ -104,6 +128,8 @@ class AppController : public QObject {
     Q_PROPERTY(qint64 position READ position NOTIFY positionChanged)
     Q_PROPERTY(qint64 duration READ duration NOTIFY playerChanged)
     Q_PROPERTY(int currentQueueIndex READ currentQueueIndex NOTIFY playerChanged)
+    // 当前播放歌曲的 uid（"source:sourceId"）：歌单详情里据此高亮正在播放的行
+    Q_PROPERTY(QString currentSongUid READ currentSongUid NOTIFY playerChanged)
     Q_PROPERTY(bool currentFavorite READ currentFavorite NOTIFY playerChanged)
     Q_PROPERTY(QString theme READ theme NOTIFY settingsChanged)
     Q_PROPERTY(int volume READ volume NOTIFY volumeChanged)
@@ -173,6 +199,7 @@ public:
     SongListModel *results() const { return m_results; }
     SongListModel *queue() const { return m_queue; }
     PlaylistListModel *playlists() const { return m_playlists; }
+    SongFilterModel *playlistDetailSongs() const { return m_detailFilter; }
     PlaylistListModel *discovery() const { return m_discovery; }
     bool discoveryLoading() const;
     AccountListModel *accounts() const { return m_accounts; }
@@ -186,6 +213,7 @@ public:
     qint64 position() const;
     qint64 duration() const;
     int currentQueueIndex() const;
+    QString currentSongUid() const;
     bool currentFavorite() const;
     int volume() const;
     bool ducked() const;
@@ -249,6 +277,9 @@ public:
     Q_INVOKABLE void openDiscoveryPlaylist(const QString &playlistUid);
     Q_INVOKABLE int playlistCount() const;
     Q_INVOKABLE void loadPlaylist(const QString &playlistUid);
+    // 当前播放歌曲在歌单详情视图（过滤代理）里的行号；不在视图内返回 -1。
+    // 歌单页用它在打开歌单后自动滚动定位并高亮。
+    Q_INVOKABLE int playingDetailRow() const;
     Q_INVOKABLE void loadFavorites();
     Q_INVOKABLE void loadHistory();
     // 聚合视图：按平台筛选歌单 / 收藏 / 历史，空串表示全部平台
@@ -402,6 +433,7 @@ private:
     struct Impl;
     Impl *d;
     SongListModel *m_results;
+    SongFilterModel *m_detailFilter;
     SongListModel *m_queue;
     PlaylistListModel *m_playlists;
     PlaylistListModel *m_discovery;

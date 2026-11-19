@@ -76,6 +76,7 @@ QVariant SongListModel::data(const QModelIndex &index, int role) const
     case SourceIdRole:  return s.sourceId;
     case FavoriteRole:  return Library::instance()->isFavorite(s.uid);
     case InQueueRole:   return m_queueUids.contains(s.uid);
+    case RowRole:       return index.row();
     default:            return QVariant();
     }
 }
@@ -86,7 +87,8 @@ QHash<int, QByteArray> SongListModel::roleNames() const
         {UidRole, "uid"}, {TitleRole, "title"}, {ArtistRole, "artist"}, {AlbumRole, "album"},
         {DurationRole, "duration"}, {CoverRole, "cover"}, {SourceRole, "source"},
         {SourceNameRole, "sourceName"}, {VipRole, "vip"}, {BadgeRole, "badge"},
-        {SourceIdRole, "sourceId"}, {FavoriteRole, "favorite"}, {InQueueRole, "inQueue"}
+        {SourceIdRole, "sourceId"}, {FavoriteRole, "favorite"}, {InQueueRole, "inQueue"},
+        {RowRole, "row"}
     };
 }
 
@@ -133,6 +135,34 @@ void SongListModel::setCover(const QString &uid, const QString &cover)
 }
 
 void SongListModel::clear() { setSongs(QVector<Song>()); }
+
+// ---------------------------------------------------------------- 歌单内搜索过滤
+SongFilterModel::SongFilterModel(QObject *parent) : QSortFilterProxyModel(parent)
+{
+    // 大小写折叠由 filterAcceptsRow 自己做，关闭基类的正则/通配语义，
+    // 避免歌名里的 "(", "*" 等字符被当成模式符号
+    setFilterCaseSensitivity(Qt::CaseInsensitive);
+    setFilterFixedString(QString());
+}
+
+void SongFilterModel::setFilter(const QString &f)
+{
+    if (m_filter == f) return;
+    m_filter = f;
+    // 空过滤也要整表刷新：beginFilterChange 语义下 invalidate 折叠成一次 reset
+    invalidateFilter();
+    emit filterChanged();
+}
+
+bool SongFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
+{
+    if (m_filter.trimmed().isEmpty()) return true;
+    const QString f = m_filter.trimmed();
+    const QModelIndex idx = sourceModel()->index(sourceRow, 0, sourceParent);
+    const QString title = idx.data(SongListModel::TitleRole).toString();
+    const QString artist = idx.data(SongListModel::ArtistRole).toString();
+    return title.contains(f, Qt::CaseInsensitive) || artist.contains(f, Qt::CaseInsensitive);
+}
 
 PlaylistListModel::PlaylistListModel(QObject *parent) : QAbstractListModel(parent) {}
 
@@ -291,6 +321,9 @@ AppController::AppController(QObject *parent)
     m_playlists = new PlaylistListModel(this);
     m_discovery = new PlaylistListModel(this);
     m_accounts  = new AccountListModel(this);
+    // 歌单详情的过滤代理：源永远是 m_results（歌单/榜单/收藏/搜索共用同一结果模型）
+    m_detailFilter = new SongFilterModel(this);
+    m_detailFilter->setSourceModel(m_results);
 
     d->quality = Settings::string(QStringLiteral("quality"), QStringLiteral("standard"));
     d->searchType = Settings::string(QStringLiteral("searchType"), QStringLiteral("song"));
@@ -529,6 +562,29 @@ bool AppController::playing() const { return PlayerController::instance()->playi
 qint64 AppController::position() const { return PlayerController::instance()->position(); }
 qint64 AppController::duration() const { return PlayerController::instance()->duration(); }
 int AppController::currentQueueIndex() const { return PlayerController::instance()->currentIndex(); }
+
+// 队列空时 current() 可能返回无效 Song，uid 自然为空串，QML 绑定安全
+QString AppController::currentSongUid() const
+{
+    return PlayerController::instance()->current().uid;
+}
+
+// 当前播放歌曲在歌单详情过滤视图里的行号：先在源模型里按 uid 找，再经代理映射。
+// 被过滤掉时 mapFromSource 无效，返回 -1（调用方不滚动）。
+int AppController::playingDetailRow() const
+{
+    const QString uid = currentSongUid();
+    if (uid.isEmpty()) return -1;
+    const QVector<Song> &songs = m_results->songs();
+    int srcRow = -1;
+    for (int i = 0; i < songs.size(); ++i) {
+        if (songs.at(i).uid == uid) { srcRow = i; break; }
+    }
+    if (srcRow < 0) return -1;
+    const QModelIndex proxyIdx = m_detailFilter->mapFromSource(m_results->index(srcRow, 0));
+    return proxyIdx.isValid() ? proxyIdx.row() : -1;
+}
+
 bool AppController::currentFavorite() const { return isFavoriteCurrent(); }
 int AppController::volume() const { return PlayerController::instance()->volume(); }
 bool AppController::ducked() const { return PlayerController::instance()->ducked(); }

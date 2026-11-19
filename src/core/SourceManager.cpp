@@ -134,6 +134,11 @@ void SourceManager::search(const QString &keyword, const QString &sourceId, int 
         if (!collected->isEmpty()) deliver(false);
     });
 
+    // 硬上限：个别慢源（脚本 30s+ 超时、失效接口等 TCP 重试）会拖住「最终结果」
+    // 的交付，实测换源场景干等 31 秒才跳歌。到点不管还剩几个平台没回来，
+    // 都用已有结果收尾；迟到源的回调被 finished 闸门丢弃。
+    QTimer::singleShot(8000, this, [collected, deliver]() { deliver(true); });
+
     auto done = [remaining, deliver]() {
         if (--(*remaining) > 0) return;
         deliver(true);
@@ -380,7 +385,11 @@ void SourceManager::tryCrossSource(const Song &song, const QString &quality,
                                    const Playable &original, PlayableCallback cb)
 {
     const QString keyword = (song.title + QLatin1Char(' ') + song.artist).trimmed();
-    search(keyword, QString(), 25, [this, song, quality, original, cb](const QVector<Song> &list) {
+    // search() 会多次回调（700ms 软刷新 / 8s 硬超时收尾 / 全部返回的最终结果）：
+    // 一旦已经拿到匹配并开始取链，后续回调一律丢弃，否则会对同一首歌重复取链甚至重复 playUrl。
+    const auto started = std::make_shared<bool>(false);
+    search(keyword, QString(), 25, [this, song, quality, original, cb, started](const QVector<Song> &list) {
+        if (*started) return;
         qreal best = 0.55;
         Song matched;
         for (const Song &c : list) {
@@ -391,7 +400,11 @@ void SourceManager::tryCrossSource(const Song &song, const QString &quality,
                                  .arg(song.title, song.artist).arg(int(list.size()))
                                  .arg(matched.title, matched.artist).arg(best, 0, 'f', 2);
         MusicSource *target = matched.title.isEmpty() ? nullptr : source(matched.source);
-        if (!target) { if (cb) cb(original); return; }
+        if (!target) {
+            // 本轮没匹配上：软刷新批次里可能只是结果不全，等下一个批次；最终批次自然收尾
+            return;
+        }
+        *started = true;
         target->resolveUrl(matched, quality, [this, matched, original, cb](const Playable &p) {
             if (p.ok) {
                 Playable r = p;
@@ -407,6 +420,15 @@ void SourceManager::tryCrossSource(const Song &song, const QString &quality,
                 if (cb) cb(original);
             }
         });
+    });
+    // 兜底收尾：search 的多次交付里始终没有匹配（小众歌）或一个批次都没触发
+    // （聚合被硬超时提前掐断且 collected 为空）时，按「跨源失败」回调，避免取链流程挂起。
+    QTimer::singleShot(8500, this, [song, original, cb, started]() {
+        if (!*started && cb) {
+            qWarning().noquote() << QStringLiteral("[取链] 内置跨源搜索「%1 %2」无匹配，放弃换源")
+                                        .arg(song.title, song.artist);
+            cb(original);
+        }
     });
 }
 
