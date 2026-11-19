@@ -177,6 +177,9 @@ CONFIG(legacy_widgets) {
 }
 
 android {
+    # Qt 5 的 JNI 封装（QAndroidJniObject/QtAndroid）在独立模块里，首页返回键
+    # 调 Activity.moveTaskToBack 需要它；Qt 6 走 QJniObject（QtCore 自带）。
+    QT += androidextras
     ANDROID_PACKAGE_SOURCE_DIR = $$PWD/platform/android-qt5
     ANDROID_MIN_SDK_VERSION = 21
     ANDROID_TARGET_SDK_VERSION = 30

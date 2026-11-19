@@ -290,6 +290,8 @@ public:
     Q_INVOKABLE QStringList searchHistory() const;
     Q_INVOKABLE void refreshPlaylists();
     Q_INVOKABLE void refreshAccounts();
+    // Android 全面屏手势/返回键在首页时把任务置于后台（而不是 finish 退出）
+    Q_INVOKABLE void backgroundApp();
 
     Q_INVOKABLE void playResult(int index);
     Q_INVOKABLE void playQueue(int index);

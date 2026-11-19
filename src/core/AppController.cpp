@@ -11,6 +11,15 @@
 #include <QTimer>
 #include <QUrl>
 
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QJniObject>
+#include <QtCore/qcoreapplication_platform.h>
+#include <jni.h>
+#elif defined(Q_OS_ANDROID)
+#include <QAndroidJniObject>
+#include <QtAndroid>
+#endif
+
 #include "AuthManager.h"
 #include "CustomSource.h"
 #include "HttpClient.h"
@@ -961,6 +970,28 @@ void AppController::refreshPlaylists()
 }
 
 void AppController::refreshAccounts() { syncAccountModel(); }
+
+void AppController::backgroundApp()
+{
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // Activity.moveTaskToBack(true) 只把整个 task 切到后台：播放/媒体会话继续存活，
+    // 与主流播放器「首页按返回=退到后台」一致。必须在 Android 主线程调用。
+    QNativeInterface::QAndroidApplication::runOnAndroidMainThread([] {
+        const QJniObject activity = QJniObject::callStaticObjectMethod(
+            "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
+        if (activity.isValid())
+            activity.callMethod<jboolean>("moveTaskToBack", "(Z)Z", JNI_TRUE);
+    });
+#elif defined(Q_OS_ANDROID)
+    QtAndroid::runOnAndroidThreadSync([] {
+        const QAndroidJniObject activity = QtAndroid::androidActivity();
+        if (activity.isValid())
+            activity.callMethod<jboolean>("moveTaskToBack", "(Z)Z", true);
+    });
+#else
+    // 桌面无「置于后台」语义，返回键由窗口管理器处理
+#endif
+}
 
 void AppController::resolveAndPlay(const Song &song)
 {

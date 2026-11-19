@@ -43,6 +43,12 @@ Item {
             pageIndex = 0
             return true
         }
+        // 首页的返回键（含全面屏手势的边缘滑动）不再让事件落到 Qt Android 默认
+        // finish() 把 App 杀掉——主流音乐 App 的首页返回是「退到后台」，播放继续。
+        if (Qt.platform.os === "android") {
+            app.backgroundApp()
+            return true
+        }
         return false
     }
 
