@@ -236,11 +236,31 @@ Item {
                     Row {
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 6
-                        Text {
-                            text: root.sourcesExpanded ? "▾" : "▸"
-                            color: cPrimary
-                            font.pixelSize: 14
-                            font.bold: true
+                        // 用 Canvas 画三角形，不依赖字体：之前用「▸/▾」在部分 Android
+                        // 字体下渲染成方块/乱码（车机和真机都出现过）
+                        Canvas {
+                            id: expandChevron
+                            width: 10
+                            height: 10
+                            onPaint: {
+                                const ctx = getContext("2d")
+                                ctx.clearRect(0, 0, width, height)
+                                ctx.fillStyle = cPrimary
+                                ctx.beginPath()
+                                if (root.sourcesExpanded) {
+                                    ctx.moveTo(1, 3); ctx.lineTo(9, 3); ctx.lineTo(5, 8)
+                                } else {
+                                    ctx.moveTo(2, 1); ctx.lineTo(8, 5); ctx.lineTo(2, 9)
+                                }
+                                ctx.closePath()
+                                ctx.fill()
+                            }
+                            Component.onCompleted: requestPaint()
+                            Connections {
+                                target: root
+                                function onSourcesExpandedChanged() { expandChevron.requestPaint() }
+                                function onCPrimaryChanged() { expandChevron.requestPaint() }
+                            }
                         }
                         Text {
                             text: "在线音源（LX 脚本）"
