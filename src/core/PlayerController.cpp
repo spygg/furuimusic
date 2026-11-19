@@ -130,6 +130,9 @@ PlayerController::PlayerController(QObject *parent)
         // 看门狗读数：位置往前走即说明真的在播，清停滞记录
         m_lastPosition = pos;
         if (pos > 500) m_everPlayed = true;
+        // 记住最近一次有效位置：error 到达瞬间部分后端把 position 清 0，
+        // 上层记 failedPos 时用这个值兜底，避免续播又从头来。
+        if (pos > 1000) m_lastGoodPosition = pos;
         if (pos > 0) m_stallSince = 0;
         emit positionChanged();
         // 兜底自动连播：部分后端（尤其在线流）在末尾不派发 EndOfMedia，
@@ -149,11 +152,13 @@ PlayerController::PlayerController(QObject *parent)
     connect(m_player, &QMediaPlayer::durationChanged, this, [this](qint64) { emit stateChanged(); });
     connect(m_player, &QMediaPlayer::mediaStatusChanged, this,
             [this](QMediaPlayer::MediaStatus status) {
-        // 续播恢复：媒体加载就绪后跳到上次停播位置（只应用一次，之后清零）
+        // 续播恢复：媒体加载就绪后开始跳到上次位置。在线流刚 Loaded/Buffered 时
+        // setPosition 常静默失败，不能一次 set 完就清标记——交给 applyPendingSeek
+        // 反复校验重试，直到 position 真正到位才清 m_pendingSeek。
         if (m_pendingSeek > 0
             && (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia)) {
-            m_player->setPosition(m_pendingSeek);
-            m_pendingSeek = 0;
+            m_resumeSeekTimer->start();  // 加载就绪，启动校验式续播（200ms 重试）
+            applyPendingSeek();          // 并立即尝试一次
         }
         // 新歌加载完成前忽略旧曲残留的结束信号。在线流常停留在 BufferingMedia
         // （而非 BufferedMedia），只认 Loaded/Buffered 会让 suppressEnd 一直挂着，
@@ -253,11 +258,55 @@ PlayerController::PlayerController(QObject *parent)
     m_watchdog = new QTimer(this);
     m_watchdog->setInterval(1000);
     connect(m_watchdog, &QTimer::timeout, this, &PlayerController::onWatchdog);
+
+    // 断点续播校验定时器：在线流刚加载时 setPosition 常静默失败，每 200ms 重试一次，
+    // 直到 position 真正接近目标（applyPendingSeek 内部清零并停表）或重试次数用尽。
+    m_resumeSeekTimer = new QTimer(this);
+    m_resumeSeekTimer->setInterval(200);
+    connect(m_resumeSeekTimer, &QTimer::timeout, this, &PlayerController::applyPendingSeek);
     connect(this, &PlayerController::queueChanged, this, &PlayerController::saveState);
     connect(this, &PlayerController::stateChanged, this, &PlayerController::saveState);
     if (QCoreApplication::instance())
         connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
                 this, &PlayerController::saveState);
+}
+
+// 校验式断点续播：在线直链刚 Loaded/Buffered 时，后端（尤其 Android MediaPlayer /
+// 部分 FFmpeg 构建）虽上报了时长却还不可 seek，此时 setPosition 会被静默忽略。
+// 旧实现 setPosition 一次就清 m_pendingSeek，结果从 0 重播——正是「没播完又从头来」
+// 的老 bug（晴天/夜曲真机都出现过）。这里改成：反复 setPosition 并读回 position
+// 校验，真正到位才清标记；连续多次无效则放弃，避免在线流永久不可 seek 时死循环。
+void PlayerController::applyPendingSeek()
+{
+    if (m_pendingSeek <= 0) {
+        m_resumeSeekTimer->stop();
+        return;
+    }
+    // 目标不能超过媒体时长：换源后新源时长可能与旧源差几秒，越界的 seek 会被夹到
+    // 结尾甚至归零。留 2s 余量，避免刚续播就触发末尾连播。
+    qint64 target = m_pendingSeek;
+    const qint64 total = m_player->duration();
+    if (total > 0 && target > total - 2000)
+        target = qMax<qint64>(0, total - 2000);
+
+    const qint64 pos = position();
+    // 已到位（误差 2s 内，兼容后端向上取整）：确认成功并收表。
+    if (pos >= target - 2000 && (pos > 0 || target <= 2000)) {
+        qInfo("[续播] 到位 pos=%lld target=%lld 尝试 %d 次", pos, target, m_resumeSeekTries);
+        m_pendingSeek = 0;
+        m_resumeSeekTimer->stop();
+        return;
+    }
+    if (m_resumeSeekTries >= 20) {   // 20 × 200ms = 4s 仍未生效，放弃
+        qWarning("[续播] seek 4s 未生效，放弃；pos=%lld target=%lld", pos, target);
+        m_pendingSeek = 0;
+        m_resumeSeekTimer->stop();
+        return;
+    }
+    ++m_resumeSeekTries;
+    m_player->setPosition(target);
+    if (!m_resumeSeekTimer->isActive())
+        m_resumeSeekTimer->start();
 }
 
 void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers, qint64 resumeMs)
@@ -271,8 +320,16 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers, qint
     // setPosition 到断点，听感上就是「卡一下接着放」，而不是从头重来一遍。
     // 只有显式传了 resumeMs（>=0）才写：默认 -1 时绝不能碰 m_pendingSeek，否则会把
     // restoreState() 设好的「启动续播位置」清成 0（否则重启后会从头播）。
-    if (resumeMs >= 0)
+    if (resumeMs >= 0) {
         m_pendingSeek = resumeMs;
+        m_resumeSeekTries = 0;
+        // 校验式续播：启动重试表，直到 position 真正跳到目标才停。
+        // 注意默认 -1（普通切歌/启动续播）时不碰 m_pendingSeek，也不重置计数。
+        m_resumeSeekTimer->start();
+    }
+    // 断流前的有效位置不能跨歌沿用：新歌还没出声前 error 若到来，failedPos
+    // 必须来自本歌而非上一首，否则换源续播会跳到一个毫不相关的位置。
+    m_lastGoodPosition = 0;
     // 网易云等平台返回的播放直链常为 http://（如 http://m?.music.126.net/...）。
     // Android 9+ 默认禁止明文流量、桌面 Qt 部分环境也会拒绝 http 拉流，表现为
     // "Error transferring http://..."。与封面统一策略（MusicSource::mvCoverThumb）对齐，
@@ -716,6 +773,8 @@ void PlayerController::restoreState()
     const int idx = Settings::integer(QStringLiteral("resumeIndex"), 0);
     m_currentIndex = qBound(-1, idx, m_queue.size() - 1);
     m_pendingSeek = static_cast<qint64>(Settings::integer(QStringLiteral("resumePosition"), 0));
+    m_resumeSeekTries = 0;   // 启动续播也要走校验式 seek，计数从头
+    m_lastGoodPosition = 0;
     const bool wasPlaying = Settings::boolean(QStringLiteral("resumePlaying"), false);
 
     // 先让队列/播放条立即显示上次的播放列表与曲目（此时 pendingSeek 已就位，
@@ -731,6 +790,12 @@ void PlayerController::restoreState()
 void PlayerController::seek(qint64 ms)
 {
     if (ms < 0) ms = 0;
+    // 用户主动拖动进度/歌词跳转：取消尚未完成的断点续播，避免两条 setPosition
+    // 互相打架（定时器下一拍又把位置拽回续播目标）。
+    if (m_pendingSeek > 0) {
+        m_pendingSeek = 0;
+        m_resumeSeekTimer->stop();
+    }
     // 往回拖过结尾：这首重新算「没播完」，之后再按播放是继续播而不是跳下一首
     const qint64 total = duration();
     if (total <= 0 || ms < total - 2000) {
@@ -739,6 +804,7 @@ void PlayerController::seek(qint64 ms)
         m_lastPosition = ms;
     }
     m_player->setPosition(ms);
+    m_lastGoodPosition = ms;
     updateLyric(ms);
 }
 

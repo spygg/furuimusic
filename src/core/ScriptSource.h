@@ -65,6 +65,9 @@ public:
     void search(const QString &keyword, int limit, SongsCallback cb);
     void resolve(const Song &song, const QString &quality, PlayableCallback cb);
     void lyric(const Song &song, LyricCallback cb);
+    // 脚本评论：调用声明了 comment 能力的脚本（info = {musicInfo, page}），
+    // 约定返回 {comments:[{text,userName,avatar,likedCount,replyCount,replyText,time|timeText,...}], total}
+    void comments(const Song &song, int page, CommentCallback cb);
 
     static QString platformToLx(const QString &platform);
     static QString qualityToLx(const QString &quality);

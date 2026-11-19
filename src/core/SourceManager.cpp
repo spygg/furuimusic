@@ -13,6 +13,7 @@
 #include "JsonMapper.h"
 #include "Library.h"
 #include "MusicSource.h"
+#include "ScriptSource.h"
 #include "Settings.h"
 #include "SourceConfig.h"
 
@@ -461,6 +462,20 @@ void SourceManager::demoteSource(const QString &id)
     Settings::set(QStringLiteral("sourceOrder"), m_sourceOrder.join(QLatin1Char(',')));
 }
 
+// 曲中断流 = 这个源给的直链播到一半死了，比单纯取链失败严重得多：
+// 直接沉底，让后续换源优先选没出过这种事的源。播成功了 promoteSource 还能拉回来。
+void SourceManager::penalizeSource(const QString &id)
+{
+    if (id.isEmpty() || id == QLatin1String("custom"))
+        return;
+    if (!m_sourceOrder.contains(id)) m_sourceOrder.append(id);
+    const int index = m_sourceOrder.indexOf(id);
+    if (index >= m_sourceOrder.size() - 1) return;   // 已在最后，不再动
+    m_sourceOrder.move(index, m_sourceOrder.size() - 1);
+    Settings::set(QStringLiteral("sourceOrder"), m_sourceOrder.join(QLatin1Char(',')));
+    qWarning().noquote() << QStringLiteral("[取链] 音源 %1 曲中断流，降级到候选末位").arg(id);
+}
+
 void SourceManager::resolveAlternate(const Song &song, const QStringList &exclude,
                                      const QString &quality, PlayableCallback cb)
 {
@@ -683,9 +698,19 @@ void SourceManager::cover(const Song &song, StringCallback cb)
 
 void SourceManager::comments(const Song &song, int page, CommentCallback cb)
 {
+    // 脚本层搜出来的歌（带 scriptId）直接走脚本评论；内置平台先试自己的评论接口，
+    // 取不到（不支持/被反爬/空）再让声明了 comment 能力的脚本兜底。
     MusicSource *s = source(song.source);
-    if (!s) { if (cb) cb(QVector<Comment>(), -1); return; }
-    s->comments(song, page, std::move(cb));
+    const bool scriptSong = song.source == QLatin1String("custom")
+            || song.extra.contains(QStringLiteral("scriptId"));
+    if (s && !scriptSong) {
+        s->comments(song, page, [song, page, cb](const QVector<Comment> &list, int total) {
+            if (!list.isEmpty()) { if (cb) cb(list, total); return; }
+            ScriptSourceManager::instance()->comments(song, page, cb);
+        });
+        return;
+    }
+    ScriptSourceManager::instance()->comments(song, page, std::move(cb));
 }
 
 void SourceManager::mv(const Song &song, MvCallback cb)

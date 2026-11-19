@@ -116,6 +116,29 @@ QStringList jsonToStrings(const QJsonValue &value)
     return out;
 }
 
+// 按 key 候选顺序取第一个非空字符串（脚本评论字段名宽松匹配用）
+QString firstVariantString(const QVariantMap &m, const QStringList &keys)
+{
+    for (const QString &k : keys) {
+        const QString s = m.value(k).toString();
+        if (!s.isEmpty()) return s;
+    }
+    return QString();
+}
+
+// 把毫秒时间戳格式化为「昨天/MM-DD HH:mm」展示文本（与 MusicSource 同规则）
+QString commentTimeText(qint64 ms)
+{
+    if (ms <= 0) return QString();
+    const QDateTime dt = QDateTime::fromMSecsSinceEpoch(ms);
+    const QDateTime now = QDateTime::currentDateTime();
+    const qint64 days = dt.daysTo(now);
+    if (days == 0) return QStringLiteral("今天 ") + dt.toString(QStringLiteral("HH:mm"));
+    if (days == 1) return QStringLiteral("昨天 ") + dt.toString(QStringLiteral("HH:mm"));
+    if (days < 7) return dt.toString(QStringLiteral("MM-DD HH:mm"));
+    return dt.toString(QStringLiteral("yyyy-MM-dd"));
+}
+
 QString formatInterval(qint64 ms)
 {
     if (ms <= 0) return QString();
@@ -682,13 +705,14 @@ QVariantMap ScriptSourceManager::itemToVariant(const Item &item) const
     m.insert(QStringLiteral("qualities"), item.qualities);
     m.insert(QStringLiteral("sources"), item.sources.toVariantList());
 
-    bool search = false, musicUrl = false, lyric = false;
+    bool search = false, musicUrl = false, lyric = false, comment = false;
     for (const QJsonValue &v : item.sources) {
         const QJsonObject o = v.toObject();
         const QStringList acts = jsonToStrings(o.value(QStringLiteral("actions")));
         if (acts.contains(QStringLiteral("search"))) search = true;
         if (acts.contains(QStringLiteral("musicUrl"))) musicUrl = true;
         if (acts.contains(QStringLiteral("lyric"))) lyric = true;
+        if (acts.contains(QStringLiteral("comment"))) comment = true;
     }
     QString capability;
     if (search && musicUrl) capability = QStringLiteral("搜索 + 取链");
@@ -697,6 +721,8 @@ QVariantMap ScriptSourceManager::itemToVariant(const Item &item) const
     else capability = QStringLiteral("未声明可用能力");
     if (lyric && !capability.contains(QStringLiteral("歌词")))
         capability += QStringLiteral(" · 含歌词");
+    if (comment && !capability.contains(QStringLiteral("评论")))
+        capability += QStringLiteral(" · 含评论");
     m.insert(QStringLiteral("capability"), capability);
 
     QStringList lines;
@@ -709,6 +735,7 @@ QVariantMap ScriptSourceManager::itemToVariant(const Item &item) const
         if (acts.contains(QStringLiteral("search"))) caps << QStringLiteral("搜索");
         if (acts.contains(QStringLiteral("musicUrl"))) caps << QStringLiteral("取链");
         if (acts.contains(QStringLiteral("lyric"))) caps << QStringLiteral("歌词");
+        if (acts.contains(QStringLiteral("comment"))) caps << QStringLiteral("评论");
         lines << QStringLiteral("%1(%2)：%3")
                     .arg(name.isEmpty() ? key : name, key, caps.join(QLatin1Char('+')));
     }
@@ -1849,6 +1876,124 @@ void ScriptSourceManager::lyric(const Song &song, LyricCallback cb)
                     }
                     if (!text.trimmed().isEmpty()) {
                         if (state->cb) state->cb(text, trans.trimmed());
+                        return;
+                    }
+                    (*step)();
+                }, 15000);
+        });
+    };
+    (*next)();
+}
+
+// 脚本评论：与 lyric() 同构 —— 所有声明 comment 能力的「脚本 × 平台」依次兜底。
+// 脚本协议：info = {musicInfo, page}，返回 {comments:[...], total}；字段名宽松匹配。
+void ScriptSourceManager::comments(const Song &song, int page, CommentCallback cb)
+{
+    if (!hasEnabled()) { if (cb) cb(QVector<Comment>(), -1); return; }
+
+    struct Candidate { QString engineId; QString key; };
+    QVector<Candidate> candidates;
+    auto add = [this, &candidates](const QString &key) {
+        if (key.isEmpty()) return;
+        for (auto it = m_items.constBegin(); it != m_items.constEnd(); ++it) {
+            if (!it->enabled) continue;
+            for (const QJsonValue &v : it->sources) {
+                const QJsonObject o = v.toObject();
+                if (o.value(QStringLiteral("key")).toString() != key) continue;
+                if (!jsonToStrings(o.value(QStringLiteral("actions"))).contains(QStringLiteral("comment")))
+                    continue;
+                bool dup = false;
+                for (const Candidate &c : candidates)
+                    if (c.engineId == it.key() && c.key == key) { dup = true; break; }
+                if (!dup) candidates << Candidate{it.key(), key};
+                break;
+            }
+        }
+    };
+    const QString storedScript = song.extra.value(QStringLiteral("scriptId")).toString();
+    const QString storedKey = song.extra.value(QStringLiteral("lxKey")).toString();
+    if (!storedScript.isEmpty() && !storedKey.isEmpty())
+        add(storedKey);
+    add(platformToLx(song.source));
+
+    if (candidates.isEmpty()) { if (cb) cb(QVector<Comment>(), -1); return; }
+
+    struct State {
+        CommentCallback cb;
+        Song song;
+        int page;
+        QVector<Candidate> candidates;
+        int index = 0;
+    };
+    auto state = std::make_shared<State>();
+    state->cb = cb;
+    state->song = song;
+    state->page = page;
+    state->candidates = candidates;
+    auto next = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> weakNext = next;
+    *next = [this, state, weakNext]() {
+        auto step = weakNext.lock();
+        if (!step) return;
+        if (state->index >= state->candidates.size()) {
+            if (state->cb) state->cb(QVector<Comment>(), -1);
+            return;
+        }
+        const Candidate cand = state->candidates.at(state->index++);
+        ensureEngine(cand.engineId, [this, state, cand, step](bool ok) {
+            if (!ok) { (*step)(); return; }
+            ScriptEngine *engine = m_engines.value(cand.engineId).data();
+            if (!engine || !engine->ready() || !engine->supports(cand.key, QStringLiteral("comment"))) {
+                (*step)();
+                return;
+            }
+            QVariantMap info;
+            info.insert(QStringLiteral("musicInfo"), musicInfoFor(state->song, cand.key));
+            info.insert(QStringLiteral("page"), state->page);
+            engine->callAction(cand.key, QStringLiteral("comment"), info,
+                [state, step](const ScriptActionResult &r) {
+                    QVector<Comment> out;
+                    int total = -1;
+                    if (r.ok && r.data.canConvert<QVariantMap>()) {
+                        const QVariantMap m = r.data.toMap();
+                        QVariant v = m.value(QStringLiteral("comments"));
+                        if (!v.canConvert<QVariantList>()) v = m.value(QStringLiteral("list"));
+                        total = m.value(QStringLiteral("total")).toInt();
+                        if (total == 0) total = m.value(QStringLiteral("count")).toInt();
+                        const QVariantList arr = v.toList();
+                        for (const QVariant &rv : arr) {
+                            const QVariantMap c = rv.toMap();
+                            Comment cm;
+                            cm.source = QStringLiteral("script");
+                            cm.id = firstVariantString(c, {QStringLiteral("id"), QStringLiteral("commentId")});
+                            cm.text = firstVariantString(c, {QStringLiteral("text"), QStringLiteral("content"),
+                                                             QStringLiteral("msg")});
+                            cm.userName = firstVariantString(c, {QStringLiteral("userName"), QStringLiteral("name"),
+                                                                 QStringLiteral("nick"), QStringLiteral("user_name")});
+                            cm.avatar = firstVariantString(c, {QStringLiteral("avatar"), QStringLiteral("avatarUrl"),
+                                                               QStringLiteral("user_pic")});
+                            const QVariant t = c.value(QStringLiteral("time"));
+                            qint64 ms = t.toLongLong();
+                            if (ms > 0 && ms < 100000000000LL) ms *= 1000;   // 秒 → 毫秒
+                            cm.time = ms;
+                            cm.timeText = c.value(QStringLiteral("timeText")).toString();
+                            if (cm.timeText.isEmpty())
+                                cm.timeText = firstVariantString(c, {QStringLiteral("timeStr"),
+                                                                     QStringLiteral("addtime")});
+                            if (cm.timeText.isEmpty()) cm.timeText = commentTimeText(cm.time);
+                            cm.likedCount = c.value(QStringLiteral("likedCount")).toInt();
+                            if (cm.likedCount == 0)
+                                cm.likedCount = c.value(QStringLiteral("likeNum")).toInt();
+                            cm.replyCount = c.value(QStringLiteral("replyCount")).toInt();
+                            if (cm.replyCount == 0)
+                                cm.replyCount = c.value(QStringLiteral("reply_num")).toInt();
+                            cm.replyText = firstVariantString(c, {QStringLiteral("replyText"),
+                                                                   QStringLiteral("replyContent")});
+                            if (!cm.text.isEmpty()) out << cm;
+                        }
+                    }
+                    if (!out.isEmpty()) {
+                        if (state->cb) state->cb(out, total);
                         return;
                     }
                     (*step)();

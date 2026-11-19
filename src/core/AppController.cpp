@@ -307,6 +307,12 @@ struct AppController::Impl {
     // 播放报错记重度失败 —— 「取到地址」和「能播出声音」是两件事，成绩表只认后者。
     QString pendingEngine;
     QString pendingKey;
+    // 当前正在播放的直链提供者。pending* 在「确认能播」后即被清空，曲中断流时
+    // 已经拿不到了（旧实现只罚「秒失败」，播了一半才断的源反而逍遥法外）；
+    // playing* 保留到下一次 playUrl 覆盖，断流重罚靠它定位元凶。
+    QString playingEngine;
+    QString playingKey;
+    QString playingProviderSource;   // 内置平台 id；脚本提供时为空，custom 脚本层为 "custom"
     // 推荐请求在途：连点下一首时只允许有一个 /luna/track/related 请求
     bool recommendPending = false;
     // 曲库页搜索框是否有内容：外壳据此隐藏播放栏，给搜索结果/软键盘让位
@@ -994,9 +1000,64 @@ void AppController::backgroundApp()
 #endif
 }
 
+void AppController::setMvFullscreen(bool on)
+{
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    Logger::write(QStringLiteral("I"),
+                  QStringLiteral("[MV] 全屏 %1 → 横屏锁定 + 沉浸式系统栏").arg(on ? "进入" : "退出"));
+    // ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE = 6：随设备两向横屏自适应；
+    // 退出回 SCREEN_ORIENTATION_UNSPECIFIED = -1，交还系统跟随 Manifest/用户习惯。
+    // Manifest 已声明 configChanges 含 orientation，旋转不会重建 Activity。
+    QNativeInterface::QAndroidApplication::runOnAndroidMainThread([on] {
+        const QJniObject activity = QJniObject::callStaticObjectMethod(
+            "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
+        if (!activity.isValid())
+            return;
+        activity.callMethod<void>("setRequestedOrientation", "(I)V",
+                                  on ? jint(6) : jint(-1));
+
+        // 沉浸式：隐藏状态栏 + 导航栏，边缘滑动只临时浮现（BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE）
+        const QJniObject window = activity.callObjectMethod(
+            "getWindow", "()Landroid/view/Window;");
+        if (!window.isValid())
+            return;
+        // WindowInsets.Type.systemBars()：statusBars | navigationBars 的合集
+        const jint barTypes = QJniObject::callStaticMethod<jint>(
+            "android/view/WindowInsets$Type", "systemBars", "()I");
+        const QJniObject insets = window.callObjectMethod(
+            "getInsetsController", "()Landroid/view/WindowInsetsController;");
+        if (insets.isValid()) {
+            // API 30+ 统一走 WindowInsetsController（minSdk 为 Qt 6 默认 26，老设备降级 legacy 标志）
+            if (on) {
+                insets.callMethod<void>("setSystemBarsBehavior", "(I)V", jint(2));
+                insets.callMethod<void>("hide", "(I)V", barTypes);
+            } else {
+                insets.callMethod<void>("show", "(I)V", barTypes);
+            }
+        } else {
+            // API < 30 legacy SystemUiVisibility 沉浸式
+            const QJniObject decor = window.callObjectMethod(
+                "getDecorView", "()Landroid/view/View;");
+            if (!decor.isValid())
+                return;
+            // FULLSCREEN|HIDE_NAVIGATION|STABLE|LAYOUT_FULLSCREEN|LAYOUT_HIDE_NAVIGATION|IMMERSIVE_STICKY
+            const jint flags = on ? jint(0x4 | 0x2 | 0x100 | 0x400 | 0x200 | 0x1000)
+                                  : jint(0);
+            decor.callMethod<void>("setSystemUiVisibility", "(I)V", flags);
+        }
+    });
+#else
+    Q_UNUSED(on)   // 桌面全屏由 QML 侧 showFullScreen()/showNormal() 处理
+#endif
+}
+
 void AppController::resolveAndPlay(const Song &song)
 {
     if (song.title.isEmpty()) return;
+    // 新歌取链开始：清掉上一首的直链提供者记录，断流重罚只对真正在播的歌生效
+    d->playingEngine.clear();
+    d->playingKey.clear();
+    d->playingProviderSource.clear();
     // 死循环闸门：同一首歌已经连续三次「取到链但播不出来」，再换源只是把同一件事重做一遍。
     // 计数只在真的失败时 +1（见 autoAdvanceAfterFailure），播起来就清零；
     // 不能在进函数时 +1 —— 那样同一首歌手动重播四次就会被误判成坏歌。
@@ -1063,6 +1124,11 @@ void AppController::resolveAndPlay(const Song &song)
         d->lastPlayableHeaders = p.headers;
         d->pendingEngine = p.engineId;
         d->pendingKey = p.platformKey;
+        // 同步记录本条直链的提供者（曲中断流重罚用；pending* 确认能播后就清了）
+        d->playingEngine = p.engineId;
+        d->playingKey = p.platformKey;
+        d->playingProviderSource = p.engineId.isEmpty()
+                ? (p.source.isEmpty() ? song.source : p.source) : QString();
         // 非 VIP 歌走「全部自定义」时也被标了 substituted，但写「VIP 替代」会误导：
         // 直接用它自己的来源名（脚本层已带「在线音源 · 」前缀）
         d->substituteBadge = p.substituted
@@ -1087,24 +1153,44 @@ void AppController::onPlayerError(const QString &msg)
     // 不再二次触发；只有用户主动切歌（resolveAndPlay）才会清掉它。
     Song song = d->currentSong;
     // 断流前的位置：在线直链（咪咕/网易云临时链）常在曲中断掉，换源时要把进度带过去，
-    // 否则听感上就是「播到一半突然从头再来」。position() 在 error 到达时仍是断流点。
-    const qint64 failedPos = PlayerController::instance()->position();
+    // 否则听感上就是「播到一半突然从头再来」。position() 在 error 到达时仍是断流点；
+    // 但部分后端出错瞬间把 position 清成 0，这时退回 PlayerController 记录的最后一个
+    // 有效位置（>1s），避免 failedPos=0 导致换源后从头播。
+    qint64 failedPos = PlayerController::instance()->position();
+    if (failedPos < 1000) {
+        const qint64 good = PlayerController::instance()->lastGoodPosition();
+        if (good > failedPos) failedPos = good;
+    }
     // QMediaPlayer 的错误原文（"Error transferring http://... - server replied ..."）
     // 又长又没信息量：状态栏留给排查，提示只保留一句，免得糊满屏幕
     const QString brief = QStringLiteral("播放失败");
-    // 这条直链是脚本音源给的却没播出来：重度扣分（-4），让它尽快跌出优先位置。
-    // 不这么做的话「取到地址就 +2」会把返回坏地址的源越推越前，形成死循环。
-    if (!d->pendingEngine.isEmpty()) {
-        ScriptSourceManager::instance()->reportResult(d->pendingEngine, d->pendingKey, false, -4);
-        // 记进「本首坏候选」：下次取链直接跳过它，把这一轮让给下一个音源
+    // 曲中断流判定：播过 15 秒以上才断。秒失败多半是地址过期/防盗链（旧逻辑 -4），
+    // 播到一半断流说明这个源此刻的链路质量差，要罚得更重 —— 否则「确认能播 +2」后
+    // pending* 已清空，断流的源完全不受罚，下一首还会优先选它，用户就一直遇到
+    // 「播一半重来」。
+    const bool midStream = failedPos >= 15000;
+    if (!d->playingEngine.isEmpty()) {
+        // 直链由「脚本 × 平台」提供：重度扣分并记本首坏候选，让换源优先选别的
+        ScriptSourceManager::instance()->reportResult(
+            d->playingEngine, d->playingKey, false, midStream ? -8 : -4);
         ScriptSourceManager::instance()->notePlaybackFailure(
-            d->pendingEngine, d->pendingKey,
+            d->playingEngine, d->playingKey,
             song.title + QLatin1Char('|') + song.artist);
-        qWarning().noquote() << QStringLiteral("[换源] 直链播不出来，扣分：%1 [%2]")
-                                    .arg(d->pendingEngine, d->pendingKey);
-        d->pendingEngine.clear();
-        d->pendingKey.clear();
+        if (midStream)
+            ScriptSourceManager::instance()->demoteSource(d->playingEngine);
+        qWarning().noquote() << QStringLiteral("[换源] 直链播不出来%1，扣分：%2 [%3]")
+                                    .arg(midStream ? QStringLiteral("（曲中断流）") : QString())
+                                    .arg(d->playingEngine, d->playingKey);
+    } else if (!d->playingProviderSource.isEmpty()
+               && d->playingProviderSource != QLatin1String("custom")) {
+        // 直链由内置平台提供：普通失败降一位；曲中断流直接沉底（promoteSource 可拉回）
+        if (midStream)
+            SourceManager::instance()->penalizeSource(d->playingProviderSource);
+        else
+            SourceManager::instance()->demoteSource(d->playingProviderSource);
     }
+    d->pendingEngine.clear();
+    d->pendingKey.clear();
     Logger::write(QStringLiteral("W"),
                   QStringLiteral("播放失败：%1 - %2（%3）").arg(song.title, song.artist, msg));
     if (song.title.isEmpty() || d->inFallback) {
@@ -1120,8 +1206,8 @@ void AppController::onPlayerError(const QString &msg)
     // 计时，会在换源尚未完成时误报「加载超时」（实测 16s 假超时）。
     // 新源 playUrl() 会重新拉起看门狗并按新源重置基准。
     PlayerController::instance()->pauseWatchdog();
-    // 动态权重：已取到直链却播不出来的原平台先降权，下次优先选更稳的源
-    SourceManager::instance()->demoteSource(song.source);
+    // 动态权重：原平台的降权已按真实提供者（playingProviderSource）在上方处理；
+    // 这里不再额外降 song.source —— 换源成功时真正提供直链的往往不是它。
     const quint64 gen = ++d->fallbackGen;
     // 跳过：原平台（它已失败）+ 本次换源流程里已经试过的候选源。
     const QStringList exclude = QStringList() << song.source << d->triedFallback.values();
@@ -1151,6 +1237,10 @@ void AppController::onPlayerError(const QString &msg)
                 // 换源（含脚本层多候选）成功后同样要记提供者：真的播出来才补记成功分
                 d->pendingEngine = r.engineId;
                 d->pendingKey = r.platformKey;
+                d->playingEngine = r.engineId;
+                d->playingKey = r.platformKey;
+                d->playingProviderSource = r.engineId.isEmpty()
+                        ? (r.source.isEmpty() ? song.source : r.source) : QString();
                 // 放开 inFallback：若本次换源播放仍失败，errorOccurred 会再次进来试下一源；
                 // 试过的源已记入 triedFallback，不会重复，也不会死循环。
                 d->inFallback = false;
@@ -1333,14 +1423,19 @@ void AppController::downloadResult(int index)
 // ---- MV 播放 ----
 void AppController::openMv(const Song &song)
 {
-    // MV 的画面与声音独立于音频播放器，音乐继续放会两路声音重叠
-    if (playing()) togglePause();
+    // MV 的画面与声音独立于音频播放器，音乐继续放会两路声音重叠。
+    // 不能在解析前就暂停：解析失败（无 MV）时音乐会一直停着。改为记住
+    // 进入前的播放状态，解析成功后才暂停；关闭 MV 时由 mvClosed() 恢复。
     setStatus(QStringLiteral("正在解析「%1」的 MV…").arg(song.title));
     SourceManager::instance()->mv(song, [this, song](bool ok, const QUrl &url, const QString &error) {
         if (!ok) {
             setStatus(error);
             emit notify(error, QStringLiteral("error"));
             return;
+        }
+        if (playing()) {
+            m_mvResumeOnClose = true;
+            togglePause();
         }
         emit mvOpened(QVariantMap{
             {QStringLiteral("url"), url.toString()},
@@ -1352,6 +1447,13 @@ void AppController::openMv(const Song &song)
             {QStringLiteral("hasNext"), mvHasNext()}});
         setStatus(QStringLiteral("正在播放 MV：%1 - %2").arg(song.title, song.artist));
     });
+}
+
+void AppController::mvClosed()
+{
+    if (!m_mvResumeOnClose) return;
+    m_mvResumeOnClose = false;
+    if (!playing()) togglePause();
 }
 
 void AppController::playMv(int index)

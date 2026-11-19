@@ -41,6 +41,8 @@ public:
     void promoteSource(const QString &id);
     // 取链/播放失败：后移一位，降低后续优先度（顺序持久化，跨重启保持）。
     void demoteSource(const QString &id);
+    // 曲中断流：该源给的直链播到一半死了，沉底到候选末位（promoteSource 可拉回）。
+    void penalizeSource(const QString &id);
     void lyric(const Song &song, LyricCallback cb);
     // 歌曲评论（洛雪式）：按平台取评论，page 从 1 起
     void comments(const Song &song, int page, CommentCallback cb);

@@ -347,12 +347,17 @@ Item {
     // MV 沉浸式覆盖层：挂在外壳根级而非页面栈里，桌面左侧导航、标题栏、
     // 底部播放栏都会被盖住，与 AlgerMusicPlayer 的全屏 drawer 一致。
     // 只留 pageIndex=4 这个状态位，返回键/关闭仍走原来的逐级回退。
+    // 与 MainMobile 同因：用 opacity 隐藏，不用 visible（见 MainMobile 注释）。
     MvPage {
         id: mvPage
         anchors.fill: parent
         z: 1000
-        visible: root.pageIndex === 4
-        onRequestClose: root.pageIndex = root.mvReturnPage
+        opacity: root.pageIndex === 4 ? 1 : 0
+        enabled: root.pageIndex === 4
+        onRequestClose: {
+            root.pageIndex = root.mvReturnPage
+            app.mvClosed()   // 进入 MV 前在播的歌恢复续播
+        }
     }
 
     // app.mvOpened 由 AppController 解析完 MV 地址后发出：

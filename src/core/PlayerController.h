@@ -67,6 +67,9 @@ public:
     bool playing() const;
     qint64 position() const;
     qint64 duration() const;
+    // 最近一次有效播放位置（>1s）。error 到达瞬间部分后端把 position 清 0，
+    // 上层记 failedPos 时用它兜底，避免续播又从头来。
+    qint64 lastGoodPosition() const { return m_lastGoodPosition; }
 
     // ---- 启动续播 ----
     // 把队列 / 当前曲目 / 播放位置 / 是否在播写入本地设置；每 5 秒、切歌、
@@ -129,6 +132,9 @@ private:
     // 把用户档位 × duck 系数落到实际输出（Qt6 走 QAudioOutput，Qt5 走 QMediaPlayer）
     void applyVolume();
     void finishAsEnded();
+    // 校验式断点续播：反复尝试 setPosition 直到真正到位（或超时放弃）。
+    // 由媒体状态变化与 m_resumeSeekTimer 共同驱动，成功后清 m_pendingSeek。
+    void applyPendingSeek();
     // Qt 6 无法给 QMediaPlayer 注入请求头：防盗链直链在直连失败后，
     // 带 headers 流式下载到缓存再播放本地文件。
     void fetchWithHeaders();
@@ -157,6 +163,15 @@ private:
     // 恢复续播时要跳到的时间点（毫秒）；媒体加载完成（LoadedMedia）后应用一次并清零。
     // 只在 restoreState 设置，用户切歌时会清掉，避免影响后续歌曲。
     qint64 m_pendingSeek = 0;
+    // 断点续播校验：在线流刚 Loaded/Buffered 时 setPosition 常常静默失败（流还不可
+    // seek），旧实现 setPosition 一次就把 m_pendingSeek 清零 → 从 0 重播（"没播完又
+    // 重来"）。现在保留目标，用定时器反复 setPosition 直到 position 真正接近目标
+    // 或超时放弃，确保续播真的生效。
+    QTimer *m_resumeSeekTimer = nullptr;
+    int m_resumeSeekTries = 0;
+    // 最近一次有效播放位置（position>1s 时刷新）。error 到达的瞬间部分后端会把
+    // position 清成 0，上层据此记的 failedPos 就变成 0，续播又从头来。用这个值兜底。
+    qint64 m_lastGoodPosition = 0;
     // 自动连播防重入：EndOfMedia / 进度兜底只允许排队一次下一首；
     // 新歌加载完成前（m_suppressEnd）忽略旧曲残留的结束信号。
     bool m_advancing = false;

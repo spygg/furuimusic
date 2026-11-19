@@ -671,30 +671,14 @@ Item {
                     visible: status === Image.Ready
                 }
 
-                // 悬停浮出的播放/暂停圆钮
+                // 悬停浮出的暗色罩层：纯装饰，让封面有质感反馈。
+                // 不再放播放/暂停圆钮、也不响应点击——点封面不应触发暂停/播放，
+                // 播放/暂停只用下方控件行的主按钮（真机误触反馈）。
                 Rectangle {
                     anchors.fill: parent
                     radius: coverCard.radius
-                    color: Qt.rgba(0, 0, 0, coverHover.containsMouse ? 0.22 : 0)
+                    color: Qt.rgba(0, 0, 0, coverHover.containsMouse ? 0.12 : 0)
                     Behavior on color { ColorAnimation { duration: 220 } }
-
-                    Rectangle {
-                        width: 60
-                        height: 60
-                        radius: 30
-                        anchors.centerIn: parent
-                        color: Qt.rgba(1, 1, 1, 0.95)
-                        opacity: coverHover.containsMouse ? 1 : 0
-                        scale: coverHover.containsMouse ? 1 : 0.82
-                        Behavior on opacity { NumberAnimation { duration: 180 } }
-                        Behavior on scale { NumberAnimation { duration: 240; easing.type: Easing.OutBack } }
-                        GlyphIcon {
-                            anchors.centerIn: parent
-                            name: app.playing ? "pause" : "play"
-                            size: 20
-                            color: "#15171C"
-                        }
-                    }
                 }
 
                 // 内描边：白封面上也能看出边界
@@ -711,12 +695,8 @@ Item {
                 id: coverHover
                 anchors.fill: parent
                 hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    // 竖屏改成「封面在上 + 歌词居中」后不再有封面/歌词切换，
-                    // 点封面与宽屏保持一致：播放 / 暂停
-                    app.togglePause()
-                }
+                // 封面只是展示，不再是可点击控件：去掉 onClicked 与手型光标，
+                // 播放/暂停交给控件行的主按钮。保留 hover 仅为封面微缩放的视觉反馈。
             }
         }
     }
@@ -1103,6 +1083,26 @@ Item {
                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                     property bool userScrolling: false
                     property int followIndex: app.currentLyricIndex
+                    // 拖动后停留的那一行（歌词定位播放）：-1 表示没有待播放的选中行。
+                    // 用户拖停 → pickDragRow 记录中心行 → 浮出「从此播放」按钮；
+                    // 点按钮才 app.seek(该行时间)，避免一拖动就跳转打断当前播放。
+                    property int dragRow: -1
+                    // 取视口正中间那一行作为拖动选中的行。indexAt 用内容坐标
+                    //（不含 contentY 的视口坐标取法在这里是错的），所以 y 要加 contentY。
+                    function pickDragRow() {
+                        const r = indexAt(width / 2, contentY + height / 2)
+                        if (r >= 0 && app.lyricsTimed && r < app.lyricTimes.length)
+                            dragRow = r
+                        else
+                            dragRow = -1
+                    }
+                    function playFromDragRow() {
+                        if (dragRow < 0 || dragRow >= app.lyricTimes.length) return
+                        app.seek(Number(app.lyricTimes[dragRow]))
+                        dragRow = -1
+                        userScrolling = false
+                        if (app.currentLyricIndex >= 0) centerOn(app.currentLyricIndex)
+                    }
 
                     delegate: Item {
                         id: lyricRow
@@ -1266,6 +1266,7 @@ Item {
                         id: refollow
                         interval: 80
                         onTriggered: {
+                            if (lyricView.dragRow >= 0) return   // 保留用户待播放的选中行
                             if (!lyricView.userScrolling && app.currentLyricIndex >= 0)
                                 lyricView.centerOn(app.currentLyricIndex)
                         }
@@ -1274,15 +1275,27 @@ Item {
                     onWidthChanged: refollow.restart()
                     onModelChanged: {
                         userScrolling = false
+                        dragRow = -1
                         positionViewAtBeginning()
                     }
-                    onMovementStarted: userScrolling = true
-                    onMovementEnded: resumeFollow.restart()
+                    onMovementStarted: {
+                        userScrolling = true
+                        dragRow = -1   // 重新拖动，撤掉上一次的「从此播放」按钮
+                        resumeFollow.stop()
+                    }
+                    // 拖停后不立刻弹回跟随：先记下中心行并显示「从此播放」按钮，
+                    // 给用户一个确认的机会（其它播放器也是这个交互）。resumeFollow
+                    // 的自动归位延后到按钮逻辑里处理。
+                    onMovementEnded: {
+                        pickDragRow()
+                        if (dragRow < 0) resumeFollow.restart()
+                    }
 
                     Timer {
                         id: resumeFollow
                         interval: 5000
                         onTriggered: {
+                            if (lyricView.dragRow >= 0) return   // 用户正看着待播放行，不弹回
                             lyricView.userScrolling = false
                             if (app.currentLyricIndex >= 0)
                                 lyricView.centerOn(app.currentLyricIndex)
@@ -1305,6 +1318,54 @@ Item {
                         lineHeight: 1.5
                         wrapMode: Text.Wrap
                         horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+
+                // 拖动歌词后浮出的「从此播放」按钮：点它才真正跳转。
+                // 位置固定在视口正中（与 pickDragRow 取的中心行一致），
+                // 半透明胶囊避免挡住歌词；无待跳转行（dragRow<0）时淡出。
+                Rectangle {
+                    z: 5
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: playPill.implicitWidth + 32
+                    height: 40
+                    radius: 20
+                    color: root.isDark ? Qt.rgba(0.14, 0.15, 0.19, 0.96)
+                                       : Qt.rgba(1, 1, 1, 0.96)
+                    border.color: root.isDark ? Qt.rgba(1, 1, 1, 0.18) : Qt.rgba(0, 0, 0, 0.12)
+                    border.width: 1
+                    opacity: lyricView.dragRow >= 0 ? 1 : 0
+                    visible: opacity > 0.01
+                    scale: lyricView.dragRow >= 0 ? 1 : 0.9
+                    Behavior on opacity { NumberAnimation { duration: 160 } }
+                    Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack } }
+                    Row {
+                        id: playPill
+                        anchors.centerIn: parent
+                        spacing: 8
+                        GlyphIcon {
+                            anchors.verticalCenter: parent.verticalCenter
+                            name: "play"
+                            size: 14
+                            color: theme.accent
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: {
+                                if (lyricView.dragRow < 0) return ""
+                                const t = Number(app.lyricTimes[lyricView.dragRow])
+                                return root.mmss(t) + " 从此播放"
+                            }
+                            color: root.ink
+                            font.pixelSize: theme.fontSm
+                            font.bold: true
+                        }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: lyricView.playFromDragRow()
                     }
                 }
             }

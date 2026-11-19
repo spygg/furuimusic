@@ -324,6 +324,10 @@ public:
     Q_INVOKABLE void playMvItem(int index);
     Q_INVOKABLE void playMvNext();
     Q_INVOKABLE void playMvPrev();
+    // 关闭 MV 沉浸页时由外壳调用：若进入 MV 前音乐在播，则恢复续播
+    Q_INVOKABLE void mvClosed();
+    // MV 全屏：Android 上锁定横屏 + 沉浸式隐藏系统栏；退出恢复自动方向
+    Q_INVOKABLE void setMvFullscreen(bool on);
 
     Q_INVOKABLE void togglePause();
     Q_INVOKABLE void next();
@@ -459,6 +463,8 @@ private:
     int m_mvIndex = -1;
     bool m_mvLoading = false;
     bool m_mvHasMore = true;
+    // 进入 MV 前音乐在播 → 暂停，关闭 MV 后恢复续播；解析失败则不会置位
+    bool m_mvResumeOnClose = false;
     // 评论分页状态
     QVariantList m_comments;
     int m_commentPage = 1;

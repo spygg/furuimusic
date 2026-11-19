@@ -594,13 +594,20 @@ Item {
     }
 
     // MV 沉浸式覆盖层：盖住底部标签栏、迷你播放条与队列面板，
-    // 只保留 pageIndex=4 状态位，Android 返回键仍走 handleBack 逐级回退
+    // 只保留 pageIndex=4 状态位，Android 返回键仍走 handleBack 逐级回退。
+    // 注意不能用 visible 隐藏：ColorOS Android16 上把渲染中的 VideoOutput
+    // 置为不可见会销毁 video sink，hwuiTask 线程 SIGABRT（返回退出 100% 崩）。
+    // 改用 opacity 0 + enabled false：节点仍在场景图里、sink 保持挂载，输入穿透。
     MvPage {
         id: mvPage
         anchors.fill: parent
         z: 1000
-        visible: root.pageIndex === 4
-        onRequestClose: root.pageIndex = root.mvReturnPage
+        opacity: root.pageIndex === 4 ? 1 : 0
+        enabled: root.pageIndex === 4
+        onRequestClose: {
+            root.pageIndex = root.mvReturnPage
+            app.mvClosed()   // 进入 MV 前在播的歌恢复续播
+        }
     }
 
     // app.mvOpened 由 AppController 解析完 MV 地址后发出：

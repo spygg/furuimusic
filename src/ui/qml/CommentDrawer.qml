@@ -52,11 +52,12 @@ Item {
                     height: theme.touchMin
                     radius: width / 2
                     color: closeMa.containsMouse ? cSoft : "transparent"
-                    Text {
+                    // ✕ 在部分 Android 机型上没有对应字形会显示成豆腐块，用内置矢量图标
+                    GlyphIcon {
                         anchors.centerIn: parent
-                        text: "✕"
+                        name: "close"
+                        size: 14
                         color: cSub
-                        font.pixelSize: 16
                     }
                     MouseArea {
                         id: closeMa
@@ -169,16 +170,32 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 12
-                                Text {
-                                    text: "♡ " + (model.likedCount || 0)
-                                    color: cSub
-                                    font.pixelSize: 10
+                                RowLayout {
+                                    spacing: 3
+                                    GlyphIcon {
+                                        name: "heart"
+                                        size: 10
+                                        color: cSub
+                                    }
+                                    Text {
+                                        text: String(model.likedCount || 0)
+                                        color: cSub
+                                        font.pixelSize: 10
+                                    }
                                 }
-                                Text {
+                                RowLayout {
                                     visible: (model.replyCount || 0) > 0
-                                    text: "💬 " + model.replyCount
-                                    color: cSub
-                                    font.pixelSize: 10
+                                    spacing: 3
+                                    GlyphIcon {
+                                        name: "comment"
+                                        size: 10
+                                        color: cSub
+                                    }
+                                    Text {
+                                        text: String(model.replyCount)
+                                        color: cSub
+                                        font.pixelSize: 10
+                                    }
                                 }
                             }
                         }

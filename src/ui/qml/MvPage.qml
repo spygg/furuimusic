@@ -73,10 +73,17 @@ Rectangle {
     }
 
     function setFullscreen(on) {
-        const w = root.Window.window
-        if (w) {
-            if (on) w.showFullScreen()
-            else w.showNormal()
+        // Android：锁定横屏 + 沉浸式隐藏系统栏（native 实现），退出时恢复自动方向；
+        // 窗口本身始终占满屏幕，不需要再 showFullScreen。
+        // 桌面：保持窗口级 showFullScreen/showNormal。
+        if (Qt.platform.os === "android")
+            app.setMvFullscreen(on)
+        else {
+            const w = root.Window.window
+            if (w) {
+                if (on) w.showFullScreen()
+                else w.showNormal()
+            }
         }
         root.isFullscreen = on
         root.wake()

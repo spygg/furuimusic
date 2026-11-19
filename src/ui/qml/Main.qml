@@ -21,6 +21,23 @@ ApplicationWindow {
     // 窗口底色与主题同步，避免切换深色时闪白
     color: theme.bg
 
+    // ---- Android 返回键主通道（onClosing）----
+    // Keys.onReleased（见下方 Loader）依赖 activeFocusItem 的焦点链，实测在部分
+    // 机型/页面状态下收不到返回键（ColorOS Android16 上 MV 页 100% 收不到）；
+    // 一旦没人 accept，窗口走关闭流程 → quitOnLastWindowClosed → main() 返回 →
+    // Activity 销毁，若此时 MV 视频在渲染，hwuiTask 线程会撞上已销毁的 mutex
+    // 直接 SIGABRT（表现为「从 MV 返回整个 App 闪退」）。
+    // onClosing 不依赖焦点链，是 Android 返回键唯一可靠的拦截点：
+    // 一律不关闭窗口，逐级回退交给 handleBack；没有层级可退则退到后台。
+    onClosing: function(close) {
+        close.accepted = false
+        if (Qt.platform.os !== "android") return   // 桌面保持默认关闭行为
+        const item = shell.item
+        const handled = item && item.handleBack && item.handleBack()
+        if (!handled)
+            app.backgroundApp()
+    }
+
     // ---- 形态判定：车机四种形态（横屏/竖屏/横分屏/竖分屏）靠这里统一决策 ----
     // 单一阈值（width<760）在分屏拖动时会在阈值附近来回换外壳，每换一次整棵页面树
     // 重建、滚动位置与在播高亮全丢。改为「进入窄阈值 + 离开宽阈值」的滞后带 + 去抖。

@@ -27,7 +27,11 @@ Item {
         // 先卸载再赋源：错误态下重复赋同一 URL 不会触发重新加载
         mp.stop(); mp.source = ""; mp.source = url; mp.play()
     }
-    function close() { mp.stop(); mp.source = "" }
+    // 注意不能在这里 mp.stop()/清源：ColorOS Android16 实测在销毁正在渲染的
+    // 视频 sink 时会触发 hwuiTask 线程 "pthread_mutex_lock called on a
+    // destroyed mutex" SIGABRT（返回退出 MV 页 100% 崩，Home 不崩）。
+    // 只暂停即可让页面无声地藏到后台；下次 open() 换源时统一走 stop+重赋源。
+    function close() { if (mp.playbackState === MediaPlayer.PlayingState) mp.pause() }
     function seekTo(ms) { mp.setPosition(ms) }
     function togglePlay() {
         if (mp.playbackState === MediaPlayer.PlayingState) mp.pause()

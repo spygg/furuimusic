@@ -1,6 +1,7 @@
 #include "MusicSource.h"
 
 #include <QDateTime>
+#include <QCryptographicHash>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -619,6 +620,27 @@ static QString commentTimeText(qint64 ms)
     return dt.toString(QStringLiteral("yyyy-MM-dd"));
 }
 
+static QString md5Hex(const QString &text)
+{
+    return QString::fromLatin1(QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Md5).toHex());
+}
+
+// QQ 评论正文带 [em]e400822[/em] 表情码和字面 "\\n"，清理成纯文本
+static QString cleanQqComment(QString s)
+{
+    s.replace(QStringLiteral("\\n"), QStringLiteral("\n"));
+    static const QRegularExpression em(QStringLiteral("\\[em\\]e\\d+\\[/em\\]"));
+    s.remove(em);
+    return s.trimmed();
+}
+
+// 评论平台标识：sources.json 里只有汽水声明了顶层 driver，其余内置平台为空，
+// 按 id 分发（此前按 driver 分发导致内置平台评论分支全部落空，永远返回「暂无评论」）
+static QString commentPlatformOf(const SourceDesc &desc)
+{
+    return desc.driver.isEmpty() ? desc.id : desc.driver;
+}
+
 void MusicSource::comments(const Song &song, int page, CommentCallback cb)
 {
     auto done = [cb](const QVector<Comment> &list, int total) {
@@ -627,8 +649,9 @@ void MusicSource::comments(const Song &song, int page, CommentCallback cb)
     const QString id = song.sourceId;
     if (id.isEmpty() || page < 1) { done(QVector<Comment>(), -1); return; }
     const int pageSize = 20;
+    const QString plat = commentPlatformOf(m_desc);
 
-    if (m_desc.driver == QLatin1String("migu")) {
+    if (plat == QLatin1String("migu")) {
         // 咪咕评论：GET app.c.nf.migu.cn/MIGUM3.0/user/comment/stack/v1.0
         // 成功码字符串 "000000"，热评 queryType=2、最新 queryType=1，游标分页。
         const QString url = QStringLiteral("https://app.c.nf.migu.cn/MIGUM3.0/user/comment/stack/v1.0")
@@ -668,7 +691,7 @@ void MusicSource::comments(const Song &song, int page, CommentCallback cb)
         return;
     }
 
-    if (m_desc.driver == QLatin1String("kuwo")) {
+    if (plat == QLatin1String("kuwo")) {
         // 酷我评论：GET ncomment.kuwo.cn/com.s，无签名。第 1 页取热评+最新，后续取最新。
         const int start = (page - 1) * pageSize;
         const QString url = QStringLiteral("http://ncomment.kuwo.cn/com.s?f=web&type=%1")
@@ -708,7 +731,158 @@ void MusicSource::comments(const Song &song, int page, CommentCallback cb)
         return;
     }
 
-    if (m_desc.driver == QLatin1String("netease")) {
+    if (plat == QLatin1String("qq")) {
+        // QQ 评论：songmid → songid（fcg_play_single_song）→ fcg_global_comment_h5（topid=songid）
+        QVariantMap h;
+        h.insert(QStringLiteral("User-Agent"), QStringLiteral("Mozilla/5.0"));
+        h.insert(QStringLiteral("Referer"), QStringLiteral("https://y.qq.com/"));
+        const QUrl infoUrl(QStringLiteral("https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg?songmid=%1&format=json").arg(id));
+        HttpClient::instance()->request(QStringLiteral("GET"), infoUrl, h, QByteArray(),
+            [done, page, h](const HttpClient::Reply &r) {
+                qint64 songId = 0;
+                if (r.ok) {
+                    const QJsonValue root = Json::rootOf(r.json);
+                    QJsonArray arr = root.isArray() ? root.toArray() : Json::arrayAt(root, QStringLiteral("data"));
+                    if (!arr.isEmpty())
+                        songId = arr.at(0).toObject().value(QStringLiteral("id")).toVariant().toLongLong();
+                }
+                if (songId <= 0) { done(QVector<Comment>(), -1); return; }
+                const QUrl url(QStringLiteral("https://c.y.qq.com/base/fcgi-bin/fcg_global_comment_h5.fcg")
+                    + QStringLiteral("?g_tk=5381&loginUin=0&hostUin=0&format=json&inCharset=utf8&outCharset=utf-8")
+                    + QStringLiteral("&notice=0&platform=yqq.json&needNewCode=0&cid=205360772&reqtype=2&biztype=1")
+                    + QStringLiteral("&topid=%1&cmd=8&needmusiccrit=0&pagenum=%2&pagesize=%3&domain=qq.com&ct=24&cv=10101010")
+                          .arg(songId).arg(page - 1).arg(20));
+                HttpClient::instance()->request(QStringLiteral("GET"), url, h, QByteArray(),
+                    [done](const HttpClient::Reply &r2) {
+                        QVector<Comment> out;
+                        int total = -1;
+                        if (r2.ok) {
+                            const QJsonValue root = Json::rootOf(r2.json);
+                            const QJsonValue cmt = Json::valueAt(root, QStringLiteral("comment"));
+                            total = Json::stringAt(cmt, QStringLiteral("commenttotal")).toInt();
+                            const QJsonArray arr = Json::arrayAt(cmt, QStringLiteral("commentlist"));
+                            for (const QJsonValue &v : arr) {
+                                Comment c;
+                                c.source = QStringLiteral("qq");
+                                c.id = Json::stringAt(v, QStringLiteral("commentid"));
+                                // 楼层回复的正文不在 rootcommentcontent（为空），
+                                // 而在 middlecommentcontent[0].subcommentcontent
+                                c.text = cleanQqComment(Json::stringAt(v, QStringLiteral("rootcommentcontent")));
+                                if (c.text.isEmpty()) {
+                                    const QJsonArray mid = Json::arrayAt(v, QStringLiteral("middlecommentcontent"));
+                                    if (!mid.isEmpty()) {
+                                        c.text = cleanQqComment(Json::stringAt(
+                                            mid.at(0), QStringLiteral("subcommentcontent")));
+                                        const QString replyed = Json::stringAt(mid.at(0),
+                                            QStringLiteral("replyednick"));
+                                        if (!replyed.isEmpty()) c.replyText = replyed;
+                                    }
+                                }
+                                c.userName = Json::stringAt(v, QStringLiteral("nick"));
+                                c.avatar = Json::stringAt(v, QStringLiteral("avatarurl"));
+                                const qint64 sec = Json::stringAt(v, QStringLiteral("time")).toLongLong();
+                                c.time = sec > 0 ? sec * 1000 : 0;
+                                c.timeText = commentTimeText(c.time);
+                                c.likedCount = Json::stringAt(v, QStringLiteral("praisenum")).toInt();
+                                if (!c.text.isEmpty()) out << c;
+                            }
+                        }
+                        done(out, total);
+                    });
+            });
+        return;
+    }
+
+    if (plat == QLatin1String("kugou")) {
+        // 酷狗评论：songId 是 hash，而评论接口只认 mixsongid（=album_audio_id）。
+        // v3 搜索结果同时带 hash 与 album_audio_id，按 hash 精确匹配换 id 后再取评论。
+        const QString kw = (song.title + QLatin1Char(' ') + song.artist).trimmed();
+        const QUrl sUrl(QStringLiteral("http://mobilecdnbj.kugou.com/api/v3/search/song?pagesize=30&page=1&keyword=%1")
+                            .arg(QString::fromUtf8(QUrl::toPercentEncoding(kw))));
+        HttpClient::instance()->request(QStringLiteral("GET"), sUrl, QVariantMap(), QByteArray(),
+            [done, page, id](const HttpClient::Reply &r) {
+                qint64 mixId = 0;
+                if (r.ok) {
+                    const QJsonValue root = Json::rootOf(r.json);
+                    const QJsonArray arr = Json::arrayAt(root, QStringLiteral("data.info"));
+                    for (const QJsonValue &v : arr) {
+                        const QJsonObject o = v.toObject();
+                        if (o.value(QStringLiteral("hash")).toString().compare(id, Qt::CaseInsensitive) == 0) {
+                            mixId = o.value(QStringLiteral("album_audio_id")).toVariant().toLongLong();
+                            break;
+                        }
+                    }
+                }
+                if (mixId <= 0) { done(QVector<Comment>(), -1); return; }
+                // Android 网关签名：md5(salt + 按 key 排序的 "k=v" 拼接 + body + salt)
+                const QString mid = md5Hex(QStringLiteral("-"));
+                const QString uuid = md5Hex(QStringLiteral("-") + mid);
+                const QString now = QString::number(QDateTime::currentSecsSinceEpoch());
+                QMap<QString, QString> p;   // QMap 按 key 有序，直接拼接即签名顺序
+                p.insert(QStringLiteral("appid"), QStringLiteral("1005"));
+                p.insert(QStringLiteral("clienttime"), now);
+                p.insert(QStringLiteral("clientver"), QStringLiteral("12569"));
+                p.insert(QStringLiteral("code"), QStringLiteral("fc4be23b4e972707f36b8a828a93ba8a"));
+                p.insert(QStringLiteral("dfid"), QStringLiteral("-"));
+                p.insert(QStringLiteral("extdata"), QStringLiteral("0"));
+                p.insert(QStringLiteral("mid"), mid);
+                p.insert(QStringLiteral("mixsongid"), QString::number(mixId));
+                p.insert(QStringLiteral("need_show_image"), QStringLiteral("1"));
+                p.insert(QStringLiteral("p"), QString::number(page));
+                p.insert(QStringLiteral("pagesize"), QString::number(pageSize));
+                p.insert(QStringLiteral("show_classify"), QStringLiteral("1"));
+                p.insert(QStringLiteral("show_hotword_list"), QStringLiteral("1"));
+                p.insert(QStringLiteral("userid"), QStringLiteral("0"));
+                p.insert(QStringLiteral("uuid"), uuid);
+                QStringList kv;
+                for (auto it = p.constBegin(); it != p.constEnd(); ++it)
+                    kv << it.key() + QLatin1Char('=') + it.value();
+                const QString sig = md5Hex(QStringLiteral("OIlwieks28dk2k092lksi2UIkp")
+                                           + kv.join(QString()) + QString()
+                                           + QStringLiteral("OIlwieks28dk2k092lksi2UIkp"));
+                QUrlQuery q;
+                for (auto it = p.constBegin(); it != p.constEnd(); ++it)
+                    q.addQueryItem(it.key(), it.value());
+                q.addQueryItem(QStringLiteral("signature"), sig);
+                QUrl url(QStringLiteral("https://gateway.kugou.com/mcomment/v1/cmtlist"));
+                url.setQuery(q);
+                QVariantMap h;
+                h.insert(QStringLiteral("User-Agent"),
+                         QStringLiteral("Android15-1070-11083-46-0-DiscoveryDRADProtocol-wifi"));
+                h.insert(QStringLiteral("dfid"), QStringLiteral("-"));
+                h.insert(QStringLiteral("clienttime"), now);
+                h.insert(QStringLiteral("mid"), mid);
+                HttpClient::instance()->request(QStringLiteral("POST"), url, h, QByteArray(),
+                    [done](const HttpClient::Reply &r2) {
+                        QVector<Comment> out;
+                        int total = -1;
+                        if (r2.ok) {
+                            const QJsonValue root = Json::rootOf(r2.json);
+                            if (Json::stringAt(root, QStringLiteral("status")).toInt() == 1) {
+                                total = Json::stringAt(root, QStringLiteral("count")).toInt();
+                                const QJsonArray arr = Json::arrayAt(root, QStringLiteral("list"));
+                                for (const QJsonValue &v : arr) {
+                                    Comment c;
+                                    c.source = QStringLiteral("kugou");
+                                    c.id = Json::stringAt(v, QStringLiteral("id"));
+                                    c.text = Json::stringAt(v, QStringLiteral("content"));
+                                    c.userName = Json::stringAt(v, QStringLiteral("user_name"));
+                                    c.avatar = Json::stringAt(v, QStringLiteral("user_pic"));
+                                    // addtime 是 "2023-12-28 02:43:51" 文本，直接展示
+                                    c.timeText = Json::stringAt(v, QStringLiteral("addtime"));
+                                    c.likedCount = 0;
+                                    c.replyCount = Json::stringAt(v, QStringLiteral("reply_num")).toInt();
+                                    if (!c.text.isEmpty()) out << c;
+                                }
+                            }
+                        }
+                        done(out, total);
+                    });
+            });
+        return;
+    }
+
+    if (plat == QLatin1String("netease")) {
         // 网易云评论：POST weapi/comment/resource/comments/get，rid = R_SO_4_<songId>
         // 用项目已有的 NeteaseCrypto::weapiForm 生成 {params, encSecKey} 表单。
         const QString rid = QStringLiteral("R_SO_4_") + id;
