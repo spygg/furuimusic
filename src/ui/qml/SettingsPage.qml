@@ -27,6 +27,9 @@ Item {
     readonly property real formMaxWidth: root.width >= 1000 ? 900
                                         : (root.width > root.height * 1.12 ? 680 : 820)
     readonly property real pageTopMargin: root.height < 480 ? 12 : (root.width < 700 ? 16 : 28)
+    // 在线音源（LX 脚本）列表默认收起：脚本可能有十几个，每项又有能力说明、状态和时间，
+    // 全展开会把设置页撑得很长；点标题即可展开/收起。
+    property bool sourcesExpanded: false
 
     // themeCombo.currentIndex 已经绑到 theme.mode，外部（标题栏快捷按钮）改主题时会自动跟随，
     // 这里再用 Connections 赋值等于把绑定改成一次性数值，反而让后续变化失效
@@ -227,11 +230,30 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
-                Text {
+                Item {
                     Layout.fillWidth: true
-                    text: "在线音源（LX 脚本）"
-                    color: cSub
-                    font.pixelSize: 12
+                    Layout.preferredHeight: theme.touchMin
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 6
+                        Text {
+                            text: root.sourcesExpanded ? "▾" : "▸"
+                            color: cPrimary
+                            font.pixelSize: 14
+                            font.bold: true
+                        }
+                        Text {
+                            text: "在线音源（LX 脚本）"
+                                  + (app.scriptSources.length > 0 ? "（" + app.scriptSources.length + "）" : "")
+                                  + (root.sourcesExpanded ? "" : " · 点击展开")
+                            color: cText
+                            font.pixelSize: 13
+                        }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: root.sourcesExpanded = !root.sourcesExpanded
+                    }
                 }
                 Rectangle {
                     Layout.preferredWidth: 72
@@ -250,9 +272,15 @@ Item {
                     MouseArea { anchors.fill: parent; onClicked: app.checkAllScriptSources() }
                 }
             }
-            Text {
+            // 列表详情（说明 + 导入框 + 每个源的状态卡片）整体可折叠
+            ColumnLayout {
                 Layout.fillWidth: true
-                text: "在线音源自动从 pdone/lx-music-source 仓库页面解析全部脚本（LX 脚本协议），首次启动全部导入、当日可用的排在前面；也可自行导入其它脚本地址。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方。列表顺序即实际取链优先级（成功升权、失败降权）。"
+                visible: root.sourcesExpanded
+                spacing: 8
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "在线音源自动从 pdone/lx-music-source 仓库页面解析全部脚本（LX 脚本协议），首次启动全部导入、当日可用的排在前面；也可自行导入其它脚本地址。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方。列表顺序即实际取链优先级（成功升权、失败降权）。"
                 color: cSub
                 font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap
@@ -396,6 +424,7 @@ Item {
                     }
                 }
             }
+            } // 在线音源详情（默认收起）
 
             Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
 
