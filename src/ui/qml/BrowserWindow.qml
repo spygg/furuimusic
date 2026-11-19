@@ -32,12 +32,21 @@ Item {
     // 不依赖 `url: browser.url` 绑定：站点内部跳转后 browser.url 是旧的，
     // 一旦绑定在别处被重新求值就会把旧地址写回 WebView。这里显式赋值，
     // 保证「输入什么就一定加载什么」。
+    // 1 秒内对同一个目标地址只发一次导航：onAccepted / Keys.onReturn /
+    // 「前往」按钮可能在同一按键里都触发，重复 set WebView.url 会加载两次
+    property string lastNavigateUrl: ""
+    property double lastNavigateAt: 0
     function loadUrl(raw) {
         const text = (raw || "").replace(/^\s+|\s+$/g, "")
         if (text.length === 0) return
         browser.navigate(text)          // 先规范化（补 https://）并更新 browser.url
         const target = browser.url      // 再读回规范化结果
         address.text = target
+        const now = Date.now()
+        if (target === root.lastNavigateUrl && now - root.lastNavigateAt < 1000)
+            return
+        root.lastNavigateUrl = target
+        root.lastNavigateAt = now
         const view = webLoader.item
         if (view && view.url.toString() !== target) view.url = target
     }
@@ -165,33 +174,57 @@ Item {
                 }
             }
 
-            // 地址栏：独占一行，保证窄屏（手机）上也有足够宽度，不会变成 24px 的窄条
-            TextField {
-                id: address
-                Layout.fillWidth: true
-                Layout.preferredHeight: 34
-                Layout.leftMargin: root.chromePad
-                Layout.rightMargin: root.chromePad
-                placeholderText: "输入网址后按回车"
-                color: theme.text
-                placeholderTextColor: theme.mutedText
+    // 地址栏：独占一行，保证窄屏（手机）上也有足够宽度，不会变成 24px 的窄条。
+    // 右侧「前往」按钮是回车失效时的兜底（车机输入法不一定发 accepted）。
+    RowLayout {
+        Layout.fillWidth: true
+        Layout.leftMargin: root.chromePad
+        Layout.rightMargin: root.chromePad
+        spacing: 8
+        TextField {
+            id: address
+            Layout.fillWidth: true
+            Layout.preferredHeight: 34
+            placeholderText: "输入网址后按回车"
+            color: theme.text
+            placeholderTextColor: theme.mutedText
+            font.pixelSize: 12
+            leftPadding: 12
+            // 不用 text: browser.url 绑定：用户一输入就会打断绑定，之后再打开
+            // 浏览器地址栏还停在上一次的旧内容上。改为在下面显式同步。
+            background: Rectangle {
+                color: theme.card
+                radius: 8
+                border.width: 1
+                border.color: theme.lineStrong
+            }
+            onAccepted: {
+                root.loadUrl(text)
+                // 移动端跳转后收起软键盘：竖屏上键盘会占掉一半高度，
+                // 页面加载完用户还得自己点一下空白处才能看全
+                if (platform.isMobile) focus = false
+            }
+        }
+        Rectangle {
+            Layout.preferredWidth: 56
+            Layout.preferredHeight: 34
+            radius: 8
+            color: theme.accent
+            Text {
+                anchors.centerIn: parent
+                text: "前往"
+                color: "#FFFFFF"
                 font.pixelSize: 12
-                leftPadding: 12
-                // 不用 text: browser.url 绑定：用户一输入就会打断绑定，之后再打开
-                // 浏览器地址栏还停在上一次的旧内容上。改为在下面显式同步。
-                background: Rectangle {
-                    color: theme.card
-                    radius: 8
-                    border.width: 1
-                    border.color: theme.lineStrong
-                }
-                onAccepted: {
-                    root.loadUrl(text)
-                    // 移动端跳转后收起软键盘：竖屏上键盘会占掉一半高度，
-                    // 页面加载完用户还得自己点一下空白处才能看全
-                    if (platform.isMobile) focus = false
+            }
+            MouseArea {
+                anchors.fill: parent
+                onClicked: {
+                    root.loadUrl(address.text)
+                    if (platform.isMobile) address.focus = false
                 }
             }
+        }
+    }
 
             Text {
                 Layout.fillWidth: true
