@@ -177,7 +177,9 @@ inline QByteArray openApiIndexHtml()
   .lyrics{max-height:calc(100vh - 300px);overflow:auto;padding:8px 4px;mask-image:linear-gradient(to bottom,
           transparent,#000 12%,#000 88%,transparent)}
   .ln{color:var(--text);opacity:.6;font-size:13.5px;padding:7px 2px;text-align:center;transition:.2s;line-height:1.55}
+  .ln .tr{display:block;font-size:12px;opacity:.75;margin-top:2px}
   .ln.act{opacity:1;color:var(--accent-d);font-size:15.5px;font-weight:600}
+  .ln.act .tr{font-size:13px}
   .rightcol{display:flex;flex-direction:column;gap:14px;min-width:0}
   .qlist{max-height:300px;overflow:auto}
 
@@ -400,7 +402,7 @@ inline QByteArray openApiIndexHtml()
     page:'library', tab:'playlists', view:'grid',
     st:{}, settings:null, detailTitle:'', detailFrom:'playlists',
     playlists:[], discovery:[], queue:[], results:[], favs:[], hist:[],
-    lyrics:[], lyricIdx:-1, logShown:false,
+    lyrics:[], lyricIdx:-1, timed:false, logShown:false,
     // 详情曲目还在从设备端拉取：此时曲目数为 0 不代表「没有歌」，
     // 直接显示「0 首」会让人以为榜单是空的
     detailLoading:false
@@ -689,7 +691,13 @@ inline QByteArray openApiIndexHtml()
                $('#pcover').style.background = $('#pbcover').style.background = 'transparent'; }
     if(typeof st.volume === 'number') syncVolume(st.volume);
     paintProgress(st);
-    highlightLyric(st.lyricLineText);
+    // 时间轴歌词：直接用服务端给的行号做高亮+居中滚动（文本匹配对时间轴歌词不可靠，
+    // 且多行同文会错行）；无时间轴时退回按行文本匹配
+    if(S.timed && typeof st.lyricIndex === 'number' && st.lyricIndex >= 0){
+      markLyric(st.lyricIndex);
+    } else {
+      highlightLyric(st.lyricLineText);
+    }
     // 换歌就重拉一次歌词：只在进播放页时拉会让「点开时刚好没歌」的页面一直空着
     if(st.name !== S.lastName){ S.lastName = st.name; loadLyrics(); }
     // 队列高亮跟着当前曲目走
@@ -747,6 +755,7 @@ inline QByteArray openApiIndexHtml()
   function loadLyrics(){
     return json('/lyrics').then(function(o){
       S.lyrics = (o && o.lines) || [];
+      S.timed = !!(o && o.timed);
       S.lyricIdx = o ? (o.index >= 0 ? o.index : -1) : -1;
       var box = $('#plrc');
       if(!S.lyrics.length){
@@ -754,7 +763,8 @@ inline QByteArray openApiIndexHtml()
         return;
       }
       box.innerHTML = S.lyrics.map(function(l, i){
-        return '<div class="ln" data-i="' + i + '">' + esc(l.text || '·') + '</div>';
+        var tr = l.trans ? '<span class="tr">' + esc(l.trans) + '</span>' : '';
+        return '<div class="ln" data-i="' + i + '">' + esc(l.text || '·') + tr + '</div>';
       }).join('');
       markLyric(S.lyricIdx);
     }).catch(function(){});

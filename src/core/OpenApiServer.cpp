@@ -295,6 +295,8 @@ QByteArray OpenApiServer::statusJson() const
     o.insert(QStringLiteral("source"), app->currentSourceLabel());
     o.insert(QStringLiteral("substitute"), app->substituteBadge());
     o.insert(QStringLiteral("lyricLineText"), app->currentLyricLine());
+    // 网页端逐行高亮/滚动需要行号：只有行文本时，时间轴歌词无法定位当前行
+    o.insert(QStringLiteral("lyricIndex"), app->currentLyricIndex());
     o.insert(QStringLiteral("cover"), app->currentCover());
     o.insert(QStringLiteral("duration"), app->duration());
     o.insert(QStringLiteral("progress"), app->position());
