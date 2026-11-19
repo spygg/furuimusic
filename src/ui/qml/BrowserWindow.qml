@@ -36,12 +36,17 @@ Item {
     // 「前往」按钮可能在同一按键里都触发，重复 set WebView.url 会加载两次
     property string lastNavigateUrl: ""
     property double lastNavigateAt: 0
+    // 用户一开始手动改地址就置位：网页后台继续加载/跳转时，任何自动同步
+    // 都不能再写 address.text，否则退格/删除会像「删不掉、还剩字母」
+    property bool addressEditing: false
+    onVisibleChanged: { if (!visible) root.addressEditing = false }
     function loadUrl(raw) {
         const text = (raw || "").replace(/^\s+|\s+$/g, "")
         if (text.length === 0) return
         browser.navigate(text)          // 先规范化（补 https://）并更新 browser.url
         const target = browser.url      // 再读回规范化结果
         address.text = target
+        root.addressEditing = false     // 用户已提交，之后的自动同步才允许更新
         const now = Date.now()
         if (target === root.lastNavigateUrl && now - root.lastNavigateAt < 1000)
             return
@@ -198,6 +203,9 @@ Item {
                 border.width: 1
                 border.color: theme.lineStrong
             }
+            // 用户手动编辑（含退格/删除）一旦开始，就禁止后台把地址写回来
+            onTextEdited: root.addressEditing = true
+            onActiveFocusChanged: { if (activeFocus) root.addressEditing = true }
             onAccepted: {
                 root.loadUrl(text)
                 // 移动端跳转后收起软键盘：竖屏上键盘会占掉一半高度，
@@ -274,7 +282,8 @@ Item {
                         onLoadingChanged: function (request) {
                             if (request.status !== WebView.LoadSucceededStatus) return
                             const u = url.toString()
-                            if (u.indexOf("://") > 0 && !address.activeFocus)
+                            if (u.indexOf("://") > 0 && !address.activeFocus
+                                    && !root.addressEditing)
                                 address.text = u
                         }
                         // Android 后端有时会把 url 报成相对路径 "/"，这时保留地址栏
@@ -283,7 +292,7 @@ Item {
                         onUrlChanged: {
                             const u = url.toString()
                             if (u.indexOf("://") <= 0) return
-                            if (!address.activeFocus) address.text = u
+                            if (!address.activeFocus && !root.addressEditing) address.text = u
                         }
                     }
                 }
@@ -309,7 +318,7 @@ Item {
     Connections {
         target: browser
         function onUrlChanged() {
-            if (!address.activeFocus) address.text = browser.url
+            if (!address.activeFocus && !root.addressEditing) address.text = browser.url
         }
     }
 
