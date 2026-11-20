@@ -385,6 +385,7 @@ Item {
                 }
 
                 Loader {
+                    active: root.wide
                     sourceComponent: lyricComp
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -402,6 +403,7 @@ Item {
             // 宽屏垂直音量弹层：与竖屏同一交互（点音量按钮弹出），
             // 浮在左列控件行正上方、水平居中于左列
             Loader {
+                active: root.wide
                 width: theme.touchMin
                 height: 160
                 z: 5
@@ -505,6 +507,7 @@ Item {
                     // 第 2 页：歌词（页内自带纵向滚动）
                     Item {
                         Loader {
+                            active: !root.wide
                             anchors.fill: parent
                             sourceComponent: lyricComp
                         }
@@ -560,6 +563,7 @@ Item {
 
             // 垂直音量滑块：浮在控制行（62 高）正上方，居中收放
             Loader {
+                active: !root.wide
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: 76
@@ -1103,6 +1107,9 @@ Item {
                                  && root.visible && lyricView.visible
                         onTriggered: {
                             if (lyricProgress.dragging) return
+                            // anchorStamp 尚未由 position 回报初始化时（初始 0），
+                            // ahead 会是 Date.now() 的巨大值被截到 tickMs*2，导致首帧闪跳。
+                            if (lyricView.anchorStamp <= 0) return
                             const ahead = Date.now() - lyricView.anchorStamp
                             lyricView.shownPos = lyricView.anchorPos
                                     + Math.min(Math.max(0, ahead), lyricView.tickMs * 2)

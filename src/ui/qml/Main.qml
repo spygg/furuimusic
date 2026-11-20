@@ -352,7 +352,10 @@ ApplicationWindow {
                 browser.close()
             return true
         }
-        return now - win.browserBackAt < 600
+        // browser 已关闭：这里只拦「同一次按键的第二条通道」（两条通道间隔仅几 ms）。
+        // 窗口必须远小于 600ms，否则关闭浏览器后的下一次独立返回键（用户可能几百 ms
+        // 内再按）也被误吞，表现为「按返回没反应」。150ms 足够覆盖双通道又不误伤新按键。
+        return now - win.browserBackAt < 150
     }
 
     // 无边框窗口没有系统边框：浅色主题下窗口边缘与桌面/白底完全融合，拖动和

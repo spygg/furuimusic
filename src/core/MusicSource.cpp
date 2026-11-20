@@ -1233,6 +1233,8 @@ void MusicSource::qishuiPlaylistDetail(const QString &id, int limit, int offset,
 {
     const Endpoint ep = m_desc.endpoints.value(QStringLiteral("playlistDetail"));
     QVariantMap v = baseVars();
+    // 同 qishuiRank：公开歌单详情匿名访问，避免登录 Cookie 污染导致空列表
+    v.insert(QStringLiteral("cookie"), QString());
     v.insert(QStringLiteral("id"), id);
     v.insert(QStringLiteral("limit"), QString::number(limit));
     v.insert(QStringLiteral("offset"), QString::number(offset));
@@ -1263,6 +1265,8 @@ void MusicSource::qishuiRelated(const QString &trackId, int limit, SongsCallback
         return;
     }
     QVariantMap v = baseVars();
+    // 相似推荐同样是公开接口，登录后也用匿名请求
+    v.insert(QStringLiteral("cookie"), QString());
     v.insert(QStringLiteral("id"), trackId);
     v.insert(QStringLiteral("limit"), QString::number(limit));
     call(ep, v, [this, cb](const HttpClient::Reply &r) {
@@ -1311,6 +1315,10 @@ void MusicSource::qishuiRank(int limit, int offset, PlaylistsCallback cb)
 {
     const Endpoint ep = m_desc.endpoints.value(QStringLiteral("rank"));
     QVariantMap v = baseVars();
+    // 推荐歌单/榜单是公开接口：登录后 m_session.cookie 会被 baseVars 填进
+    // 源级 "Cookie: {cookie}" 头，发给 beta-luna/api.qishui.com 会被拒或返回空，
+    // 表现就是「登录前有权单，登录后没歌单」。这里显式清空让 buildUrl 丢掉该头。
+    v.insert(QStringLiteral("cookie"), QString());
     v.insert(QStringLiteral("limit"), QString::number(limit));
     v.insert(QStringLiteral("offset"), QString::number(offset));
     v.insert(QStringLiteral("page"), QString::number(offset / qMax(1, limit) + 1));

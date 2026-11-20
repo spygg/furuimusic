@@ -201,6 +201,7 @@ class AppController : public QObject {
     Q_PROPERTY(QVariantList comments READ comments NOTIFY commentsChanged)
     Q_PROPERTY(bool commentsLoading READ commentsLoading NOTIFY commentsChanged)
     Q_PROPERTY(int commentTotal READ commentTotal NOTIFY commentsChanged)
+    Q_PROPERTY(int commentPage READ commentPage NOTIFY commentsChanged)
     Q_PROPERTY(QString commentSourceName READ commentSourceName NOTIFY commentsChanged)
     // ---- 应用信息 ----
     Q_PROPERTY(QString appName READ appName CONSTANT)
@@ -280,6 +281,7 @@ public:
     QVariantList comments() const { return m_comments; }
     bool commentsLoading() const { return m_commentsLoading; }
     int commentTotal() const { return m_commentTotal; }
+    int commentPage() const { return m_commentPage; }
     QString commentSourceName() const { return m_commentSourceName; }
     QString appName() const { return QStringLiteral("福瑞音乐"); }
     QString version() const { return QStringLiteral(FURUI_APP_VERSION); }

@@ -189,6 +189,11 @@ private:
     // 队列/状态变化的落盘防抖：整队列序列化成 JSON 在千首队列上并不便宜，
     // 连续 addQueue/removeQueue 时没必要每次都做，攒一小段再写。
     QTimer *m_saveDebounce = nullptr;
+    // 队列内容是否已序列化落盘且之后未变：为 false 时 saveState 才重建队列 JSON。
+    // 每 5s 的位置快照只需更新 resumePosition，不必重复序列化上千首歌曲。
+    bool m_queueJsonDirty = true;
+    // 空队列清理是否已落盘，避免空队列每 5s 重复写 4 个设置项
+    bool m_emptyStateSaved = false;
     // 播放看门狗：部分后端（尤其 Android MediaPlayer）在线流播完/出错时既不派发
     // EndOfMedia 也不派发 errorOccurred，表现为「播完一首停住」或「失败卡住不换源」。
     // 每秒巡检一次：起播超时判失败换源、播完停滞判结束切歌、中途停滞超时判失败换源。

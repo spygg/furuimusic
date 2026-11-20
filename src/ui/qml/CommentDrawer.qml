@@ -91,7 +91,7 @@ Item {
                 ScrollBar.vertical: ScrollBar { }
                 onMovementEnded: {
                     if (atYEnd && app.commentTotal > commentList.count && !app.commentsLoading)
-                        app.loadComments(Math.floor(commentList.count / 20) + 2)
+                        app.loadComments(app.commentPage + 1)
                 }
                 delegate: Item {
                     width: commentList.width

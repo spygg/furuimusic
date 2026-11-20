@@ -209,6 +209,12 @@ void SourceManager::rank(const QString &sourceId, int limit, PlaylistsCallback c
     }
 }
 
+QVector<Playlist> SourceManager::defaultBoards(const QString &sourceId) const
+{
+    MusicSource *s = source(sourceId);
+    return s ? s->defaultBoards() : QVector<Playlist>();
+}
+
 void SourceManager::playlistDetail(const Playlist &playlist, SongsCallback cb)
 {
     MusicSource *s = source(playlist.source);
@@ -517,6 +523,12 @@ void SourceManager::resolveAlternate(const Song &song, const QStringList &exclud
                     if (sub.ok) {
                         Playable r = sub;
                         r.source = QStringLiteral("custom");
+                        // 与内置平台换源分支保持一致：补 substituted 标识，否则
+                        // AppController 据此计算的「VIP 替代 / 在线音源」徽标不显示
+                        r.substituted = true;
+                        r.needSubstitute = false;
+                        if (r.substituteSource.isEmpty())
+                            r.substituteSource = QStringLiteral("在线音源");
                         if (cb) cb(r);
                         return;
                     }

@@ -31,6 +31,8 @@ public:
     void search(const QString &keyword, const QString &sourceId, int limit, SongsCallback cb);
     void searchPlaylists(const QString &keyword, const QString &sourceId, int limit, PlaylistsCallback cb);
     void rank(const QString &sourceId, int limit, PlaylistsCallback cb);
+    // 某个平台的静态默认榜单：网络/登录态导致 rank 为空时作本地兜底
+    QVector<Playlist> defaultBoards(const QString &sourceId) const;
     void playlistDetail(const Playlist &playlist, SongsCallback cb);
     // quiet=true：后台预取链用，跳过 demoteSource/noteNeedsSubstitute 等排名副作用
     void resolve(const Song &song, const QString &quality, PlayableCallback cb,

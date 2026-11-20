@@ -272,6 +272,7 @@ PlayerController::PlayerController(QObject *parent)
     m_saveDebounce->setInterval(1200);
     connect(m_saveDebounce, &QTimer::timeout, this, &PlayerController::saveState);
     connect(this, &PlayerController::queueChanged, this, [this] {
+        m_queueJsonDirty = true;
         if (m_saveDebounce) m_saveDebounce->start();
     });
     connect(this, &PlayerController::stateChanged, this, [this] {
@@ -681,7 +682,10 @@ void PlayerController::onWatchdog()
     // 于是「已经放完」时 pos 可能永远到不了 total-3000，只会停在那里不动。
     // 停滞 4 秒且已在末尾 2%（至少 8 秒）以内，同样按播完处理 —— 否则要等 15 秒
     // 才判「播放中断」，再把这件已经播完的歌重新取链放一遍（听感上就是「播完又播当前这首」）。
-    if (total > 0 && pos >= total - qMax<qint64>(8000, total / 50)) {
+    // 尾部阈值最多取总时长的一半：短音频（total<16s）时 qMax(8000,...) 会超过
+    // total，-阈值成负数导致 pos>=负数 恒真，停顿 4s 就把还没播完的短歌切掉。
+    const qint64 tailThreshold = qMin(total / 2, qMax<qint64>(8000, total / 50));
+    if (total > 0 && pos >= total - tailThreshold) {
         if (now - m_stallSince >= 4000) {
             m_advancing = true;
             m_ended = true;
@@ -731,17 +735,26 @@ qint64 PlayerController::duration() const
 void PlayerController::saveState()
 {
     if (m_queue.isEmpty()) {
+        // 空队列只需在「从非空变空」时清一次，避免每 5s 空写 4 项触发整份 ini 重写
+        if (m_emptyStateSaved) return;
         Settings::set(QStringLiteral("resumeQueue"), QString());
         Settings::set(QStringLiteral("resumeIndex"), -1);
         Settings::set(QStringLiteral("resumePosition"), 0);
         Settings::set(QStringLiteral("resumePlaying"), false);
+        m_emptyStateSaved = true;
+        m_queueJsonDirty = true;   // 下次加入歌曲时必须重建队列 JSON
         return;
     }
-    QJsonArray arr;
-    for (const Song &s : m_queue)
-        arr.append(songToJson(s));
-    Settings::set(QStringLiteral("resumeQueue"),
-                  QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+    m_emptyStateSaved = false;
+    // 队列内容未变时只更新位置/索引/播放态，不再每 5s 全量序列化上千首歌曲
+    if (m_queueJsonDirty) {
+        QJsonArray arr;
+        for (const Song &s : m_queue)
+            arr.append(songToJson(s));
+        Settings::set(QStringLiteral("resumeQueue"),
+                      QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+        m_queueJsonDirty = false;
+    }
     Settings::set(QStringLiteral("resumeIndex"), m_currentIndex);
     // 恢复位置还没真正应用（媒体未加载完成）前，保留待跳转点，别被 0 覆盖掉
     const qint64 pos = m_pendingSeek > 0 ? m_pendingSeek : position();
@@ -889,6 +902,7 @@ void PlayerController::setCurrentCover(const QString &cover)
     if (cover.isEmpty() || m_currentIndex < 0 || m_currentIndex >= m_queue.size()) return;
     if (m_queue[m_currentIndex].cover == cover) return;
     m_queue[m_currentIndex].cover = cover;
+    m_queueJsonDirty = true;   // 队列元素原地改了 cover，落盘缓存需重建（不发 queueChanged 以免模型重置）
     // 只刷新当前歌曲的展示数据。原来这里还发 queueChanged，会让整个队列模型
     // beginResetModel：队列滚动位置回到顶部、所有行重放入场动画。
     // 队列模型里的封面由 AppController 用 setCover() 做行级 dataChanged。

@@ -78,19 +78,15 @@ Item {
             radius: 10
             color: hovered ? root.cChipHover : "transparent"
         }
-        // MenuItem 的 onClicked 在这套自定义 contentItem/background 下偶发不投递，
-        // 用整项覆盖的 MouseArea 兜底，确保菜单点选一定生效。
-        MouseArea {
-            anchors.fill: parent
-            z: 2
-            onClicked: {
-                qishuiModeMenu.close()
-                if (modeKey !== "") {
-                    qishuiModeCombo.currentIndex = modeIndex
-                    app.loadQishuiRecommend(modeKey, "")
-                } else if (categoryKey !== "") {
-                    app.loadQishuiRecommend(qishuiModeCombo.model[qishuiModeCombo.currentIndex].key, categoryKey)
-                }
+        // MenuItem 用 triggered() 才是规范信号；原先的 onClicked 在这套自定义
+        // contentItem/background 下偶发不投递，导致「点了菜单但模式没变」。
+        onTriggered: {
+            qishuiModeMenu.close()
+            if (modeKey !== "") {
+                qishuiModeCombo.currentIndex = modeIndex
+                app.loadQishuiRecommend(modeKey, "")
+            } else if (categoryKey !== "") {
+                app.loadQishuiRecommend(qishuiModeCombo.model[qishuiModeCombo.currentIndex].key, categoryKey)
             }
         }
     }
@@ -702,8 +698,6 @@ Item {
                 QishuiModeItem { label: "场景：KTV 必点"; categoryKey: "KTV必点" }
                 QishuiModeItem { label: "场景：睡前"; categoryKey: "睡前" }
                 QishuiModeItem { label: "场景：动感健身"; categoryKey: "动感健身" }
-                MenuSeparator { contentItem: Rectangle { implicitHeight: 1; color: cLine } }
-                QishuiModeItem { label: "更多场景 → 发现页场景标签" }
             }
 
             // 胶囊 Tab：选中 = 主色底白字 + 淡投影；放不下时横向滚动，右缘渐隐提示可左滑
