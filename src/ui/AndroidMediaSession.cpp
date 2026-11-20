@@ -1,6 +1,7 @@
 #include "AndroidMediaSession.h"
 
 #include "../core/HttpClient.h"
+#include "../core/Logger.h"
 #include "../core/PlayerController.h"
 #include "../core/Settings.h"
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
@@ -20,8 +21,10 @@
 #include <QMetaObject>
 #include <QMutex>
 #include <QOperatingSystemVersion>
+#include <QTimer>
 #include <QUrl>
 #include <jni.h>
+#include <memory>
 #endif
 
 namespace Furui {
@@ -35,7 +38,11 @@ constexpr const char *kServiceClass = "cn/furui/music/MediaSessionService";
 enum Command {
     CmdPlay = 1, CmdPause = 2, CmdNext = 3, CmdPrev = 4, CmdSeek = 5, CmdStop = 6,
     // 音频焦点回调：其它应用开始播放时由 Java 监听器回传
-    CmdDuck = 7, CmdUnduck = 8
+    CmdDuck = 7, CmdUnduck = 8,
+    // 车机歌单/模式类口令（只有 BYD 特供版会发）
+    CmdPlayLike = 9, CmdPlayLately = 10, CmdRandom = 11,
+    CmdModeOrder = 12, CmdModeCycle = 13, CmdModeLoop = 14, CmdModeRandom = 15,
+    CmdCollect = 16, CmdUncollect = 17
 };
 
 AndroidMediaSession *g_instance = nullptr;
@@ -148,6 +155,23 @@ void jniCommand(JNIEnv *, jclass, jint action, jlong position)
     AndroidMediaSession::handleCommand(int(action), qint64(position));
 }
 
+// 车机语音点歌：MediaSessionService.dispatchVoiceSearch() 回传关键词。
+// 与 jniCommand 一样跑在 Android 主线程，真正的工作排到 Qt 主线程做。
+void jniSearch(JNIEnv *env, jclass, jstring keyword)
+{
+    if (!g_instance || !keyword)
+        return;
+    const jchar *chars = env->GetStringChars(keyword, nullptr);
+    if (!chars)
+        return;
+    const jsize len = env->GetStringLength(keyword);
+    const QString query = QString::fromUtf16(reinterpret_cast<const char16_t *>(chars), len);
+    env->ReleaseStringChars(keyword, chars);
+    if (query.trimmed().isEmpty())
+        return;
+    AndroidMediaSession::handleVoiceSearch(query);
+}
+
 } // namespace
 
 void AndroidMediaSession::install()
@@ -163,9 +187,12 @@ void AndroidMediaSession::install()
         if (clazz) {
             static const JNINativeMethod methods[] = {
                 { const_cast<char *>("onNativeCommand"), const_cast<char *>("(IJ)V"),
-                  reinterpret_cast<void *>(&jniCommand) }
+                  reinterpret_cast<void *>(&jniCommand) },
+                // 车机语音点歌（主流版无人调用，注册无害）
+                { const_cast<char *>("onNativeSearch"), const_cast<char *>("(Ljava/lang/String;)V"),
+                  reinterpret_cast<void *>(&jniSearch) }
             };
-            env.jniEnv()->RegisterNatives(clazz, methods, 1);
+            env.jniEnv()->RegisterNatives(clazz, methods, 2);
             env.jniEnv()->DeleteLocalRef(clazz);
         }
     }
@@ -336,12 +363,92 @@ void AndroidMediaSession::handleCommand(int action, qint64 position)
         releaseAudioFocus();
         break;
     default:
+        handleVoiceListCommand(action);
         break;
     }
+}
+
+// 车机歌单/模式类口令：loadFavorites/loadHistory 同步落模型（m_results），
+// 之后 playResult(0) 等价「从第一条开始播，整队列替换为该列表」。
+// 这些命令都来自 JNI 线程，会触碰 UI 模型/数据库 → 统一排队到 Qt 主线程。
+void AndroidMediaSession::handleVoiceListCommand(int action)
+{
+    AppController *app = AppController::instance();
+    QMetaObject::invokeMethod(app, [app, action] {
+        switch (action) {
+        case CmdPlayLike:
+            Logger::write(QStringLiteral("I"), QStringLiteral("[语音点歌] 播放我喜欢的歌"));
+            app->loadFavorites();
+            app->playResult(0);
+            break;
+        case CmdPlayLately:
+            Logger::write(QStringLiteral("I"), QStringLiteral("[语音点歌] 播放最近在听"));
+            app->loadHistory();
+            app->playResult(0);
+            break;
+        case CmdRandom:
+        case CmdModeRandom:
+            PlayerController::instance()->setMode(3);
+            break;
+        case CmdModeOrder:
+            PlayerController::instance()->setMode(0);
+            break;
+        case CmdModeCycle:
+            PlayerController::instance()->setMode(1);
+            break;
+        case CmdModeLoop:
+            PlayerController::instance()->setMode(2);
+            break;
+        case CmdCollect:
+            // 小迪只会发一个收藏口令，是否已收藏由这里判：未收藏才切，
+            // 避免重复口令把已收藏的歌又取消掉
+            if (!app->isFavoriteCurrent())
+                app->toggleFavoriteCurrent();
+            break;
+        case CmdUncollect:
+            if (app->isFavoriteCurrent())
+                app->toggleFavoriteCurrent();
+            break;
+        default:
+            break;
+        }
+    }, Qt::QueuedConnection);
+}
+
+void AndroidMediaSession::handleVoiceSearch(const QString &keyword)
+{
+    // 点歌不需要音频焦点（app 可能没在放歌），与媒体键不同。
+    // JNI 回调来自 Android 主线程：search/playResult 会操作 UI 模型，
+    // 必须排队到 Qt 主线程执行。
+    QMetaObject::invokeMethod(AppController::instance(), [keyword] {
+        AppController *app = AppController::instance();
+        app->setSearchType(QStringLiteral("song"));  // 语音点歌固定搜歌曲
+        Logger::write(QStringLiteral("I"),
+                      QStringLiteral("[语音点歌] 搜索: %1").arg(keyword));
+        // 搜完播第一条；连接用 shared_ptr 持有，成功回调与 20s 兜底两条路径
+        // 谁先到谁断开，后到的 disconnect 在已断开的连接上是安全空操作
+        auto conn = std::make_shared<QMetaObject::Connection>();
+        *conn = QObject::connect(app, &AppController::searchFinished, app,
+                [conn, app](int count, const QString &kind) {
+                    QObject::disconnect(*conn);
+                    if (count > 0 && kind == QLatin1String("song")) {
+                        Logger::write(QStringLiteral("I"),
+                                      QStringLiteral("[语音点歌] %1 条结果，播放第一条").arg(count));
+                        app->playResult(0);
+                    } else {
+                        Logger::write(QStringLiteral("I"),
+                                      QStringLiteral("[语音点歌] 无可用结果 kind=%1").arg(kind));
+                    }
+                });
+        QTimer::singleShot(20000, app, [conn] { QObject::disconnect(*conn); });
+        app->search(keyword);
+    }, Qt::QueuedConnection);
 }
 #else
 void AndroidMediaSession::install() {}
 void AndroidMediaSession::handleCommand(int, qint64) {}
+void AndroidMediaSession::handleVoiceSearch(const QString &) {}
+void AndroidMediaSession::handleVoiceListCommand(int) {}
 #endif
 
 } // namespace Furui

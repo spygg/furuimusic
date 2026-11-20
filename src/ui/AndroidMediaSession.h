@@ -20,7 +20,12 @@ public:
     static void install();
     // 由 JNI 回调转进来（Java 线程 → Qt 主线程），也可供测试直接调用
     static void handleCommand(int action, qint64 position);
-
+    // 车机语音点歌（BYD AUTOVOICE_SEARCH_PLUS → Java → 此处）：
+    // 搜索关键词并自动播放第一条结果。非 Android 平台为空实现。
+    static void handleVoiceSearch(const QString &keyword);
+    // 车机歌单/模式类口令（播放我喜欢的歌/最近在听/随机/收藏切换），
+    // 由 handleCommand 的 default 分支转入；非 Android 平台为空实现。
+    static void handleVoiceListCommand(int action);
 private:
     explicit AndroidMediaSession(QObject *parent = nullptr);
     // 把歌曲封面解析成本地文件路径：本地封面直接用，网络封面下载到缓存目录

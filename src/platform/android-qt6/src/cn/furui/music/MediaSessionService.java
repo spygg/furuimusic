@@ -51,6 +51,17 @@ public class MediaSessionService extends Service {
     // 音频焦点：导航播报等 CAN_DUCK 场景压低/恢复音量
     private static final int CMD_DUCK = 7;
     private static final int CMD_UNDUCK = 8;
+    // 车机歌单/模式类口令（BYD AUTOVOICE_*）——与 AndroidMediaSession.cpp 的
+    // Cmd 枚举一一对应；9~17 只有车机兼容版的 BydControlReceiver 会发。
+    private static final int CMD_PLAY_LIKE = 9;     // 播放我喜欢的歌
+    private static final int CMD_PLAY_LATELY = 10;  // 播放最近在听
+    private static final int CMD_RANDOM = 11;       // 随机播放
+    private static final int CMD_MODE_ORDER = 12;   // 顺序播放
+    private static final int CMD_MODE_CYCLE = 13;   // 列表循环
+    private static final int CMD_MODE_LOOP = 14;    // 单曲循环
+    private static final int CMD_MODE_RANDOM = 15;  // 随机播放（同 11，语义别名）
+    private static final int CMD_COLLECT = 16;      // 收藏当前歌
+    private static final int CMD_UNCOLLECT = 17;    // 取消收藏当前歌
 
     private static final String ACTION_PLAY = "cn.furui.music.action.PLAY";
     private static final String ACTION_PAUSE = "cn.furui.music.action.PAUSE";
@@ -404,6 +415,31 @@ public class MediaSessionService extends Service {
         } catch (Throwable t) {
             // C++ 尚未注册（或进程重启后回调丢失）不能让服务崩掉
             Log.w(TAG, "native command failed: " + action, t);
+        }
+    }
+
+    // 车机语音点歌：BydControlReceiver 收到 AUTOVOICE_SEARCH(_PLUS) 时把关键词
+    // 送进 C++（search → 搜完播第一条）。主流版没有调用方，声明不会被触发；
+    // native 实现由 AndroidMediaSession.cpp 统一注册。
+    private static native void onNativeSearch(String keyword);
+
+    public static void dispatchVoiceSearch(String keyword) {
+        if (keyword == null || keyword.trim().isEmpty())
+            return;
+        try {
+            onNativeSearch(keyword.trim());
+        } catch (Throwable t) {
+            Log.w(TAG, "native search failed: " + keyword, t);
+        }
+    }
+
+    // 车机歌单/模式类口令入口（BydControlReceiver 调用）：直接复用 sendCommand
+    // 的 JNI 回调通路；主流版无调用方。
+    public static void dispatchVoiceCommand(int command) {
+        try {
+            sendCommand(command, 0);
+        } catch (Throwable t) {
+            Log.w(TAG, "native voice command failed: " + command, t);
         }
     }
 

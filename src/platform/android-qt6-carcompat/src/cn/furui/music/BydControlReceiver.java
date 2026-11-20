@@ -72,8 +72,64 @@ public class BydControlReceiver extends BroadcastReceiver {
             return;
         }
 
+        if ("com.byd.action.AUTOVOICE_SEARCH_PLUS".equals(action)
+                || "com.byd.action.AUTOVOICE_SEARCH".equals(action)) {
+            // 语音点歌「播放晴天」：网易云车机版的 extras 约定（参考
+            // MediaCenterTestActivity 反编译源码）——
+            //   EXTRA_KEYWORDS_SEARCH 歌名/关键词（必有）
+            //   EXTRA_ARTIST_SEARCH   歌手（可空）
+            //   另有 EXTRA_GENRE/LANG/SOURCE/AREA_SEARCH 等过滤项，暂不参与匹配
+            String keywords = intent.getStringExtra("EXTRA_KEYWORDS_SEARCH");
+            String artist = intent.getStringExtra("EXTRA_ARTIST_SEARCH");
+            BydVoiceHelper.log("search keywords=" + keywords
+                    + " artist=" + artist + " extras=" + describeExtras(intent));
+            String query = buildSearchQuery(keywords, artist);
+            if (!query.isEmpty())
+                MediaSessionService.dispatchVoiceSearch(query);
+            else
+                BydVoiceHelper.log("search ignored: empty query");
+            return;
+        }
+
+        // ---- 歌单/模式类口令：无 extras，直接映射 CMD_*（协议来自
+        //      MediaCenterTestActivity 反编译源码）----
+        Integer cmd = null;
+        switch (action == null ? "" : action) {
+            case "com.byd.action.AUTOVOICE_PLAY_LIKE":    cmd = 9;  break; // 播放我喜欢的歌
+            case "com.byd.action.AUTOVOICE_PLAY_LATELY":  cmd = 10; break; // 播放最近在听
+            case "com.byd.action.AUTOVOICE_PLAY_RANDOM":  cmd = 11; break; // 随机播放
+            case "com.byd.action.AUTOVOICE_COLLECT":      cmd = 16; break; // 收藏当前歌
+            case "com.byd.action.AUTOVOICE_UNCOLLECT":    cmd = 17; break; // 取消收藏
+            case "com.byd.action.AUTOVOICE_PLAY_MODE":
+                // EXTRA_PLAY_MODE: LOOP=单曲循环 CYCLE=列表循环 ORDER=顺序 RANDOM=随机
+                String mode = intent.getStringExtra("EXTRA_PLAY_MODE");
+                BydVoiceHelper.log("play mode=" + mode);
+                if ("LOOP".equals(mode))          cmd = 14;
+                else if ("CYCLE".equals(mode))    cmd = 13;
+                else if ("ORDER".equals(mode))    cmd = 12;
+                else if ("RANDOM".equals(mode))   cmd = 15;
+                break;
+            default:
+                break;
+        }
+        if (cmd != null) {
+            MediaSessionService.dispatchVoiceCommand(cmd);
+            return;
+        }
+
         BydVoiceHelper.log("unsupported action=" + action
                 + " extras=" + describeExtras(intent));
+    }
+
+    /** 歌手 + 歌名拼一条搜索词（与网易云语义一致）；两者都空则返回空串。 */
+    private static String buildSearchQuery(String keywords, String artist) {
+        String k = keywords == null ? "" : keywords.trim();
+        String a = artist == null ? "" : artist.trim();
+        if (a.isEmpty())
+            return k;
+        if (k.isEmpty())
+            return a;
+        return a + " " + k;
     }
 
     private static int parseSeconds(Intent intent) {
