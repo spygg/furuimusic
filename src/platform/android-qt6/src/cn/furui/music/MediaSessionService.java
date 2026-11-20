@@ -14,13 +14,20 @@ import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaMetadata;
+import android.media.browse.MediaBrowser;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.SystemClock;
+import android.provider.MediaStore;
+import android.service.media.MediaBrowserService;
 import android.util.Log;
 import android.view.KeyEvent;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 播放器前台服务 + 系统 MediaSession。
@@ -32,11 +39,15 @@ import android.view.KeyEvent;
  *
  * 这里刻意只用平台自带的 android.media.session.MediaSession（API 21+），
  * 不引入 androidx.media：Qt 的 Gradle 模板没有该依赖，改依赖会让打包链路变脆。
+ * 同理继承的是 framework 的 android.service.media.MediaBrowserService（API 21+，
+ * 与 androidx 的 MediaBrowserServiceCompat 接口一致）：BYD DiLink 媒体中心的
+ * 「选择默认使用的音乐」列表按 白名单包名 ∩ 可浏览 MediaBrowserService 过滤，
+ * 只继承普通 Service 不进列表，语音「播放XX」也就没有落点（2026-11-20 实测结论）。
  *
  * 播放状态由 C++ 侧（AndroidMediaSession）单向推送；用户从通知/耳机/车机发来的
  * 指令通过 native 方法回传给 C++，由 PlayerController 真正执行。
  */
-public class MediaSessionService extends Service {
+public class MediaSessionService extends MediaBrowserService {
     private static final String TAG = "FuruiMedia";
     private static final String CHANNEL_ID = "furui_playback";
     private static final int NOTIFICATION_ID = 1196445257; // "FURU"
@@ -258,6 +269,9 @@ public class MediaSessionService extends Service {
         mSession = new MediaSession(this, "FuruiMusic");
         mSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                 | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
+        // MediaBrowserService 契约：token 必须在客户端 onGetRoot 前设置好，
+        // 否则媒体中心 connect 直接失败，语音点歌没有 session 可连。
+        setSessionToken(mSession.getSessionToken());
         mSession.setCallback(new MediaSession.Callback() {
             @Override
             public void onPlay() { sendCommand(CMD_PLAY, 0); }
@@ -285,6 +299,38 @@ public class MediaSessionService extends Service {
             public void onStop() {
                 sendCommand(CMD_STOP, 0);
                 shutdown();
+            }
+
+            // 语音点歌标准通道：车机媒体中心/语音助手连上 MediaSession 后，
+            // 「播放周杰伦的晴天」会落到这里（对应 PlaybackState 里声明的
+            // ACTION_PLAY_FROM_SEARCH）。extras 可能带结构化字段
+            // （MediaStore.EXTRA_MEDIA_TITLE/ARTIST...），没有就把整个
+            // query 当关键词，交给 C++ 侧搜索播第一条。
+            @Override
+            public void onPlayFromSearch(String query, Bundle extras) {
+                Log.w(TAG, "onPlayFromSearch query=" + query);
+                String title = query == null ? "" : query.trim();
+                String artist = "";
+                if (extras != null) {
+                    String t = extras.getString(MediaStore.EXTRA_MEDIA_TITLE);
+                    String a = extras.getString(MediaStore.EXTRA_MEDIA_ARTIST);
+                    if (t != null && !t.trim().isEmpty())
+                        title = t.trim();
+                    if (a != null && !a.trim().isEmpty())
+                        artist = a.trim();
+                }
+                if (title.isEmpty() && artist.isEmpty()) {
+                    // 只有口头令没有关键词：恢复播放
+                    sendCommand(CMD_PLAY, 0);
+                    return;
+                }
+                dispatchVoiceSearch(title, artist);
+            }
+
+            @Override
+            public void onPlayFromMediaId(String mediaId, Bundle extras) {
+                // 我们不提供浏览树，媒体中心不会拿到有效 mediaId；落日志便于取证
+                Log.w(TAG, "onPlayFromMediaId id=" + mediaId);
             }
         });
         mSession.setSessionActivity(launchAppIntent());
@@ -331,15 +377,29 @@ public class MediaSessionService extends Service {
         return START_NOT_STICKY;
     }
 
+    // ---- MediaBrowserService：可被车机媒体中心/助手浏览连接 ----
+    //
+    // 我们不提供真正的内容浏览树（点歌走 playFromSearch 搜索通道），
+    // 但必须实现这两个回调让 connect 成功：DiLink「选择默认使用的音乐」
+    // 列表按 白名单包名 ∩ 可浏览 MediaBrowserService 过滤（汽水音乐有
+    // 浏览服务但不在白名单、我们不装 browse 服务都不进列表，实测结论）。
+    @Override
+    public BrowserRoot onGetRoot(String clientPackageName, int clientUid, Bundle rootHints) {
+        Log.w(TAG, "onGetRoot client=" + clientPackageName);
+        // 放行全部客户端：车机媒体中心包名不固定，收窄白名单反而连不上
+        return new BrowserRoot("furui_root", null);
+    }
+
+    @Override
+    public void onLoadChildren(String parentId, Result<List<MediaBrowser.MediaItem>> result) {
+        // 空浏览树：连接成功但无可浏览内容，不影响 transport controls / 点歌
+        result.sendResult(new ArrayList<MediaBrowser.MediaItem>());
+    }
+
     @Override
     public void onDestroy() {
         shutdown();
         super.onDestroy();
-    }
-
-    @Override
-    public IBinder onBind(Intent intent) {
-        return null;
     }
 
     // 车机兼容版挂钩：BYD 小迪语音需要状态上报。主流版没有 BydVoiceHelper
@@ -422,12 +482,18 @@ public class MediaSessionService extends Service {
     // 送进 C++（search → 搜完播第一条）。主流版没有调用方，声明不会被触发；
     // native 实现由 AndroidMediaSession.cpp 统一注册。
     private static native void onNativeSearch(String keyword);
+    // 带歌手字段的语音点歌入口：优先用歌名搜，歌手用于结果里挑最匹配的一首
+    private static native void onNativeSearchEx(String keyword, String artist);
 
     public static void dispatchVoiceSearch(String keyword) {
+        dispatchVoiceSearch(keyword, "");
+    }
+
+    public static void dispatchVoiceSearch(String keyword, String artist) {
         if (keyword == null || keyword.trim().isEmpty())
             return;
         try {
-            onNativeSearch(keyword.trim());
+            onNativeSearchEx(keyword.trim(), artist == null ? "" : artist.trim());
         } catch (Throwable t) {
             Log.w(TAG, "native search failed: " + keyword, t);
         }
@@ -459,7 +525,10 @@ public class MediaSessionService extends Service {
         long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP
                 | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS
-                | PlaybackState.ACTION_SEEK_TO;
+                | PlaybackState.ACTION_SEEK_TO
+                // 声明支持语音点歌：媒体中心/助手按 actions 判断能否 playFromSearch
+                | PlaybackState.ACTION_PLAY_FROM_SEARCH
+                | PlaybackState.ACTION_PLAY_FROM_MEDIA_ID;
         PlaybackState.Builder state = new PlaybackState.Builder()
                 .setActions(actions)
                 .setState(sPlaying ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,

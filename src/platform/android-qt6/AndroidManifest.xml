@@ -76,10 +76,17 @@
 
         <!-- 播放前台服务：常驻媒体通知 + MediaSession，供通知栏/锁屏/耳机/车机控制。
              exported=false：只由本进程启动，外部应用不能拉起 -->
+        <!-- 前台服务 + 可浏览媒体服务一体：intent-filter 让车机媒体中心/
+             语音助手能 connect（DiLink「选择默认使用的音乐」按
+             白名单包名 ∩ MediaBrowserService 过滤，缺 filter 不进列表） -->
         <service
             android:name="cn.furui.music.MediaSessionService"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
 
         <!-- 车机语音助手常把「下一首/上一首」转成 MEDIA_BUTTON 广播（而不是调用
              MediaSession transport controls）。没有它时仅在 App 前台才能响应语音。 -->
