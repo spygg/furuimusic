@@ -1,7 +1,11 @@
 {
-  "version": "1.4.32",
-  "desc": "新增\n- 设置中可自定义歌词字号（75%~175%，带实时预览与「默认」按钮），按百分比作用于播放页歌词/翻译行与迷你播放器\n修复\n- 当前歌词高亮原用品牌绿，红绿色弱难分辨：改为独立蓝色高亮令牌（浅色 #1D4ED8 / 深色 #93C5FD），不动全局品牌色\n- 竖屏与横屏分屏进入播放页时隐藏底部工具栏（迷你条+标签栏），点返回后自动恢复；横屏整屏左侧导航不受影响\n- 车机横屏半宽分屏播放页封面+歌词双栏拥挤：维持单栏封面/歌词滑动切换，底栏收起后不再误判版式\n",
+  "version": "1.4.33",
+  "desc": "新增\n- 在线升级支持国内加速镜像：下载前自动并行探测 GitHub 原链与多家加速站，只认返回真实安装包的线路，择优最快下载；某条线路失败自动切换下一条，直至成功\n修复\n- 网络不畅时在线升级「下载慢、经常失败、打不开」的问题\n",
   "history": [
+    {
+      "version": "1.4.32",
+      "desc": "新增\n- 设置中可自定义歌词字号（75%~175%，带实时预览与「默认」按钮），按百分比作用于播放页歌词/翻译行与迷你播放器\n修复\n- 当前歌词高亮原用品牌绿，红绿色弱难分辨：改为独立蓝色高亮令牌（浅色 #1D4ED8 / 深色 #93C5FD），不动全局品牌色\n- 竖屏与横屏分屏进入播放页时隐藏底部工具栏（迷你条+标签栏），点返回后自动恢复；横屏整屏左侧导航不受影响\n- 车机横屏半宽分屏播放页封面+歌词双栏拥挤：维持单栏封面/歌词滑动切换，底栏收起后不再误判版式\n"
+    },
     {
       "version": "1.4.31",
       "desc": "新增\n- 歌词与评论按洛雪式方案升级：跨源智能匹配歌词，评论支持网易云/咪咕/酷我，并接入 QQ、酷狗两大平台；脚本音源新增 comment 能力\n- 播放页歌词支持拖动定位：拖到目标行浮出「mm:ss 从此播放」按钮，点击才跳转\n- Android 播放 MV 点全屏按钮改为横屏全屏：锁横屏并沉浸式隐藏系统栏，退出自动恢复竖屏\n修复\n- 歌曲播到一半又从头播放/断流：校验式断点续播（回读 position 防静默丢弃 seek），断流源自动重度降分，自定义源与官方源一视同仁\n- 点击封面误触发播放/暂停\n- 无 MV 时误停播；MV 返回后原歌曲不再续播\n- 评论抽屉关闭等按钮显示成乱码（改用内置矢量图标）\n- Android 返回键/连续左滑直接退出 APP：onClosing 统一拦截，逐级回退，无层级可退时切后台且播放继续\n- 车机横屏半宽分屏播放页封面+歌词双栏拥挤：改为与竖屏一致的单栏滑动切换，横屏整屏仍双栏\n"
@@ -144,9 +148,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.32/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.32/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.32/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.32/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.33/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.33/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.33/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.33/FuruiMusic-android-arm64-v8a.apk"
   }
 }
