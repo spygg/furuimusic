@@ -26,6 +26,8 @@ public:
     // m_pendingSeek 应用一次）。默认 -1 表示从头播，保持原有调用点不变。
     void playUrl(const QUrl &url, const QVariantMap &headers = QVariantMap(),
                  qint64 resumeMs = -1);
+    // 曲中断流后在原 URL 上从头重新拉流并从断点续播（不换源）
+    void restartCurrent(qint64 resumeMs);
     void togglePause();
     void stop();
     // 切歌取链的空窗期专用：先停掉旧流并标记「正在切换」。

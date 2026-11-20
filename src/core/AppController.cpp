@@ -424,6 +424,11 @@ struct AppController::Impl {
     QString playingEngine;
     QString playingKey;
     QString playingProviderSource;   // 内置平台 id；脚本提供时为空，custom 脚本层为 "custom"
+    // 曲中断流恢复阶段：原链接重连 → 同音源重新取链 → 换源。
+    // 前两级不降权，避免一次网络抖动就把好源打下去。
+    enum class RecoverStage { None, SameUrl, ReResolve, Alternate };
+    RecoverStage recoverStage = RecoverStage::None;
+    qint64 recoverPos = 0;
     // 推荐请求在途：连点下一首时只允许有一个 /luna/track/related 请求
     bool recommendPending = false;
     // 曲库页搜索框是否有内容：外壳据此隐藏播放栏，给搜索结果/软键盘让位
@@ -496,6 +501,13 @@ AppController::AppController(QObject *parent)
         // 手动重播四次就会被判成坏歌）。
         if (d->guardSongTries > 0 && player->position() > 2000)
             d->guardSongTries = 0;
+        // 断流恢复成功：进度已越过断点 2 秒以上，说明原链接重连/重新取链生效，
+        // 撤销恢复阶梯；下次再断流又从「原链接重连」开始，而不是直接换源。
+        if (d->recoverStage != Impl::RecoverStage::None
+            && player->position() > d->recoverPos + 2000) {
+            d->recoverStage = Impl::RecoverStage::None;
+            d->recoverPos = 0;
+        }
         // 进度走过 2 秒 = 这条直链真的能播：给提供它的「脚本 × 平台」补记成功分
         if (!d->pendingEngine.isEmpty() && player->position() > 2000) {
             ScriptSourceManager::instance()->reportResult(d->pendingEngine, d->pendingKey, true, 2);
@@ -1341,6 +1353,8 @@ void AppController::resolveAndPlay(const Song &song)
     // 否则旧结果会在新歌已经开始播放后把播放地址换回去。
     const quint64 resolveGeneration = ++d->resolveGen;
     d->inFallback = false;
+    d->recoverStage = Impl::RecoverStage::None;   // 新歌重置断流恢复阶梯
+    d->recoverPos = 0;
     d->preloadTriggered = false;   // 新歌从 0 开始计时，播起来后再预取下一首
     setStatus(QStringLiteral("正在解析「%1」的播放地址…").arg(song.title));
 
@@ -1510,9 +1524,6 @@ void AppController::clearPreloadCache()
 
 void AppController::onPlayerError(const QString &msg)
 {
-    // 播放失败（已取到直链但播不出来）：尝试自动换源。
-    // d->inFallback 为 true 表示正处于上一次换源的解析过程中或已成功换源正在播放，
-    // 不再二次触发；只有用户主动切歌（resolveAndPlay）才会清掉它。
     Song song = d->currentSong;
     // 断流前的位置：在线直链（咪咕/网易云临时链）常在曲中断掉，换源时要把进度带过去，
     // 否则听感上就是「播到一半突然从头再来」。position() 在 error 到达时仍是断流点；
@@ -1523,14 +1534,68 @@ void AppController::onPlayerError(const QString &msg)
         const qint64 good = PlayerController::instance()->lastGoodPosition();
         if (good > failedPos) failedPos = good;
     }
-    // QMediaPlayer 的错误原文（"Error transferring http://... - server replied ..."）
-    // 又长又没信息量：状态栏留给排查，提示只保留一句，免得糊满屏幕
     const QString brief = QStringLiteral("播放失败");
-    // 曲中断流判定：播过 15 秒以上才断。秒失败多半是地址过期/防盗链（旧逻辑 -4），
-    // 播到一半断流说明这个源此刻的链路质量差，要罚得更重 —— 否则「确认能播 +2」后
-    // pending* 已清空，断流的源完全不受罚，下一首还会优先选它，用户就一直遇到
-    // 「播一半重来」。
+    // 播过 15 秒以上才按「曲中断流」处理；秒失败多半是地址过期/防盗链。
     const bool midStream = failedPos >= 15000;
+
+    d->pendingEngine.clear();
+    d->pendingKey.clear();
+    Logger::write(QStringLiteral("W"),
+                  QStringLiteral("播放失败：%1 - %2（%3）").arg(song.title, song.artist, msg));
+    if (song.title.isEmpty() || d->inFallback) {
+        setStatus(msg);
+        // 换源解析/播放期间，被 stop 掉的旧流会持续投递迟到的 error（真机日志里
+        // 同一秒刷了 20+ 条 "Demuxing failed"）。此时弹「播放失败」是误导——换源
+        // 很可能马上成功。真正的失败由 resolveAlternate 的失败回调统一提示。
+        return;
+    }
+
+    // ---- 曲中断流恢复阶梯：先自愈，最后才换源 ----
+    // 1) 同一 URL 强制重连并从断点续播。绝大多数「放着放着停住」是后端缓冲/网络
+    //    瞬时卡顿，重连即可恢复，不需要换源、也不该扣分。
+    if (midStream && d->recoverStage == Impl::RecoverStage::None) {
+        d->recoverStage = Impl::RecoverStage::SameUrl;
+        d->recoverPos = failedPos;
+        ++d->fallbackGen;   // 作废旧代次，避免上一次恢复的迟到回调插进来
+        PlayerController::instance()->pauseWatchdog();
+        PlayerController::instance()->restartCurrent(failedPos);
+        setStatus(QStringLiteral("正在恢复播放…"));
+        Logger::write(QStringLiteral("I"),
+                      QStringLiteral("[恢复] 同一链接从 %1ms 重连（不换源）").arg(failedPos));
+        return;
+    }
+
+    // 2) 重连仍失败 → 同一音源重新解析一条新直链（临时链过期的情况），依旧不换源。
+    if (midStream && d->recoverStage == Impl::RecoverStage::SameUrl) {
+        d->recoverStage = Impl::RecoverStage::ReResolve;
+        const quint64 gen = ++d->fallbackGen;
+        PlayerController::instance()->pauseWatchdog();
+        setStatus(QStringLiteral("正在重新获取播放地址…"));
+        SourceManager::instance()->resolve(song, d->quality,
+            [this, gen, song, failedPos, msg](const Playable &p) {
+                if (gen != d->fallbackGen) return;
+                if (p.ok) {
+                    PlayerController::instance()->playUrl(p.url, p.headers, failedPos);
+                    setStatus(QStringLiteral("正在恢复播放…"));
+                    Logger::write(QStringLiteral("I"),
+                                  QStringLiteral("[恢复] 同音源新直链从 %1ms 续播").arg(failedPos));
+                } else {
+                    d->recoverStage = Impl::RecoverStage::Alternate;
+                    startAlternateFallback(song, failedPos, msg);
+                }
+            });
+        return;
+    }
+
+    // 3) 新直链还不行（或非曲中失败）：走原来的换源流程，并按真实提供者扣分。
+    d->recoverStage = Impl::RecoverStage::Alternate;
+    startAlternateFallback(song, failedPos, msg);
+}
+
+void AppController::startAlternateFallback(const Song &song, qint64 failedPos, const QString &msg)
+{
+    const bool midStream = failedPos >= 15000;
+    const QString brief = QStringLiteral("播放失败");
     if (!d->playingEngine.isEmpty()) {
         // 直链由「脚本 × 平台」提供：重度扣分并记本首坏候选，让换源优先选别的
         ScriptSourceManager::instance()->reportResult(
@@ -1545,33 +1610,16 @@ void AppController::onPlayerError(const QString &msg)
                                     .arg(d->playingEngine, d->playingKey);
     } else if (!d->playingProviderSource.isEmpty()
                && d->playingProviderSource != QLatin1String("custom")) {
-        // 直链由内置平台提供：普通失败降一位；曲中断流直接沉底（promoteSource 可拉回）
         if (midStream)
             SourceManager::instance()->penalizeSource(d->playingProviderSource);
         else
             SourceManager::instance()->demoteSource(d->playingProviderSource);
     }
-    d->pendingEngine.clear();
-    d->pendingKey.clear();
-    Logger::write(QStringLiteral("W"),
-                  QStringLiteral("播放失败：%1 - %2（%3）").arg(song.title, song.artist, msg));
-    if (song.title.isEmpty() || d->inFallback) {
-        setStatus(msg);
-        // 换源解析/播放期间，被 stop 掉的旧流会持续投递迟到的 error（真机日志里
-        // 同一秒刷了 20+ 条 "Demuxing failed"）。此时弹「播放失败」是误导——换源
-        // 很可能马上成功。真正的失败由 resolveAlternate 的失败回调 autoAdvanceAfterFailure
-        // 统一提示；这里只更新状态栏，不弹 toast。
-        return;
-    }
     d->inFallback = true;
     // 换源解析期间暂停看门狗：脚本逐源取链每个可达 15s，若继续按旧源的起播时刻
     // 计时，会在换源尚未完成时误报「加载超时」（实测 16s 假超时）。
-    // 新源 playUrl() 会重新拉起看门狗并按新源重置基准。
     PlayerController::instance()->pauseWatchdog();
-    // 动态权重：原平台的降权已按真实提供者（playingProviderSource）在上方处理；
-    // 这里不再额外降 song.source —— 换源成功时真正提供直链的往往不是它。
     const quint64 gen = ++d->fallbackGen;
-    // 跳过：原平台（它已失败）+ 本次换源流程里已经试过的候选源。
     const QStringList exclude = QStringList() << song.source << d->triedFallback.values();
     qWarning().noquote() << QStringLiteral("[换源] 播放出错，开始换源：%1 - %2（源=%3 inFallback=%4 已试=%5）")
                                 .arg(song.title, song.artist, song.source)
@@ -1581,13 +1629,9 @@ void AppController::onPlayerError(const QString &msg)
         [this, gen, msg, song, brief, failedPos](const Playable &r) {
             if (gen != d->fallbackGen) return;     // 期间用户已切到别的歌，丢弃迟到结果
             if (r.ok) {
-                d->consecutiveFailures = 0;        // 换源后能播了，失败链结束
-                // custom 不能在这里记「已试」：脚本层内部有十几个候选，这一条播不出来
-                // 还要继续试下一个；真正去重由 ScriptSource 的坏候选名单负责。
-                // 内置平台没有候选链，试过就不再试。
+                d->consecutiveFailures = 0;
                 if (r.source != QLatin1String("custom"))
                     d->triedFallback.insert(r.source);
-                // 成功源置顶：custom 永远最前，内置平台按序排到第一。
                 SourceManager::instance()->promoteSource(r.source);
                 d->substituteBadge = r.substituted
                         ? (song.vip ? QStringLiteral("VIP 替代 · %1").arg(r.substituteSource)
@@ -1596,25 +1640,18 @@ void AppController::onPlayerError(const QString &msg)
                 d->currentSourceLabel = SourceConfig::instance()->nameOf(song.source)
                         + (r.source == QLatin1String("custom")
                                ? QString() : QStringLiteral(" → %1").arg(r.substituteSource));
-                // 换源（含脚本层多候选）成功后同样要记提供者：真的播出来才补记成功分
                 d->pendingEngine = r.engineId;
                 d->pendingKey = r.platformKey;
                 d->playingEngine = r.engineId;
                 d->playingKey = r.platformKey;
                 d->playingProviderSource = r.engineId.isEmpty()
                         ? (r.source.isEmpty() ? song.source : r.source) : QString();
-                // 放开 inFallback：若本次换源播放仍失败，errorOccurred 会再次进来试下一源；
-                // 试过的源已记入 triedFallback，不会重复，也不会死循环。
                 d->inFallback = false;
-                // 从断流位置续播，而不是从头开始；新源正在加载，Loaded/Buffered 后
-                // 由 PlayerController 的 m_pendingSeek 一次性 setPosition 到 failedPos
                 PlayerController::instance()->playUrl(r.url, r.headers, failedPos);
                 Library::instance()->addHistory(song);
                 setStatus(r.message.isEmpty()
                               ? QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist)
                               : r.message);
-                // 换源成功只写状态栏 / 日志，不再弹提示：像「已由自定义音源「X」替代播放」
-                // 这类信息属于正常链路，弹出来只是噪音（播放条上的替代徽标已经说明了）
                 Logger::write(QStringLiteral("I"),
                               QStringLiteral("换源成功：%1 - %2 → %3")
                                   .arg(song.title, song.artist, r.source));

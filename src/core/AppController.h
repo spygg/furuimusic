@@ -455,6 +455,8 @@ private:
     void onRecommendationNeeded();
     // 播放（已取到直链但播不出来）失败：逐源换源重试，成功源置顶。d->inFallback 防重入。
     void onPlayerError(const QString &msg);
+    // 曲中断流的最后一级恢复：换源（带音源扣分），从断点续播
+    void startAlternateFallback(const Song &song, qint64 failedPos, const QString &msg);
     // 所有音源都失败后的统一处理：自动跳到下一首（连续失败数达到队列长度则停下并提示），
     // 供「取链全失败」和「换源播放全失败」两条路径共用。
     void autoAdvanceAfterFailure(const QString &songLabel, const QString &msg,

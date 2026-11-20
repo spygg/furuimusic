@@ -392,6 +392,17 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers, qint
     emit stateChanged();
 }
 
+void PlayerController::restartCurrent(qint64 resumeMs)
+{
+    if (m_currentUrl.isEmpty())
+        return;
+    // playUrl 会重置缓冲/看门狗/续播点并 stop+setSource，等价于强制重新拉流。
+    // 注意必须在传参时先拷贝：playUrl 内部会给 m_currentUrl/m_headers 重新赋值。
+    const QUrl url = m_currentUrl;
+    const QVariantMap headers = m_headers;
+    playUrl(url, headers, resumeMs);
+}
+
 void PlayerController::fetchWithHeaders()
 {
     if (!m_currentUrl.isValid() || m_headers.isEmpty()) return;
@@ -680,12 +691,13 @@ void PlayerController::onWatchdog()
         }
         return;
     }
-    // 中途停滞超过 15s 仍不动：判播放失败，交上层换源 / 跳下一首
-    if (now - m_stallSince >= 15000) {
+    // 中途停滞超过 10s 仍不动：先交给上层做「原链接重连/同音源重新取链」自愈，
+    // 前两级失败才会换源。原来直接 15s 就判失败并扣分，一次网络抖动就会把好源打下去。
+    if (now - m_stallSince >= 10000) {
         m_watchdog->stop();
-        qWarning("看门狗：播放停滞 %lldms：%s", now - m_stallSince,
+        qWarning("播放停滞 %lldms：%s", now - m_stallSince,
                  qUtf8Printable(current().title));
-        emit errorOccurred(QStringLiteral("播放中断，正在尝试其它音源"));
+        emit errorOccurred(QStringLiteral("播放中断，正在尝试恢复"));
     }
 }
 
