@@ -35,8 +35,14 @@ Item {
     //      这样竖屏与横屏呈现明显不同的自适应布局，而非把竖屏布局强行拉伸。
     // 用窗口自身的形状而不是 Screen.orientation：车机分屏时设备仍是横屏，
     // 但窗口可能只剩一个竖长条，按屏幕方向会错判成横屏双栏。
-    readonly property bool wide: (root.width >= root.height ? root.width >= 520
-                                                            : root.width >= 760)
+    readonly property bool wide: root.width >= root.height
+                                 ? (root.height < 420 ? root.width >= 520
+                                                      : root.width >= 760)
+                                 : root.width >= 760
+    // 中等宽度的横屏窗口（车机分屏：约 560×500）：双栏会把封面和歌词各挤成一条，
+    // 改走单栏 pager，一次只显示封面或歌词（与竖屏一致，左右滑动切换）。
+    // 矮横屏(<420)没有可用单栏高度，仍保留双栏，否则 compactTiny 会把封面/歌词全部隐藏。
+    readonly property bool splitSingle: !root.wide && root.width >= root.height
     // 宽窄形态切换时收起音量弹层：两个形态各有一个弹层实例，切换后旧实例已隐藏，
     // 不复位会让新形态的弹层莫名保持展开
     onWideChanged: volumePopupOpen = false
@@ -439,15 +445,19 @@ Item {
                     // 填掉高屏上封面与页底之间的空白（封面边长封顶 300）
                     Item {
                         id: compactCoverPage
-                        // 封面边长：不超过页宽 92%、页高扣除歌词行，封顶 300，保持正方形
+                        // 封面边长：不超过页宽 92%、页高扣除歌词行，封顶 300，保持正方形。
+                        // 分屏单栏没有下方歌词 peek，把那 64dp 还给封面。
+                        readonly property real peekH: root.splitSingle ? 0 : 64
                         readonly property real coverSide: Math.min(parent.width * 0.92,
-                                                                   parent.height - 64, 300)
+                                                                   parent.height - peekH, 300)
                         Item {
                             id: compactCoverSlot
                             anchors.horizontalCenter: parent.horizontalCenter
                             // 封面 + 歌词作为一组在页内垂直居中，避免封面顶天、歌词贴底
                             anchors.top: parent.top
-                            anchors.topMargin: Math.max(0, (compactCoverPage.height - compactCoverPage.coverSide - 64) / 2)
+                            anchors.topMargin: Math.max(0, (compactCoverPage.height
+                                                            - compactCoverPage.coverSide
+                                                            - compactCoverPage.peekH) / 2)
                             width: compactCoverPage.coverSide
                             height: compactCoverPage.coverSide
                             Loader { anchors.fill: parent; sourceComponent: coverComp }
@@ -460,8 +470,8 @@ Item {
                             anchors.topMargin: 8
                             width: parent.width * 0.88
                             height: 48
-                            // 只有真的有歌词时才显示（currentLyricLine 无歌词会返回「暂无歌词」）
-                            visible: app.lyricsTimed || app.lyricsText.length > 0
+                            // 分屏单栏时封面页不再附歌词行，与歌词页真正「二选一」
+                            visible: !root.splitSingle && (app.lyricsTimed || app.lyricsText.length > 0)
                             Text {
                                 anchors.fill: parent
                                 text: app.currentLyricLine.length > 0
