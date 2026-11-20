@@ -78,13 +78,19 @@ Item {
             radius: 10
             color: hovered ? root.cChipHover : "transparent"
         }
-        onClicked: {
-            qishuiModeMenu.close()
-            if (modeKey !== "") {
-                qishuiModeCombo.currentIndex = modeIndex
-                app.loadQishuiRecommend(modeKey, "")
-            } else if (categoryKey !== "") {
-                app.loadQishuiRecommend(qishuiModeCombo.model[qishuiModeCombo.currentIndex].key, categoryKey)
+        // MenuItem 的 onClicked 在这套自定义 contentItem/background 下偶发不投递，
+        // 用整项覆盖的 MouseArea 兜底，确保菜单点选一定生效。
+        MouseArea {
+            anchors.fill: parent
+            z: 2
+            onClicked: {
+                qishuiModeMenu.close()
+                if (modeKey !== "") {
+                    qishuiModeCombo.currentIndex = modeIndex
+                    app.loadQishuiRecommend(modeKey, "")
+                } else if (categoryKey !== "") {
+                    app.loadQishuiRecommend(qishuiModeCombo.model[qishuiModeCombo.currentIndex].key, categoryKey)
+                }
             }
         }
     }
@@ -1306,6 +1312,63 @@ Item {
                                                 onClicked: app.loadQishuiRecommend(
                                                     qishuiModeCombo.model[qishuiModeCombo.currentIndex].key,
                                                     modelData)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: "推荐歌单"
+                                color: cSub
+                                font.pixelSize: theme.fontSm
+                                visible: qishuiPlaylistRepeater.count > 0
+                            }
+                            Flickable {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 92
+                                contentWidth: qishuiPlaylistRow.implicitWidth
+                                clip: true
+                                visible: qishuiPlaylistRepeater.count > 0
+                                Row {
+                                    id: qishuiPlaylistRow
+                                    spacing: 8
+                                    Repeater {
+                                        id: qishuiPlaylistRepeater
+                                        model: app.discovery
+                                        delegate: Rectangle {
+                                            width: 92
+                                            height: 86
+                                            radius: 10
+                                            color: cCard
+                                            border.color: cLine
+                                            clip: true
+                                            Image {
+                                                anchors.fill: parent
+                                                source: model.cover
+                                                fillMode: Image.PreserveAspectCrop
+                                                asynchronous: true
+                                            }
+                                            Rectangle {
+                                                anchors.left: parent.left
+                                                anchors.right: parent.right
+                                                anchors.bottom: parent.bottom
+                                                height: 26
+                                                color: Qt.rgba(0, 0, 0, 0.55)
+                                                Text {
+                                                    anchors.centerIn: parent
+                                                    width: parent.width - 8
+                                                    text: model.title
+                                                    color: "#FFFFFF"
+                                                    font.pixelSize: theme.fontXs
+                                                    elide: Text.ElideRight
+                                                    horizontalAlignment: Text.AlignHCenter
+                                                }
+                                            }
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: root.openDiscovery(model.title, model.uid)
                                             }
                                         }
                                     }

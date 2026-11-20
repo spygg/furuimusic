@@ -956,17 +956,31 @@ void AppController::loadQishuiRecommend(const QString &mode, const QString &cate
 
     // 场景子领域：用场景词直接搜歌（web 端点可用，官方私有 feed API 需设备签名）
     if (!category.trimmed().isEmpty()) {
+        const QString kw = category.trimmed();
+        // 榜单照常加载：即使场景词搜不到歌，也别让用户面对空白页
+        SourceManager::instance()->rank(QStringLiteral("qishui"), 30,
+            [this, gen](const QVector<Playlist> &list) {
+                if (gen != d->qishuiGen || list.isEmpty()) return;
+                m_discovery->setPlaylists(list);
+                emit discoveryChanged();
+            });
         // 实测 /luna/pc/search/track 匿名返回 HTTP 200 空响应（不是报错），
-        // 必须带登录态 Cookie——先预检，避免用户看到「检查网络」的误导提示
+        // 必须带登录态 Cookie——未登录时退回推荐歌单的歌，并给出明确提示
         const Account qsAcct = AuthManager::instance()->account(QStringLiteral("qishui"));
         if (!qsAcct.logged || qsAcct.cookie.isEmpty()) {
-            d->discoveryLoading = false;
-            emit discoveryChanged();
-            setStatus(QStringLiteral("「%1」需要汽水登录：设置 → 账号 → 汽水音乐 填入 Cookie")
-                          .arg(category.trimmed()));
+            SourceManager::instance()->rank(QStringLiteral("qishui"), 30,
+                [this, gen, done, kw](const QVector<Playlist> &list) {
+                    if (gen != d->qishuiGen) return;
+                    setStatus(QStringLiteral("「%1」需要汽水登录才有多场景歌曲；已显示推荐内容")
+                                  .arg(kw));
+                    if (list.isEmpty()) { done(QVector<Song>(), kw); return; }
+                    m_discovery->setPlaylists(list);
+                    emit discoveryChanged();
+                    SourceManager::instance()->playlistDetail(list.first(),
+                        [done, kw](const QVector<Song> &songs) { done(songs, kw); });
+                });
             return;
         }
-        const QString kw = category.trimmed();
         SourceManager::instance()->search(kw, QStringLiteral("qishui"), 60,
             [done, kw](const QVector<Song> &songs) { done(songs, kw); });
         return;
@@ -974,27 +988,62 @@ void AppController::loadQishuiRecommend(const QString &mode, const QString &cate
 
     const QString m = d->qishuiRecommendMode;
     if (m == QLatin1String("familiar") || m == QLatin1String("fresh")) {
-        // 熟悉/新鲜：以本地历史/收藏为种子做相似推荐（官方私有 API 需设备签名，
-        // 这里用已可用的 web 相似接口近似：熟悉扩列 / 新鲜发现）。
-        QVector<Song> seeds;
-        const QVector<Song> hist = Library::instance()->history(8);
-        const QVector<Song> fav = Library::instance()->favorites();
-        if (m == QLatin1String("familiar")) {
-            for (int i = 0; i < fav.size() && seeds.size() < 3; ++i) seeds.append(fav.at(i));
-            for (int i = 0; i < hist.size() && seeds.size() < 3; ++i) seeds.append(hist.at(i));
-        } else {
-            for (int i = hist.size() - 1; i >= 0 && seeds.size() < 2; --i) seeds.append(hist.at(i));
-        }
+        // 熟悉/新鲜：以收藏/历史/当前队列为种子做相似推荐（官方私有 API 需设备签名，
+        // 这里用已可用的 web 相似接口近似）。没有本地种子时回退到推荐歌单，
+        // 避免新用户/未登录用户点了模式却是「0 首 + 没有榜单」。
         const QString label = m == QLatin1String("familiar")
                             ? QStringLiteral("熟悉模式") : QStringLiteral("新鲜模式");
-        if (seeds.isEmpty()) { done(QVector<Song>(), label); return; }
+        QVector<Song> seeds;
+        QSet<QString> seedUids;
+        const QVector<Song> hist = Library::instance()->history(8);
+        const QVector<Song> fav = Library::instance()->favorites();
+        const QVector<Song> queue = PlayerController::instance()->queue();
+        auto addSeeds = [&seeds, &seedUids](const QVector<Song> &src, int max) {
+            for (int i = 0; i < src.size() && seeds.size() < max; ++i) {
+                if (seedUids.contains(src.at(i).uid)) continue;
+                seedUids.insert(src.at(i).uid);
+                seeds.append(src.at(i));
+            }
+        };
+        if (m == QLatin1String("familiar")) {
+            addSeeds(fav, 3);
+            addSeeds(hist, 3);
+        } else {
+            for (int i = hist.size() - 1; i >= 0 && seeds.size() < 2; --i)
+                addSeeds(QVector<Song>() << hist.at(i), 2);
+        }
+        addSeeds(queue, 3);
+
+        // 榜单与歌曲分开加载：任何模式都要有「推荐歌单」可看
+        SourceManager::instance()->rank(QStringLiteral("qishui"), 30,
+            [this, gen](const QVector<Playlist> &list) {
+                if (gen != d->qishuiGen || list.isEmpty()) return;
+                m_discovery->setPlaylists(list);
+                emit discoveryChanged();
+            });
+
+        // 无种子 / 相似推荐全空时的统一兜底：取推荐歌单第一份的歌
+        auto fallbackToRank = [this, gen, done, label] {
+            SourceManager::instance()->rank(QStringLiteral("qishui"), 30,
+                [this, gen, done, label](const QVector<Playlist> &list) {
+                    if (gen != d->qishuiGen) return;
+                    if (list.isEmpty()) { done(QVector<Song>(), label); return; }
+                    m_discovery->setPlaylists(list);
+                    emit discoveryChanged();
+                    SourceManager::instance()->playlistDetail(list.first(),
+                        [done, label](const QVector<Song> &songs) { done(songs, label); });
+                });
+        };
+
+        if (seeds.isEmpty()) { fallbackToRank(); return; }
 
         auto out = std::make_shared<QVector<Song>>();
         auto left = std::make_shared<int>(seeds.size());
+        auto finished = std::make_shared<bool>(false);
         for (const Song &seed : seeds) {
             SourceManager::instance()->related(seed, m == QLatin1String("fresh") ? 40 : 25,
-                [this, gen, done, out, left, seeds, label](const QVector<Song> &list) {
-                    if (gen != d->qishuiGen) return;
+                [this, gen, done, out, left, seeds, label, finished, fallbackToRank](const QVector<Song> &list) {
+                    if (gen != d->qishuiGen || *finished) return;
                     QSet<QString> known;
                     for (const Song &s : seeds) known.insert(s.uid);
                     for (const Song &s : *out) known.insert(s.uid);
@@ -1004,6 +1053,8 @@ void AppController::loadQishuiRecommend(const QString &mode, const QString &cate
                         out->append(s);
                     }
                     if (--(*left) == 0) {
+                        *finished = true;
+                        if (out->isEmpty()) { fallbackToRank(); return; }
                         std::sort(out->begin(), out->end(), [](const Song &a, const Song &b) {
                             return a.title < b.title;
                         });
