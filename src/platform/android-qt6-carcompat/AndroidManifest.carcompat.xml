@@ -1,0 +1,137 @@
+<?xml version="1.0"?>
+<!-- 车机兼容版专用 manifest（仅测试用，不随主流版发布）。
+
+     与 platform/android-qt6/AndroidManifest.xml 的差异只有两处：
+       1) package="com.netease.cloudmusic" —— 伪装成网易云包名。
+          androiddeployqt 按 manifest 的 package 属性写 gradle 的
+          androidPackageName（namespace/applicationId），所以换 manifest 即完成
+          包名伪装，小迪按「发送方真实包名」查白名单就会放行。
+       2) 新增 cn.furui.music.BydControlReceiver —— 网易云车机版同款 34 个
+          com.byd.action.* / byd.intent.action.* 命令入口。
+
+     其余内容（权限/Activity/Service/Provider/背景事件开关）必须与主流版
+     manifest 保持一致，发现主流 manifest 有改动时同步过来。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.netease.cloudmusic"
+    android:installLocation="auto"
+    android:versionCode="-- %%INSERT_VERSION_CODE%% --"
+    android:versionName="-- %%INSERT_VERSION_NAME%% --">
+    <!-- %%INSERT_PERMISSIONS -->
+    <!-- %%INSERT_FEATURES -->
+    <supports-screens
+        android:anyDensity="true"
+        android:largeScreens="true"
+        android:normalScreens="true"
+        android:smallScreens="true"
+        android:xlargeScreens="true" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <application
+        android:name="org.qtproject.qt.android.bindings.QtApplication"
+        android:hardwareAccelerated="true"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true"
+        android:enableOnBackInvokedCallback="false"
+        android:allowBackup="true"
+        android:resizeableActivity="true"
+        android:fullBackupOnly="false">
+        <meta-data
+            android:name="android.app.background_running"
+            android:value="true" />
+        <activity
+            android:name="cn.furui.music.FuruiActivity"
+            android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:screenOrientation="sensorLandscape"
+            android:windowSoftInputMode="adjustResize"
+            android:resizeableActivity="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+          <meta-data
+                android:name="android.app.lib_name"
+                android:value="-- %%INSERT_APP_LIB_NAME%% --" />
+
+          <meta-data
+                android:name="android.app.arguments"
+                android:value="-- %%INSERT_APP_ARGUMENTS%% --" />
+
+          <meta-data
+                android:name="android.app.background_running"
+                android:value="true" />
+        </activity>
+
+        <service
+            android:name="cn.furui.music.MediaSessionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <receiver
+            android:name="cn.furui.music.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- BYD 小迪语音命令入口：与网易云车机版同款 34 个 action。
+             priority 拉满保证车机发广播时我们先于其他组件收到。 -->
+        <receiver
+            android:name="cn.furui.music.BydControlReceiver"
+            android:exported="true">
+            <intent-filter android:priority="2147483646">
+                <action android:name="com.byd.action.FUNCTION_UPDATE_RESULT" />
+                <action android:name="byd.intent.action.MEDIA_BUTTON" />
+                <action android:name="byd.intent.action.MEDIA_MODE" />
+                <action android:name="com.byd.action.AUTOVOICE_SEARCH_PLUS" />
+                <action android:name="com.byd.action.AUTOVOICE_COLLECT" />
+                <action android:name="com.byd.action.AUTOVOICE_UNCOLLECT" />
+                <action android:name="com.byd.action.AUTOVOICE_REWIND" />
+                <action android:name="com.byd.action.AUTOVOICE_FORWARD" />
+                <action android:name="com.byd.action.AUTOVOICE_PLAY_MODE" />
+                <action android:name="com.byd.action.AUTOVOICE_OPEN_LIST" />
+                <action android:name="com.byd.action.AUTOVOICE_CLOSE_LIST" />
+                <action android:name="com.byd.action.AUTOVOICE_QUIT" />
+                <action android:name="com.byd.action.AUTOVOICE_PLAY_LIKE" />
+                <action android:name="com.byd.action.AUTOVOICE_RECOMMEND" />
+                <action android:name="com.byd.action.AUTOVOICE_PLAY_FAVORITE" />
+                <action android:name="com.byd.action.AUTOVOICE_PLAY_SONG_SHEET" />
+                <action android:name="com.byd.action.AUTOVOICE_PLAY_LATELY" />
+                <action android:name="com.byd.action.AUTOVOICE_PLAY_RANDOM" />
+                <action android:name="com.byd.action.AUTOVOICE_BOOK" />
+                <action android:name="com.byd.action.AUTOVOICE_UNBOOK" />
+                <action android:name="com.byd.action.AUTOVOICE_OPEN_LYRIC" />
+                <action android:name="com.byd.action.AUTOVOICE_CLOSE_LYRIC" />
+                <action android:name="com.byd.action.AUTOVOICE_JUMP_TO" />
+                <action android:name="com.byd.action.AUTOVOICE_FULL_SCREEN" />
+                <action android:name="com.byd.action.AUTOVOICE_UNFULL_SCREEN" />
+                <action android:name="com.byd.action.AUTOVOICE_SPEED_ADJUST" />
+                <action android:name="com.byd.action.AUTOVOICE_SKIP_TITLE" />
+                <action android:name="com.byd.action.AUTOVOICE_SKIP_END" />
+                <action android:name="com.byd.action.AUTOVOICE_DOWNLOAD" />
+                <action android:name="com.byd.action.AUTOVOICE_UNDOWNLOAD" />
+                <action android:name="com.byd.action.AUTOVOICE_DEFINITION_SET" />
+                <action android:name="com.byd.action.AUTOVOICE_QUALITY" />
+                <action android:name="com.byd.action.AUTOVOICE_PLAY_BOOK" />
+                <action android:name="com.byd.action.AUTOVOICE_PLAY_DOWNLOAD" />
+            </intent-filter>
+        </receiver>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.qtprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/qtprovider_paths"/>
+        </provider>
+    </application>
+</manifest>

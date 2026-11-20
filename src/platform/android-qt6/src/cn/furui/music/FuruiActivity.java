@@ -3,11 +3,29 @@
 // hwuiTask 线程 SIGABRT」的问题。不改任何行为，只打日志。
 package cn.furui.music;
 
+import android.os.Bundle;
 import android.view.KeyEvent;
 import android.util.Log;
 
 public class FuruiActivity extends org.qtproject.qt.android.bindings.QtActivity
 {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        // 车机兼容版挂钩：该变体（applicationId 伪装包名）在 dex 里额外包含
+        // BydVoiceHelper，用于向比亚迪小迪语音登记；主流版不含此类，
+        // Class.forName 落空 → no-op，两个版本共用这份源码。
+        try {
+            Class<?> helper = Class.forName("cn.furui.music.BydVoiceHelper");
+            helper.getMethod("register", android.content.Context.class)
+                  .invoke(null, this);
+        } catch (ClassNotFoundException | NoSuchMethodException ignored) {
+            // 主流版：无 BYD 对接类，静默跳过
+        } catch (Throwable t) {
+            Log.w("FuruiBack", "car compat hook failed", t);
+        }
+    }
+
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         final int code = event.getKeyCode();

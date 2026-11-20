@@ -219,8 +219,28 @@ if(ANDROID)
     # 这里显式传进去，保证「应用关于页显示的版本 = git tag」。
     math(EXPR FURUI_ANDROID_VERSION_CODE
          "${PROJECT_VERSION_MAJOR} * 10000 + ${PROJECT_VERSION_MINOR} * 100 + ${PROJECT_VERSION_PATCH}")
+    # 车机兼容版（仅测试）：-DFURUI_ANDROID_CAR_COMPAT=ON 出伪装包名的 APK。
+    # 用暂存目录做覆盖：基准包资源目录 + 换 manifest（包名 com.netease.cloudmusic
+    # + BYD 命令入口）+ 追加 Byd*.java。androiddeployqt 按 manifest 的 package
+    # 属性写 gradle 的 androidPackageName（namespace/applicationId），换 manifest
+    # 即完成包名伪装。主流构建（默认 OFF）路径完全不变。
+    option(FURUI_ANDROID_CAR_COMPAT
+           "车机兼容测试版：包名伪装 com.netease.cloudmusic + BYD 小迪语音对接" OFF)
+    set(FURUI_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6")
+    if(FURUI_ANDROID_CAR_COMPAT)
+        set(FURUI_STAGED_PACKAGE_DIR "${CMAKE_BINARY_DIR}/android-package-src")
+        file(COPY "${FURUI_PACKAGE_SOURCE_DIR}/" DESTINATION "${FURUI_STAGED_PACKAGE_DIR}")
+        file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6-carcompat/AndroidManifest.carcompat.xml"
+             DESTINATION "${FURUI_STAGED_PACKAGE_DIR}")
+        file(RENAME "${FURUI_STAGED_PACKAGE_DIR}/AndroidManifest.carcompat.xml"
+                    "${FURUI_STAGED_PACKAGE_DIR}/AndroidManifest.xml")
+        file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6-carcompat/src/"
+             DESTINATION "${FURUI_STAGED_PACKAGE_DIR}/src")
+        set(FURUI_PACKAGE_SOURCE_DIR "${FURUI_STAGED_PACKAGE_DIR}")
+        message(STATUS "车机兼容测试版：包名 com.netease.cloudmusic，BYD 对接已启用")
+    endif()
     set_target_properties(FuruiMusic PROPERTIES
-        QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6"
+        QT_ANDROID_PACKAGE_SOURCE_DIR "${FURUI_PACKAGE_SOURCE_DIR}"
         QT_ANDROID_VERSION_NAME "${PROJECT_VERSION}"
         QT_ANDROID_VERSION_CODE ${FURUI_ANDROID_VERSION_CODE}
         QT_ANDROID_MIN_SDK_VERSION 23

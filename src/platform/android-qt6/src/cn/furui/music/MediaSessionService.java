@@ -108,6 +108,7 @@ public class MediaSessionService extends Service {
             service.pushSessionState();
             service.refreshNotification();
         }
+        notifyCarVoiceCompat();
     }
 
     public static void updatePlayback(boolean playing, long position) {
@@ -118,6 +119,7 @@ public class MediaSessionService extends Service {
             service.pushSessionState();
             service.refreshNotification();
         }
+        notifyCarVoiceCompat();
     }
 
     /** 应用内已无播放内容（如清空队列）时收起通知并退出。 */
@@ -327,6 +329,29 @@ public class MediaSessionService extends Service {
     @Override
     public IBinder onBind(Intent intent) {
         return null;
+    }
+
+    // 车机兼容版挂钩：BYD 小迪语音需要状态上报。主流版没有 BydVoiceHelper
+    // 类，反射落空即 no-op。
+    private static void notifyCarVoiceCompat() {
+        try {
+            Class<?> helper = Class.forName("cn.furui.music.BydVoiceHelper");
+            helper.getMethod("notifyState", Context.class, boolean.class,
+                            String.class, String.class)
+                  .invoke(null, null, sPlaying, sTitle, sArtist);
+        } catch (ClassNotFoundException | NoSuchMethodException ignored) {
+            // 主流版：无 BYD 对接类，静默跳过
+        } catch (Throwable t) {
+            Log.w(TAG, "car compat notify failed", t);
+        }
+    }
+
+    /** 相对进度跳转（秒级快进/快退）；车机语音等外部控制使用。 */
+    public static void seekBy(long deltaMs) {
+        long target = sPosition + deltaMs;
+        if (sDuration > 0)
+            target = Math.min(target, sDuration - 500);
+        sendCommand(CMD_SEEK, Math.max(0, target));
     }
 
     // 车机实体媒体键：部分车机（比亚迪等）把 NEXT/PREV 当作普通 KeyEvent

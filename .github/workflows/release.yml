@@ -259,12 +259,30 @@ jobs:
   # 直接用仓库内的 src/scripts/build_android.sh 完成 CMake 配置与 make_apk。
   # Qt 6 的 CMake 流程不签名（只交 android-build-release-unsigned.apk），
   # 这里用 CI 现场生成的 debug keystore 做 zipalign + apksigner，并 verify 复检。
-  # 注意：Android job 尚未实机跑通，请先手动 workflow_dispatch 验证再打 tag。
+  # 矩阵出两个变体：mainstream（cn.furui.music）与 carcompat（比亚迪特供，
+  # 包名伪装 com.netease.cloudmusic + BYD 小迪语音对接；与主流版互不可覆盖
+  # 安装，必须单独安装。详见 src/CMakeLists.txt 的 FURUI_ANDROID_CAR_COMPAT）。
   # ==========================================================================
   build-android:
-    name: Android arm64-v8a
+    name: ${{ matrix.variant.label }}
     runs-on: ubuntu-22.04
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - name: mainstream
+            label: Android arm64-v8a
+            car: ''
+            artifact: FuruiMusic-android-arm64-v8a.apk
+            group: android-arm64-v8a
+            pkg: cn.furui.music
+          - name: carcompat
+            label: Android arm64-v8a (BYD 车机特供)
+            car: '1'
+            artifact: FuruiMusic-carcompat-netease-arm64-v8a.apk
+            group: android-carcompat-arm64-v8a
+            pkg: com.netease.cloudmusic
     env:
       # Qt 6.8.3 与 macOS job 同版，install-qt-action 可直接安装；本机脚本默认
       # 6.11.1 + NDK 27，CI 通过环境变量覆盖成这一套已发布的兼容组合。
@@ -272,7 +290,7 @@ jobs:
       ANDROID_BUILD_TOOLS: '35.0.0'
       ANDROID_PLATFORM: 'android-35'
       ANDROID_NDK_VER: '26.1.10909125'
-      ARTIFACT_NAME: FuruiMusic-android-arm64-v8a.apk
+      ARTIFACT_NAME: ${{ matrix.variant.artifact }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -343,6 +361,9 @@ jobs:
           export QT_HOST="$QT_ROOT_DIR"
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/$ANDROID_NDK_VER"
+          # BYD 车机特供变体：脚本内部切到 build/android_qt6_carcompat 并加
+          # -DFURUI_ANDROID_CAR_COMPAT=ON（换 manifest 完成包名伪装）
+          export FURUI_CAR_COMPAT="${{ matrix.variant.car }}"
           test -f "$QT_ANDROID/bin/qt-cmake" || { echo "::error::Qt Android kit 未就位"; exit 1; }
           bash src/scripts/build_android.sh
 
@@ -350,10 +371,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          unsigned="$(find build/android_qt6/android-build -name '*release*unsigned*.apk' -print -quit)"
+          # 两个变体的构建目录不同（android_qt6 / android_qt6_carcompat），
+          # 但 job 各自有独立 workspace，直接全树找未签名 APK 即可
+          unsigned="$(find build -path '*android-build*' -name '*release*unsigned*.apk' -print -quit)"
           if [ -z "$unsigned" ]; then
             echo "::error::没找到 Qt 产出的未签名 release APK"
-            find build/android_qt6 -name '*.apk' -print
+            find build -name '*.apk' -print
             exit 1
           fi
           echo "未签名 APK: $unsigned"
@@ -376,13 +399,16 @@ jobs:
           # 就是这样一启动就崩）。这里在产物上复检，缺了就中断发布。
           "$BT/aapt2" dump resources "$ARTIFACT_NAME" | grep -q 'static_init_classes' \
             || { echo "::error::APK 缺少 static_init_classes 资源，Qt 6.8 运行时会启动崩溃"; exit 1; }
+          # 防混包守卫：两个变体只差包名，发错文件在线升级和伪装都会翻车
+          "$BT/aapt2" dump badging "$ARTIFACT_NAME" | grep -q "package: name='${{ matrix.variant.pkg }}'" \
+            || { echo "::error::APK 包名不是 ${{ matrix.variant.pkg }}，变体产物混了"; exit 1; }
           test -s "$ARTIFACT_NAME"
           ls -la "$ARTIFACT_NAME"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-arm64-v8a
+          name: ${{ matrix.variant.group }}
           path: ${{ env.ARTIFACT_NAME }}
           if-no-files-found: error
 
