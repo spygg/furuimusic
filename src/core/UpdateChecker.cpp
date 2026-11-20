@@ -7,8 +7,10 @@
 
 #include "AppController.h"
 #include "HttpClient.h"
+#include "Logger.h"
 #include "Version.h"
 
+#include <QElapsedTimer>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -19,6 +21,9 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QUrl>
+
+#include <climits>
+#include <algorithm>
 
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QJniObject>
@@ -83,6 +88,29 @@ QString platformKey()
 #else
     return QStringLiteral("linux");
 #endif
+}
+
+// GitHub Releases 在国内直连经常慢/超时/打不开。这里维护一组公开可用的
+// 反向代理前缀，下载前用 Range 探测挑选当前网络下最快且返回真 APK 的一个。
+// 约定用法是「前缀 + 完整原始 github.com URL」（不是替换 github.com 主机）。
+// 2026-11-20 实测可用：gh-proxy.com / gh-proxy.org / ghproxy.net / ghfast.top /
+// githubproxy.cc；ghproxy.cn / ghproxylist.com 返回 HTML 错误页（探测时靠 PK
+// 文件头挡掉），故未收录。gh.llkk.cc / mirror.ghproxy.com 在部分网络下被代理
+// 拒绝但在别处可用，保留为候选。探测是运行时做的，某条失效不影响其它条，
+// 也不写死顺序。
+QStringList githubProxyPrefixes()
+{
+    return {
+        QStringLiteral("https://gh-proxy.com/"),
+        QStringLiteral("https://gh-proxy.org/"),
+        QStringLiteral("https://ghproxy.net/"),
+        QStringLiteral("https://ghfast.top/"),
+        QStringLiteral("https://githubproxy.cc/"),
+        QStringLiteral("https://gh.llkk.cc/"),
+        QStringLiteral("https://mirror.ghproxy.com/"),
+        QStringLiteral("https://github.moeyy.xyz/"),
+        QStringLiteral("https://ghp.ci/"),
+    };
 }
 
 // 点分版本号比较：<0 a 更旧，0 相同，>0 a 更新
@@ -204,6 +232,19 @@ struct UpdateChecker::FetchState {
     QString apiVersion;     // API 给出的 tag（仅 API 路径有值）
     QString bestVersion;    // 已拿到的最高版本
     QJsonObject best;       // 与 bestVersion 对应的清单
+};
+
+// 下载前并行探测镜像的共享状态：pending 归零时挑最快且返回真 APK 的地址。
+// valid=true 表示 HTTP 2xx 且响应体开头是 ZIP 魔数 "PK"（ghproxy.cn 之类
+// 返回 HTML 错误页的会被挡掉）；elapsed 是探测耗时，越小越快。
+struct UpdateChecker::DownloadProbeState {
+    int pending = 0;
+    struct Candidate {
+        QString url;
+        bool valid = false;
+        qint64 elapsedMs = 0;
+    };
+    QList<Candidate> results;
 };
 
 UpdateChecker *UpdateChecker::instance()
@@ -363,6 +404,144 @@ QString UpdateChecker::downloadUrlFor(const QString &version) const
         .arg(version, releaseAssetFor(platformKey()));
 }
 
+// 下载候选地址：清单/默认拼出的 GitHub 原链放首位兜底，再追加各加速前缀 +
+// 完整原链。去重，且只加速 github.com 直链（第三方 CDN 直链不加前缀）。
+QStringList UpdateChecker::downloadCandidates(const QString &version) const
+{
+    const QString original = downloadUrlFor(version);
+    QStringList urls;
+    urls << original;
+    if (original.startsWith(QStringLiteral("https://github.com/"))) {
+        for (const QString &prefix : githubProxyPrefixes()) {
+            const QString mirrored = prefix + original;
+            if (!urls.contains(mirrored))
+                urls << mirrored;
+        }
+    }
+    return urls;
+}
+
+// 并行探测所有候选：Range 取前 2KB，HTTP 2xx 且开头是 "PK" 才算可用。
+// 探测超时 6s（只是取 2KB，6s 还没回包的线路对整包下载也没意义）。
+// 探测期间 progress=-1，UI 显示不确定进度；选出最快可用地址后开始真正下载。
+void UpdateChecker::probeAndDownload(const QStringList &candidates)
+{
+    auto state = std::make_shared<DownloadProbeState>();
+    state->pending = candidates.size();
+    m_progress = -1;
+    emit stateChanged();
+
+    QVariantMap headers;
+    headers.insert(QStringLiteral("User-Agent"), QStringLiteral("Mozilla/5.0"));
+    headers.insert(QStringLiteral("Range"), QStringLiteral("bytes=0-2047"));
+
+    for (const QString &url : candidates) {
+        // 每个候选各自计时，选中耗时最短的可用线路
+        auto clock = std::make_shared<QElapsedTimer>();
+        clock->start();
+        HttpClient::instance()->request(
+            QStringLiteral("GET"), QUrl(url), headers, QByteArray(),
+            [this, state, url, clock, candidates](const HttpClient::Reply &r) {
+                DownloadProbeState::Candidate c;
+                c.url = url;
+                c.valid = r.ok && (r.status == 200 || r.status == 206)
+                          && r.body.size() >= 2 && r.body.at(0) == 'P' && r.body.at(1) == 'K';
+                c.elapsedMs = clock->elapsed();
+                state->results.append(c);
+                const QString verdict = c.valid ? QStringLiteral("OK")
+                                                : QStringLiteral("BAD(status=%1,head=%2)")
+                                                      .arg(r.status)
+                                                      .arg(QString::fromLatin1(r.body.left(4).toHex()));
+                Logger::write(QStringLiteral("I"),
+                              QStringLiteral("[更新探测] %1 -> %2").arg(url, verdict));
+                if (--state->pending > 0)
+                    return;
+                // 全部探测完：挑最快且有效的；没有有效的就退回 GitHub 原链试一次
+                QString best;
+                qint64 bestMs = LLONG_MAX;
+                for (const DownloadProbeState::Candidate &x : state->results) {
+                    if (x.valid && x.elapsedMs < bestMs) {
+                        best = x.url;
+                        bestMs = x.elapsedMs;
+                    }
+                }
+                // 全部探测完：按耗时排序所有可用线路；没有可用的就退回 GitHub 原链试一次。
+                // 下载中途失败时 downloadNextCandidate 会顺着这个队列逐条回退。
+                m_downloadQueue.clear();
+                QList<QPair<qint64, QString>> ranked;
+                for (const DownloadProbeState::Candidate &x : state->results)
+                    if (x.valid)
+                        ranked.append(qMakePair(x.elapsedMs, x.url));
+                std::sort(ranked.begin(), ranked.end(),
+                          [](const QPair<qint64, QString> &a, const QPair<qint64, QString> &b) {
+                              return a.first < b.first;
+                          });
+                for (const QPair<qint64, QString> &x : ranked) {
+                    if (!m_downloadQueue.contains(x.second))
+                        m_downloadQueue << x.second;
+                }
+                if (m_downloadQueue.isEmpty())
+                    m_downloadQueue << (candidates.isEmpty() ? QString() : candidates.first());
+                Logger::write(QStringLiteral("I"),
+                              QStringLiteral("[更新探测] 线路优先级: %1").arg(m_downloadQueue.join(QStringLiteral(" | "))));
+                m_downloadIndex = 0;
+                startDownload(m_downloadQueue.first());
+            }, 6000);
+    }
+}
+
+void UpdateChecker::startDownload(const QString &urlString)
+{
+    const QUrl url(urlString);
+    if (!url.isValid() || url.scheme() != QLatin1String("https")) {
+        m_downloading = false;
+        m_progress = 0;
+        emit stateChanged();
+        emit downloadFailed(QStringLiteral("未找到当前平台的更新包下载地址"));
+        return;
+    }
+    const QString path = targetPath();
+    Logger::write(QStringLiteral("I"), QStringLiteral("[更新下载] 使用线路: %1").arg(urlString));
+    // APK/zip 体积大且用户网络可能较慢：超时放宽到 30 分钟（HttpClient 的超时是整请求硬超时）
+    HttpClient::instance()->download(url, QVariantMap(), path,
+                                     [this, path](bool ok, const QString &error) {
+        if (!ok) {
+            Logger::write(QStringLiteral("W"),
+                          QStringLiteral("[更新下载] 线路失败: %1，尝试下一条").arg(error));
+            downloadNextCandidate(true);
+            return;
+        }
+        m_downloading = false;
+        m_downloadedPath = path;
+        emit stateChanged();
+        emit downloadFinished(path);
+    }, 30 * 60 * 1000, [this](qint64 received, qint64 total) {
+        const int p = total > 0 ? int(received * 100 / total) : -1;
+        if (p != m_progress) {
+            m_progress = p;
+            emit stateChanged();
+        }
+    });
+}
+
+// 下载失败后回退到下一条候选；全部失败才真正报错。
+void UpdateChecker::downloadNextCandidate(bool previousFailed)
+{
+    Q_UNUSED(previousFailed);
+    if (m_downloadIndex + 1 < m_downloadQueue.size()) {
+        ++m_downloadIndex;
+        m_progress = -1;
+        emit stateChanged();
+        startDownload(m_downloadQueue.at(m_downloadIndex));
+        return;
+    }
+    m_downloading = false;
+    m_progress = 0;
+    m_downloadedPath.clear();
+    emit stateChanged();
+    emit downloadFailed(QStringLiteral("所有下载线路均失败，请检查网络后重试"));
+}
+
 QString UpdateChecker::targetPath() const
 {
     const QString suffix = QFileInfo(releaseAssetFor(platformKey())).suffix();
@@ -388,37 +567,17 @@ void UpdateChecker::downloadUpdate()
 {
     if (m_downloading || m_checking || m_remoteVersion.isEmpty())
         return;
-    const QUrl url = downloadUrlFor(m_remoteVersion);
-    if (!url.isValid() || url.scheme() != QLatin1String("https")) {
-        emit downloadFailed(QStringLiteral("未找到当前平台的更新包下载地址"));
-        return;
-    }
     m_downloading = true;
-    m_progress = 0;
+    m_progress = -1;
     m_downloadedPath.clear();
     emit stateChanged();
 
-    const QString path = targetPath();
-    // APK/zip 体积大且用户网络可能较慢：超时放宽到 30 分钟（HttpClient 的超时是整请求硬超时）
-    HttpClient::instance()->download(url, QVariantMap(), path,
-                                     [this, path](bool ok, const QString &error) {
-        m_downloading = false;
-        if (!ok) {
-            m_progress = 0;
-            emit stateChanged();
-            emit downloadFailed(error);
-            return;
-        }
-        m_downloadedPath = path;
-        emit stateChanged();
-        emit downloadFinished(path);
-    }, 30 * 60 * 1000, [this](qint64 received, qint64 total) {
-        const int p = total > 0 ? int(received * 100 / total) : -1;
-        if (p != m_progress) {
-            m_progress = p;
-            emit stateChanged();
-        }
-    });
+    // 下载前先并行探测 GitHub 原链 + 各加速镜像，选最快且返回真 APK 的线路。
+    // 探测完自动开始真正下载（成功/失败仍走原来的 downloadFinished/downloadFailed）。
+    const QStringList candidates = downloadCandidates(m_remoteVersion);
+    Logger::write(QStringLiteral("I"),
+                  QStringLiteral("[更新探测] 开始，%1 条候选").arg(candidates.size()));
+    probeAndDownload(candidates);
 }
 
 void UpdateChecker::installUpdate()

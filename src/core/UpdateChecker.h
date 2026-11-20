@@ -72,18 +72,26 @@ signals:
 private:
     // 一轮检查里并行拉取清单的共享状态（定义在 .cpp）
     struct FetchState;
+    // 下载前并行探测各镜像的共享状态（定义在 .cpp）
+    struct DownloadProbeState;
 
     void probeLatestRelease();
     void fetchManifests(const QString &ref, const QString &apiVersion);
     void finishCheck(const std::shared_ptr<FetchState> &state);
     bool applyManifest(const QJsonObject &obj);
     QString downloadUrlFor(const QString &version) const;
+    QStringList downloadCandidates(const QString &version) const;
+    void probeAndDownload(const QStringList &candidates);
+    void startDownload(const QString &url);
+    void downloadNextCandidate(bool previousFailed);
     QString targetPath() const;
 
     QString m_remoteVersion;
     QString m_changelog;
     QVariantList m_history;
     QVariantMap m_downloads;   // manifest 里的 downloads 映射（平台 -> 直链，可远程改镜像）
+    QStringList m_downloadQueue;  // 探测后按耗时排序的可用线路，失败时依次回退
+    int m_downloadIndex = 0;
     bool m_checking = false;
     bool m_downloading = false;
     int m_progress = 0;
