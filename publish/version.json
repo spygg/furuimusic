@@ -1,7 +1,11 @@
 {
-  "version": "1.4.33",
-  "desc": "新增\n- 在线升级支持国内加速镜像：下载前自动并行探测 GitHub 原链与多家加速站，只认返回真实安装包的线路，择优最快下载；某条线路失败自动切换下一条，直至成功\n修复\n- 网络不畅时在线升级「下载慢、经常失败、打不开」的问题\n",
+  "version": "1.4.34",
+  "desc": "新增\n- 比亚迪车机特供版：伪装网易云包名接入小迪语音，支持打开应用/切歌/暂停/快进快退等口令，与主流版完全隔离互不影响\n- 车机语音点歌：直接说「播放晴天」即可搜索并播放，支持「歌手 + 歌名」组合\n- 车机歌单口令：「播放我喜欢的歌」「播放最近在听」，及单曲循环/列表循环/顺序/随机播放模式切换\n- 车机语音「收藏这首歌 / 取消收藏」当前歌曲\n修复\n- 车机特供版启动即被强制竖屏的问题：显式锁定横屏\n",
   "history": [
+    {
+      "version": "1.4.33",
+      "desc": "新增\n- 在线升级支持国内加速镜像：下载前自动并行探测 GitHub 原链与多家加速站，只认返回真实安装包的线路，择优最快下载；某条线路失败自动切换下一条，直至成功\n修复\n- 网络不畅时在线升级「下载慢、经常失败、打不开」的问题\n"
+    },
     {
       "version": "1.4.32",
       "desc": "新增\n- 设置中可自定义歌词字号（75%~175%，带实时预览与「默认」按钮），按百分比作用于播放页歌词/翻译行与迷你播放器\n修复\n- 当前歌词高亮原用品牌绿，红绿色弱难分辨：改为独立蓝色高亮令牌（浅色 #1D4ED8 / 深色 #93C5FD），不动全局品牌色\n- 竖屏与横屏分屏进入播放页时隐藏底部工具栏（迷你条+标签栏），点返回后自动恢复；横屏整屏左侧导航不受影响\n- 车机横屏半宽分屏播放页封面+歌词双栏拥挤：维持单栏封面/歌词滑动切换，底栏收起后不再误判版式\n"
@@ -148,9 +152,9 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.33/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.33/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.33/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.33/FuruiMusic-android-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-android-arm64-v8a.apk"
   }
 }
