@@ -32,7 +32,9 @@ public:
     void searchPlaylists(const QString &keyword, const QString &sourceId, int limit, PlaylistsCallback cb);
     void rank(const QString &sourceId, int limit, PlaylistsCallback cb);
     void playlistDetail(const Playlist &playlist, SongsCallback cb);
-    void resolve(const Song &song, const QString &quality, PlayableCallback cb);
+    // quiet=true：后台预取链用，跳过 demoteSource/noteNeedsSubstitute 等排名副作用
+    void resolve(const Song &song, const QString &quality, PlayableCallback cb,
+                 bool quiet = false);
     // 播放失败后的换源：依次尝试 custom 与各内置平台（按 m_sourceOrder 优先级），
     // 跳过 exclude 中的音源（通常是已失败的原平台 + 已尝试过的候选）。找到可播直链即回调。
     void resolveAlternate(const Song &song, const QStringList &exclude,
@@ -63,7 +65,7 @@ public:
 private:
     explicit SourceManager(QObject *parent = nullptr);
     void tryCrossSource(const Song &song, const QString &quality, const Playable &original,
-                        PlayableCallback cb);
+                        PlayableCallback cb, bool quiet = false);
     static qreal candidateScore(const Song &target, const Song &candidate);
     // 平台已经明确说过「这首要会员 / 没版权」的歌，本会话内记住：
     // 下次同一首直接跳过原平台直链，省掉一次注定失败的请求。

@@ -27,6 +27,14 @@ ThemeManager::ThemeManager(QObject *parent) : QObject(parent)
 
     m_systemDark = detectSystemDark();
     m_lyricFontScale = qBound(75, Settings::integer(QStringLiteral("lyricFontScale"), 100), 175);
+    m_coverLyricBackground = Settings::boolean(QStringLiteral("coverLyricBackground"), true);
+    m_lyricAlign = Settings::string(QStringLiteral("lyricAlign"), QStringLiteral("auto"));
+    if (m_lyricAlign != QLatin1String("auto") && m_lyricAlign != QLatin1String("left")
+        && m_lyricAlign != QLatin1String("center") && m_lyricAlign != QLatin1String("right"))
+        m_lyricAlign = QStringLiteral("auto");
+    m_lyricTransScale = qBound(60, Settings::integer(QStringLiteral("lyricTransScale"), 100), 160);
+    m_lyricLineGap = qBound(0, Settings::integer(QStringLiteral("lyricLineGap"), 2), 24);
+    m_showLyricProgressLine = Settings::boolean(QStringLiteral("lyricProgressLine"), false);
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     // Qt 6.5+ 的 QStyleHints 直接给出系统配色（Windows / macOS / Linux / Android / iOS），
@@ -49,6 +57,53 @@ void ThemeManager::setLyricFontScale(int scale)
     m_lyricFontScale = clamped;
     Settings::set(QStringLiteral("lyricFontScale"), clamped);
     emit lyricFontScaleChanged();
+}
+
+void ThemeManager::setCoverLyricBackground(bool on)
+{
+    if (on == m_coverLyricBackground)
+        return;
+    m_coverLyricBackground = on;
+    Settings::set(QStringLiteral("coverLyricBackground"), on);
+    emit coverLyricBackgroundChanged();
+}
+
+void ThemeManager::setLyricAlign(const QString &align)
+{
+    if (align == m_lyricAlign)
+        return;
+    m_lyricAlign = align;
+    Settings::set(QStringLiteral("lyricAlign"), align);
+    emit lyricStyleChanged();
+}
+
+void ThemeManager::setLyricTransScale(int scale)
+{
+    const int clamped = qBound(60, scale, 160);
+    if (clamped == m_lyricTransScale)
+        return;
+    m_lyricTransScale = clamped;
+    Settings::set(QStringLiteral("lyricTransScale"), clamped);
+    emit lyricStyleChanged();
+}
+
+void ThemeManager::setLyricLineGap(int gap)
+{
+    const int clamped = qBound(0, gap, 24);
+    if (clamped == m_lyricLineGap)
+        return;
+    m_lyricLineGap = clamped;
+    Settings::set(QStringLiteral("lyricLineGap"), clamped);
+    emit lyricStyleChanged();
+}
+
+void ThemeManager::setShowLyricProgressLine(bool on)
+{
+    if (on == m_showLyricProgressLine)
+        return;
+    m_showLyricProgressLine = on;
+    Settings::set(QStringLiteral("lyricProgressLine"), on);
+    emit lyricStyleChanged();
 }
 
 void ThemeManager::updateWatch()

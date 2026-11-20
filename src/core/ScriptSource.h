@@ -44,6 +44,8 @@ public:
     // 用本地已存的脚本重新初始化（不改 URL）
     void check(const QString &id, DoneCallback cb = {});
     void checkAll();
+    // 启动后空闲预热已启用音源的 JS 引擎，把首次 eval 的开销挪到非播放时段
+    void warmUp();
     void remove(const QString &id);
     void setEnabled(const QString &id, bool enabled);
     // 手动重新解析仓库页面（忽略每日节流），用于发现仓库新增的音源
@@ -125,7 +127,7 @@ private:
     void persist(const Item &item);
     Item *find(const QString &id);
     void ensureEngine(const QString &id, std::function<void(bool)> cb);
-    void startEngine(Item &item, DoneCallback cb, bool persistResult);
+    void startEngine(Item &item, DoneCallback cb, bool persistResult, bool silent = false);
     void updateFromInit(Item &item, const ScriptInitResult &r);
     void fillMeta(Item &item, const QString &script);
     QVariantMap itemToVariant(const Item &item) const;

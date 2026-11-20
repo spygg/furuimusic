@@ -263,6 +263,8 @@ void Library::removePlaylist(const QString &uid)
     q.prepare(QStringLiteral("DELETE FROM playlist_songs WHERE playlist_uid=?"));
     q.addBindValue(uid);
     execWrite(q, "deletePlaylist(playlist_songs)");
+    // 与其他写操作保持一致：删除后通知观察者刷新，避免界面停留在已删歌单上
+    emit changed();
 }
 
 void Library::setPlaylistSongs(const QString &playlistUid, const QVector<Song> &songs)

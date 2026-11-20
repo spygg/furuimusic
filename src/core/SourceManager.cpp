@@ -260,7 +260,8 @@ bool SourceManager::isKnownUnplayable(const Song &song) const
     return !k.isEmpty() && m_knownUnplayable.contains(k);
 }
 
-void SourceManager::resolve(const Song &song, const QString &quality, PlayableCallback cb)
+void SourceManager::resolve(const Song &song, const QString &quality, PlayableCallback cb,
+                            bool quiet)
 {
     if (song.source == QLatin1String("custom")) {
         CustomSourceManager::instance()->resolve(song, quality, cb);
@@ -289,7 +290,7 @@ void SourceManager::resolve(const Song &song, const QString &quality, PlayableCa
     }
 
     // 两条路都走完仍失败时的统一收尾：内置跨源 → 否则把两边的失败原因并起来报给用户
-    auto bothFailed = [this, song, quality, cb](const Playable &platformRes, const Playable &sub) {
+    auto bothFailed = [this, song, quality, cb, quiet](const Playable &platformRes, const Playable &sub) {
         Playable r = platformRes;
         // 把「原平台失败」与「替代音源为什么也没成」分开说清楚，
         // 否则用户只会看到一句「需要会员」，误以为导入的音源没生效。
@@ -305,21 +306,21 @@ void SourceManager::resolve(const Song &song, const QString &quality, PlayableCa
                 && Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip"))
                    == QLatin1String("custom");
         if (!customOnly && Settings::boolean(QStringLiteral("autoToggleSource"), true))
-            tryCrossSource(song, quality, r, cb);
+            tryCrossSource(song, quality, r, cb, quiet);
         else if (cb)
             cb(r);
     };
 
     // 走平台直链；失败的下游是「自定义音源 → 内置跨源」
-    auto byPlatformFirst = [this, song, quality, cb, bothFailed](const Playable &original) {
+    auto byPlatformFirst = [this, song, quality, cb, bothFailed, quiet](const Playable &original) {
         if (original.ok) { if (cb) cb(original); return; }
-        if (original.needSubstitute || original.reason == QLatin1String("vip"))
+        if (!quiet && (original.needSubstitute || original.reason == QLatin1String("vip")))
             noteNeedsSubstitute(song);
         // 底层排查用：原平台为什么取不到链（会员/版权/接口变更），后面的换源都是它的下游
         qWarning().noquote() << QStringLiteral("[取链] 原平台 %1 失败：%2")
                                     .arg(song.source, original.message.isEmpty()
                                              ? original.reason : original.message);
-        demoteSource(song.source);   // 原平台取链失败 → 动态降权
+        if (!quiet) demoteSource(song.source);   // 原平台取链失败 → 动态降权（后台预取不改排名）
         if (!Settings::boolean(QStringLiteral("vipSubstitute"), true)) {
             if (cb) cb(original);
             return;
@@ -339,7 +340,7 @@ void SourceManager::resolve(const Song &song, const QString &quality, PlayableCa
     };
 
     // 走自定义音源；失败的下游是「平台直链 → 内置跨源」
-    auto byCustomFirst = [this, song, quality, s, cb, bothFailed](const Playable &sub) {
+    auto byCustomFirst = [this, song, quality, s, cb, bothFailed, quiet](const Playable &sub) {
         if (sub.ok) {
             Playable r = sub;
             r.substituted = true;
@@ -353,11 +354,11 @@ void SourceManager::resolve(const Song &song, const QString &quality, PlayableCa
         }
         qWarning().noquote() << QStringLiteral("[取链] 自定义音源未取到「%1」，回落原平台 %2")
                                     .arg(song.title, song.source);
-        s->resolveUrl(song, quality, [this, song, sub, cb, bothFailed](const Playable &original) {
+        s->resolveUrl(song, quality, [this, song, sub, cb, bothFailed, quiet](const Playable &original) {
             if (original.ok) { if (cb) cb(original); return; }
-            if (original.needSubstitute || original.reason == QLatin1String("vip"))
+            if (!quiet && (original.needSubstitute || original.reason == QLatin1String("vip")))
                 noteNeedsSubstitute(song);
-            demoteSource(song.source);
+            if (!quiet) demoteSource(song.source);
             bothFailed(original, sub);
         });
     };
@@ -387,13 +388,13 @@ qreal SourceManager::candidateScore(const Song &target, const Song &candidate)
 }
 
 void SourceManager::tryCrossSource(const Song &song, const QString &quality,
-                                   const Playable &original, PlayableCallback cb)
+                                   const Playable &original, PlayableCallback cb, bool quiet)
 {
     const QString keyword = (song.title + QLatin1Char(' ') + song.artist).trimmed();
     // search() 会多次回调（700ms 软刷新 / 8s 硬超时收尾 / 全部返回的最终结果）：
     // 一旦已经拿到匹配并开始取链，后续回调一律丢弃，否则会对同一首歌重复取链甚至重复 playUrl。
     const auto started = std::make_shared<bool>(false);
-    search(keyword, QString(), 25, [this, song, quality, original, cb, started](const QVector<Song> &list) {
+    search(keyword, QString(), 25, [this, song, quality, original, cb, started, quiet](const QVector<Song> &list) {
         if (*started) return;
         qreal best = 0.55;
         Song matched;
@@ -410,7 +411,7 @@ void SourceManager::tryCrossSource(const Song &song, const QString &quality,
             return;
         }
         *started = true;
-        target->resolveUrl(matched, quality, [this, matched, original, cb](const Playable &p) {
+        target->resolveUrl(matched, quality, [this, matched, original, cb, quiet](const Playable &p) {
             if (p.ok) {
                 Playable r = p;
                 r.substituted = true;
@@ -418,10 +419,10 @@ void SourceManager::tryCrossSource(const Song &song, const QString &quality,
                 r.source = matched.source;
                 r.substituteSource = SourceConfig::instance()->nameOf(matched.source) + QStringLiteral("（自动换源）");
                 r.message = QStringLiteral("原曲不可播放，已自动换源到 %1").arg(r.substituteSource);
-                promoteSource(matched.source);   // 解析阶段换源成功也置顶，保持"成功源第一位"
+                if (!quiet) promoteSource(matched.source);   // 解析阶段换源成功也置顶，保持"成功源第一位"
                 if (cb) cb(r);
             } else {
-                demoteSource(matched.source);    // 换源候选也取链失败 → 降权
+                if (!quiet) demoteSource(matched.source);    // 换源候选也取链失败 → 降权
                 if (cb) cb(original);
             }
         });

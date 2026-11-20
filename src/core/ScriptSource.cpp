@@ -865,7 +865,7 @@ void ScriptSourceManager::updateFromInit(Item &item, const ScriptInitResult &r)
     item.qualities = qualities;
 }
 
-void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistResult)
+void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistResult, bool silent)
 {
     const QString id = item.id;
     if (QPointer<ScriptEngine> old = m_engines.value(id)) {
@@ -887,7 +887,7 @@ void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistR
     QPointer<ScriptSourceManager> self(this);
     // 提示里只用名字：条目可能在初始化过程中被删除，先拷一份
     const QString srcName = item.name.isEmpty() ? id : item.name;
-    engine->start(item.script, meta, [self, id, cb, persistResult, srcName](const ScriptInitResult &r) {
+    engine->start(item.script, meta, [self, id, cb, persistResult, srcName, silent](const ScriptInitResult &r) {
         ScriptSourceManager *mgr = self.data();
         if (!mgr) return;
         mgr->m_starting.remove(id);
@@ -931,7 +931,7 @@ void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistR
             }();
             text = QStringLiteral("音源「%1」不可用（%2）").arg(srcName, typeName);
         }
-        if (!r.ok || cb)
+        if ((!r.ok && !silent) || cb)
             emit mgr->message(id, r.ok, text);
         if (cb) cb(r.ok, text);
 
@@ -1092,6 +1092,23 @@ void ScriptSourceManager::checkAll()
         if (!item.enabled || item.script.isEmpty()) continue;
         if (m_starting.contains(id)) continue;
         startEngine(item, {}, true);
+    }
+}
+
+void ScriptSourceManager::warmUp()
+{
+    // 只预热真正能取播放链接的脚本；搜索/歌词类脚本等用到时再起。
+    // persistResult=false、silent=true：不改库、不弹提示（失败状态仍记在内存里）。
+    for (const QString &id : orderedIds()) {
+        Item item = m_items.value(id);
+        if (!item.enabled || item.script.isEmpty()
+            || !item.actions.contains(QStringLiteral("musicUrl")))
+            continue;
+        if (m_starting.contains(id)) continue;
+        if (QPointer<ScriptEngine> e = m_engines.value(id)) {
+            if (e->ready()) continue;
+        }
+        startEngine(item, {}, false, true);
     }
 }
 

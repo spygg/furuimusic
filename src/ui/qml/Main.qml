@@ -248,6 +248,13 @@ ApplicationWindow {
         // 车机冷启动时窗口尺寸可能要到 show 之后才落到真实值，先按当前尺寸定一次形态
         win.evaluateFormFactor()
         formFactorTimer.restart()
+        // 有播放历史/续播状态：冷启动直接进播放页（用户上次在听歌）。
+        // 同步外壳：Loader.onLoaded 可能早于这里发生，必须主动推一次 pageIndex。
+        if (app.showPlayerOnStart && win.pageIndex === 0) {
+            win.pageIndex = 1
+            win.lastContentPage = 0
+            win.syncShellState()
+        }
     }
 
     // 边缘拉伸热区：仅桌面端、非最大化时启用

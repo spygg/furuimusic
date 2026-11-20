@@ -3,6 +3,7 @@
 // 所有颜色、圆角、字号、间距只在这里定义，页面只引用 Theme 令牌，不写死色值。
 #include <QColor>
 #include <QObject>
+#include <QString>
 #include <QTimer>
 
 namespace Furui {
@@ -65,6 +66,20 @@ class ThemeManager : public QObject {
     // 用独立信号，改字号不会连带重算所有与歌词无关的间距/圆角绑定。
     Q_PROPERTY(int lyricFontScale READ lyricFontScale WRITE setLyricFontScale
                NOTIFY lyricFontScaleChanged)
+
+    // 播放页/歌词外观（设置页可改并持久化）
+    // 关掉封面背景后播放页与移动端外壳统一用纯主题底色
+    Q_PROPERTY(bool coverLyricBackground READ coverLyricBackground WRITE setCoverLyricBackground
+               NOTIFY coverLyricBackgroundChanged)
+    // 歌词对齐：auto=宽屏左/竖屏居中，left/center/right 强制对齐
+    Q_PROPERTY(QString lyricAlign READ lyricAlign WRITE setLyricAlign NOTIFY lyricStyleChanged)
+    // 译文相对整体字号再缩放一档（100=与原来一致）
+    Q_PROPERTY(int lyricTransScale READ lyricTransScale WRITE setLyricTransScale NOTIFY lyricStyleChanged)
+    // 歌词行间距（px）
+    Q_PROPERTY(int lyricLineGap READ lyricLineGap WRITE setLyricLineGap NOTIFY lyricStyleChanged)
+    // 歌词区底部可拖动进度线（参考洛雪 PlayLine）
+    Q_PROPERTY(bool showLyricProgressLine READ showLyricProgressLine WRITE setShowLyricProgressLine
+               NOTIFY lyricStyleChanged)
 
 public:
     explicit ThemeManager(QObject *parent = nullptr);
@@ -130,12 +145,25 @@ public:
     int lyricFontScale() const { return m_lyricFontScale; }
     void setLyricFontScale(int scale);
 
+    bool coverLyricBackground() const { return m_coverLyricBackground; }
+    void setCoverLyricBackground(bool on);
+    QString lyricAlign() const { return m_lyricAlign; }
+    void setLyricAlign(const QString &align);
+    int lyricTransScale() const { return m_lyricTransScale; }
+    void setLyricTransScale(int scale);
+    int lyricLineGap() const { return m_lyricLineGap; }
+    void setLyricLineGap(int gap);
+    bool showLyricProgressLine() const { return m_showLyricProgressLine; }
+    void setShowLyricProgressLine(bool on);
+
 signals:
     void modeChanged();
     void paletteChanged();
     void systemDarkChanged();
     void metricsChanged();
     void lyricFontScaleChanged();
+    void coverLyricBackgroundChanged();
+    void lyricStyleChanged();
 
 private:
     void refreshSystemDark();
@@ -148,6 +176,11 @@ private:
     QTimer m_watch;
     qreal m_uiScale = 1.0;
     int m_lyricFontScale = 100;
+    bool m_coverLyricBackground = true;
+    QString m_lyricAlign = QStringLiteral("auto");
+    int m_lyricTransScale = 100;
+    int m_lyricLineGap = 2;
+    bool m_showLyricProgressLine = false;
 };
 
 } // namespace Furui

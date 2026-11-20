@@ -59,7 +59,8 @@ Item {
     readonly property bool ultraTiny: !root.wide && root.height < 340
     // 页面自带封面氛围底。移动端外壳已在根层铺了一层覆盖整窗的 Backdrop（含侧栏区域），
     // 这里必须关掉，否则侧栏右侧会出现一条接缝、左右封面还可能错位。
-    property bool ownBackdrop: true
+    // 设置页「封面作为歌词背景」关掉后整页统一用纯主题底色。
+    property bool ownBackdrop: theme.coverLyricBackground
     readonly property bool isDark: theme.dark
 
     // 本页专用文字色：浅色主题用深墨（压在白纱背景上），深色主题用浅墨
@@ -69,6 +70,15 @@ Item {
     readonly property color chipBg: isDark ? Qt.rgba(1, 1, 1, 0.14) : Qt.rgba(1, 1, 1, 0.62)
     readonly property color chipBgHover: isDark ? Qt.rgba(1, 1, 1, 0.22) : Qt.rgba(1, 1, 1, 0.92)
     readonly property color cPrimary: theme.accent
+
+    // 歌词对齐：auto 沿用「宽屏左 / 竖屏居中」，其余由设置页强制指定。
+    // 扫光层与译文行都跟着它走，避免亮字与底字错位。
+    readonly property int lyricHAlign: {
+        if (theme.lyricAlign === "left") return Text.AlignLeft
+        if (theme.lyricAlign === "center") return Text.AlignHCenter
+        if (theme.lyricAlign === "right") return Text.AlignRight
+        return root.wide ? Text.AlignLeft : Text.AlignHCenter
+    }
 
     readonly property string artSource: app.currentCover.length > 0
                                         ? app.currentCover
@@ -1092,12 +1102,13 @@ Item {
                         running: lyricView.timed && app.playing
                                  && root.visible && lyricView.visible
                         onTriggered: {
+                            if (lyricProgress.dragging) return
                             const ahead = Date.now() - lyricView.anchorStamp
                             lyricView.shownPos = lyricView.anchorPos
                                     + Math.min(Math.max(0, ahead), lyricView.tickMs * 2)
                         }
                     }
-                    spacing: 2
+                    spacing: theme.lyricLineGap
                     topMargin: lyricRoot.height * (root.wide ? 0.34 : 0.24)
                     bottomMargin: lyricRoot.height * (root.wide ? 0.34 : 0.24)
                     clip: true
@@ -1206,8 +1217,7 @@ Item {
                                 font.bold: lyricRow.active
                                 wrapMode: Text.Wrap
                                 verticalAlignment: Text.AlignVCenter
-                                // 宽屏歌词贴左栏排版；竖屏区域窄，居中更接近手机播放器习惯
-                                horizontalAlignment: root.wide ? Text.AlignLeft : Text.AlignHCenter
+                                horizontalAlignment: root.lyricHAlign
                             }
 
                             // 扫光条：外层 clip 矩形只露出「已唱到的那一段」，内层文字按整行
@@ -1216,8 +1226,13 @@ Item {
                             // 只覆盖原文高度：翻译行在下方，不参与逐字扫光。
                             Item {
                                 id: sweepZone
-                                readonly property real inset: lineText.horizontalAlignment === Text.AlignHCenter
-                                    ? Math.max(0, (lineText.width - lineBox.textW) / 2) : 0
+                                readonly property real inset: {
+                                    if (lineText.horizontalAlignment === Text.AlignHCenter)
+                                        return Math.max(0, (lineText.width - lineBox.textW) / 2)
+                                    if (lineText.horizontalAlignment === Text.AlignRight)
+                                        return Math.max(0, lineText.width - lineBox.textW)
+                                    return 0
+                                }
                                 x: inset
                                 y: 0
                                 height: lineText.implicitHeight
@@ -1256,9 +1271,32 @@ Item {
                                        ? Qt.rgba(root.ink.r, root.ink.g, root.ink.b, 0.45) : root.ink
                                 opacity: 0.78
                                 font.pixelSize: Math.round((root.wide ? 14 : 12)
-                                                           * theme.lyricFontScale / 100)
+                                                           * theme.lyricFontScale / 100
+                                                           * theme.lyricTransScale / 100)
                                 wrapMode: Text.Wrap
                                 horizontalAlignment: lineText.horizontalAlignment
+                            }
+                        }
+
+                        // 单击歌词行直接跳到该行时间（参考洛雪 PlayLine 的点行定位）。
+                        // 用按下/松开的位移区分「点击」与「拖动列表」，滚动歌词时不会误触 seek。
+                        MouseArea {
+                            z: 2
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            property real pressY: -1
+                            onPressed: pressY = mouseY
+                            onReleased: {
+                                if (pressY < 0 || Math.abs(mouseY - pressY) > 10)
+                                    return
+                                if (!lyricView.timed || index >= app.lyricTimes.length)
+                                    return
+                                const t = Number(app.lyricTimes[index])
+                                if (!isFinite(t)) return
+                                lyricView.userScrolling = false
+                                lyricView.dragRow = -1
+                                app.seek(t)
+                                lyricView.centerOn(index)
                             }
                         }
                     }
@@ -1392,6 +1430,68 @@ Item {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
                         onClicked: lyricView.playFromDragRow()
+                    }
+                }
+
+                // 歌词进度线（参考洛雪 PlayLine）：设置页可开关，拖动即可定位到任意时间。
+                // 拖动期间接管 shownPos，避免 60ms 插值定时器把滑块拽回播放器上报的位置。
+                Item {
+                    id: lyricProgress
+                    z: 6
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 4
+                    height: 20
+                    visible: theme.showLyricProgressLine && app.duration > 0
+                    property bool dragging: false
+                    property real ratio: Math.min(1, Math.max(0, lyricView.shownPos / Math.max(1, app.duration)))
+                    readonly property real trackX: 12
+                    readonly property real trackW: Math.max(1, width - 24)
+                    Rectangle {
+                        x: lyricProgress.trackX
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: lyricProgress.trackW
+                        height: 3
+                        radius: 1.5
+                        color: root.inkFaint
+                        Rectangle {
+                            width: parent.width * lyricProgress.ratio
+                            height: parent.height
+                            radius: 1.5
+                            color: theme.lyricHighlight
+                        }
+                    }
+                    Rectangle {
+                        x: lyricProgress.trackX + lyricProgress.trackW * lyricProgress.ratio - 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 12
+                        height: 12
+                        radius: 6
+                        color: theme.lyricHighlight
+                        border.color: root.isDark ? "#FFFFFF" : "#111111"
+                        border.width: 1
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onPressed: {
+                            lyricProgress.dragging = true
+                            lyricView.userScrolling = false
+                        }
+                        onMouseXChanged: {
+                            if (!lyricProgress.dragging) return
+                            const r = Math.min(1, Math.max(0,
+                                    (mouseX - lyricProgress.trackX) / lyricProgress.trackW))
+                            lyricView.shownPos = r * app.duration
+                        }
+                        onReleased: {
+                            if (!lyricProgress.dragging) return
+                            lyricProgress.dragging = false
+                            const r = Math.min(1, Math.max(0,
+                                    (mouseX - lyricProgress.trackX) / lyricProgress.trackW))
+                            app.seek(Math.round(r * app.duration))
+                        }
                     }
                 }
             }

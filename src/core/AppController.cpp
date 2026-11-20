@@ -1,15 +1,21 @@
 #include "AppController.h"
 
+#include <QDateTime>
 #include <QDesktopServices>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
+#include <QPair>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSslSocket>
 #include <QSet>
 #include <QTimer>
 #include <QUrl>
+#include <algorithm>
+#include <memory>
 
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QJniObject>
@@ -26,6 +32,7 @@
 #include "Library.h"
 #include "Logger.h"
 #include "OpenApiServer.h"
+#include "Pinyin.h"
 #include "PlayerController.h"
 #include "ScriptSource.h"
 #include "UserApi.h"
@@ -64,6 +71,24 @@ static QString coverUrlOrEmpty(const QString &cover)
 
 SongListModel::SongListModel(QObject *parent) : QAbstractListModel(parent) {}
 
+// 建歌单时一次性生成检索键：原文 + 全拼 + 首字母，过滤时只做 contains。
+// 汉字转拼音走静态二分表（6763 常用字），千首歌单也只有几毫秒。
+static QVector<QString> buildSearchKeys(const QVector<Song> &songs)
+{
+    QVector<QString> keys;
+    keys.reserve(songs.size());
+    for (const Song &s : songs) {
+        const QString raw = Pinyin::normalizedQuery(s.title) + QLatin1Char('|')
+                          + Pinyin::normalizedQuery(s.artist);
+        const QString full = Pinyin::text(s.title) + QLatin1Char('|')
+                           + Pinyin::text(s.artist);
+        const QString ini = Pinyin::initials(s.title) + QLatin1Char('|')
+                          + Pinyin::initials(s.artist);
+        keys << (raw + QLatin1Char('|') + full + QLatin1Char('|') + ini);
+    }
+    return keys;
+}
+
 int SongListModel::rowCount(const QModelIndex &parent) const
 { return parent.isValid() ? 0 : m_songs.size(); }
 
@@ -86,6 +111,7 @@ QVariant SongListModel::data(const QModelIndex &index, int role) const
     case FavoriteRole:  return Library::instance()->isFavorite(s.uid);
     case InQueueRole:   return m_queueUids.contains(s.uid);
     case RowRole:       return index.row();
+    case SearchKeyRole: return m_searchKeys.value(index.row());
     default:            return QVariant();
     }
 }
@@ -97,23 +123,33 @@ QHash<int, QByteArray> SongListModel::roleNames() const
         {DurationRole, "duration"}, {CoverRole, "cover"}, {SourceRole, "source"},
         {SourceNameRole, "sourceName"}, {VipRole, "vip"}, {BadgeRole, "badge"},
         {SourceIdRole, "sourceId"}, {FavoriteRole, "favorite"}, {InQueueRole, "inQueue"},
-        {RowRole, "row"}
+        {RowRole, "row"}, {SearchKeyRole, "searchKey"}
     };
 }
 
 void SongListModel::setQueueUids(const QSet<QString> &uids)
 {
     if (m_queueUids == uids) return;
+    const QSet<QString> previous = m_queueUids;
     m_queueUids = uids;
     if (m_songs.isEmpty()) return;
-    // 整表刷新 inQueue 列（uid→bool，无副作用），QML 侧 SongRow 的「＋/✓」据此切换
-    emit dataChanged(index(0, 0), index(m_songs.size() - 1, 0), {InQueueRole});
+    // 只刷新 inQueue 真正变化的行：搜索结果动辄几百行，整表 dataChanged 会让
+    // QML 在每次「加入队列」时重算所有委托的 InQueueRole。
+    for (int i = 0; i < m_songs.size(); ++i) {
+        const QString &uid = m_songs.at(i).uid;
+        const bool before = !uid.isEmpty() && previous.contains(uid);
+        const bool now = !uid.isEmpty() && uids.contains(uid);
+        if (before == now) continue;
+        const QModelIndex idx = index(i, 0);
+        emit dataChanged(idx, idx, {InQueueRole});
+    }
 }
 
 void SongListModel::setSongs(const QVector<Song> &songs)
 {
     beginResetModel();
     m_songs = songs;
+    m_searchKeys = buildSearchKeys(songs);
     endResetModel();
 }
 
@@ -122,7 +158,54 @@ void SongListModel::appendSongs(const QVector<Song> &songs)
     if (songs.isEmpty()) return;
     beginInsertRows(QModelIndex(), m_songs.size(), m_songs.size() + songs.size() - 1);
     m_songs.append(songs);
+    m_searchKeys.append(buildSearchKeys(songs));
     endInsertRows();
+}
+
+void SongListModel::syncSongs(const QVector<Song> &songs)
+{
+    if (songs.isEmpty()) { setSongs(songs); return; }
+
+    // 1) 结构完全一致（常见于 setQueue 传入同一列表）：只把变化的行标脏
+    if (songs.size() == m_songs.size()) {
+        bool sameOrder = true;
+        for (int i = 0; i < songs.size(); ++i) {
+            if (m_songs.at(i).uid != songs.at(i).uid) { sameOrder = false; break; }
+        }
+        if (sameOrder) {
+            for (int i = 0; i < songs.size(); ++i) {
+                const Song &a = m_songs.at(i);
+                const Song &b = songs.at(i);
+                if (a.title == b.title && a.artist == b.artist && a.album == b.album
+                    && a.cover == b.cover && a.duration == b.duration && a.vip == b.vip
+                    && a.source == b.source && a.sourceId == b.sourceId)
+                    continue;
+                m_songs[i] = b;
+                m_searchKeys[i] = buildSearchKeys(QVector<Song>() << b).value(0);
+                const QModelIndex idx = index(i, 0);
+                emit dataChanged(idx, idx);
+            }
+            return;
+        }
+    }
+
+    // 2) 只在尾部追加（「加入队列」最常见路径）：保留已有行与滚动位置
+    if (songs.size() > m_songs.size()) {
+        bool prefix = true;
+        for (int i = 0; i < m_songs.size(); ++i) {
+            if (m_songs.at(i).uid != songs.at(i).uid) { prefix = false; break; }
+        }
+        if (prefix) {
+            beginInsertRows(QModelIndex(), m_songs.size(), songs.size() - 1);
+            m_songs = songs;
+            m_searchKeys = buildSearchKeys(songs);
+            endInsertRows();
+            return;
+        }
+    }
+
+    // 3) 删除/中间插入/重排：退回整表重置
+    setSongs(songs);
 }
 
 void SongListModel::refreshRow(int row)
@@ -157,9 +240,17 @@ SongFilterModel::SongFilterModel(QObject *parent) : QSortFilterProxyModel(parent
 void SongFilterModel::setFilter(const QString &f)
 {
     if (m_filter == f) return;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+    // Qt 6.10+ 推荐成对 API；invalidateFilter() 在 6.13 起废弃。
+    // 只对行做自定义过滤，故用 Direction::Rows，避免连列一起重算。
+    beginFilterChange();
     m_filter = f;
-    // 空过滤也要整表刷新：beginFilterChange 语义下 invalidate 折叠成一次 reset
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+    m_filter = f;
+    // 空过滤也要整表刷新：旧 API 下 invalidate 折叠成一次 reset
     invalidateFilter();
+#endif
     emit filterChanged();
 }
 
@@ -170,7 +261,11 @@ bool SongFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &sourceP
     const QModelIndex idx = sourceModel()->index(sourceRow, 0, sourceParent);
     const QString title = idx.data(SongListModel::TitleRole).toString();
     const QString artist = idx.data(SongListModel::ArtistRole).toString();
-    return title.contains(f, Qt::CaseInsensitive) || artist.contains(f, Qt::CaseInsensitive);
+    if (title.contains(f, Qt::CaseInsensitive) || artist.contains(f, Qt::CaseInsensitive))
+        return true;
+    // 预生成索引：原文 + 全拼 + 首字母，支持 zjl / zhoujielun / 周杰伦
+    const QString key = idx.data(SongListModel::SearchKeyRole).toString();
+    return key.contains(Pinyin::normalizedQuery(f));
 }
 
 PlaylistListModel::PlaylistListModel(QObject *parent) : QAbstractListModel(parent) {}
@@ -256,6 +351,15 @@ void AccountListModel::setAccounts(const QVector<Account> &list, const QHash<QSt
 }
 
 // ---------------------------------------------------------------- 门面实现
+// 预取缓存键：同一首歌在不同音质下直链不同，必须带上音质
+static QString preloadKey(const Song &song, const QString &quality)
+{
+    const QString id = song.uid.isEmpty()
+            ? song.source + QLatin1Char('|') + song.sourceId + QLatin1Char('|') + song.title
+            : song.uid;
+    return id + QLatin1Char('|') + quality;
+}
+
 struct AppController::Impl {
     QString status = QStringLiteral("就绪");
     QString substituteBadge;
@@ -289,6 +393,13 @@ struct AppController::Impl {
     quint64 discoveryGen = 0;
     // 取链是异步的：用户连点两首歌时，慢的那首不能把当前播放替换掉
     quint64 resolveGen = 0;
+    // 下一首预取：直链与歌词缓存。key = song.uid|quality；设置项变化或列表重排时清空。
+    QHash<QString, Playable> preloaded;
+    QHash<QString, qint64> preloadedAt;
+    QHash<QString, QPair<QString, QString>> preloadedLyrics;
+    QSet<QString> preloading;
+    quint64 preloadGen = 0;
+    bool preloadTriggered = false;
     // 播放失败换源：记录当前正在播的歌，以及已尝试过的源（避免重复/死循环）；
     // inFallback 在换源解析期间置真，换源成功开始播放后清掉，以便本次播放再失败时能试下一源。
     Song currentSong;
@@ -317,6 +428,12 @@ struct AppController::Impl {
     bool recommendPending = false;
     // 曲库页搜索框是否有内容：外壳据此隐藏播放栏，给搜索结果/软键盘让位
     bool searchActive = false;
+    // 汽水推荐面板当前选择（QML 侧 ComboBox 与这里双向同步）
+    QString qishuiRecommendMode = QStringLiteral("default");
+    QString qishuiRecommendCategory;
+    quint64 qishuiGen = 0;
+    // 冷启动是否直接进播放页：有历史播放或续播状态时为真（由构造函数计算一次）
+    bool showPlayerOnStart = false;
 };
 
 AppController *AppController::s_instance = nullptr;
@@ -356,6 +473,11 @@ AppController::AppController(QObject *parent)
     CustomSourceManager::instance();
     SourceManager::instance();
     AuthManager::instance();
+    // 空闲预热在线音源脚本引擎：把首次 QuickJS eval 的耗时挪到启动后 1.5s，
+    // 用户第一次切歌时引擎已就绪（失败也不打扰用户）
+    QTimer::singleShot(1500, this, [] {
+        ScriptSourceManager::instance()->warmUp();
+    });
     PlayerController *player = PlayerController::instance();
 
     connect(player, &PlayerController::stateChanged, this, [this] {
@@ -382,6 +504,11 @@ AppController::AppController(QObject *parent)
                                      .arg(d->pendingEngine, d->pendingKey);
             d->pendingEngine.clear();
             d->pendingKey.clear();
+        }
+        // 真正播起来后才预取下一首：与当前播放错开，避免抢占取链/带宽。
+        if (!d->preloadTriggered && player->position() > 1500) {
+            d->preloadTriggered = true;
+            QTimer::singleShot(0, this, [this] { preloadNext(); });
         }
         emit positionChanged();
     });
@@ -444,6 +571,12 @@ AppController::AppController(QObject *parent)
     // 播放列表与位置；若上次在播，会自动续播并跳到原位置。
     player->restoreState();
 
+    // 老用户冷启动直接落播放页：有播放历史、或上次留了续播队列/正在播放。
+    // 在 restoreState() 之后算，续播队列此时已就位。
+    d->showPlayerOnStart = !Library::instance()->history(1).isEmpty()
+        || !Settings::string(QStringLiteral("resumeQueue")).isEmpty()
+        || Settings::boolean(QStringLiteral("resumePlaying"), false);
+
     // 从 build/cmake 之类没有 OpenSSL DLL 的目录直接启动时，Qt 会在所有 HTTPS
     // 请求上返回「TLS initialization failed」，表现就是「音源导入了却取不到链接」。
     // 这里主动自检并说清楚原因，避免用户误以为是 VIP 判定或音源失效。
@@ -488,7 +621,7 @@ void AppController::setStatus(const QString &text)
 void AppController::syncQueueModel()
 {
     const QVector<Song> songs = PlayerController::instance()->queue();
-    m_queue->setSongs(songs);
+    m_queue->syncSongs(songs);
     // 让搜索结果等列表知道哪些歌已在队列里，「＋」按钮据此切成「✓」
     QSet<QString> uids;
     uids.reserve(songs.size());
@@ -672,6 +805,9 @@ QString AppController::loginUnavailableReason(const QString &sourceId) const
 void AppController::setSearchType(const QString &type)
 { setSetting(QStringLiteral("searchType"), type); }
 
+bool AppController::showPlayerOnStart() const
+{ return d->showPlayerOnStart; }
+
 bool AppController::searchActive() const
 { return d->searchActive; }
 
@@ -758,6 +894,122 @@ void AppController::loadDiscovery(const QString &sourceId)
                           ? QStringLiteral("公开榜单暂不可用，请检查网络后点「刷新榜单」重试")
                           : QStringLiteral("已加载 %1 个公开榜单/歌单（无需登录）").arg(list.size()));
             emit discoveryChanged();
+        });
+}
+
+QStringList AppController::qishuiModes() const
+{
+    // 对应汽水官方「默认模式 / 熟悉模式 / 新鲜模式」
+    return QStringList() << QStringLiteral("default")
+                         << QStringLiteral("familiar")
+                         << QStringLiteral("fresh");
+}
+
+QStringList AppController::qishuiCategories() const
+{
+    // 官方车机版的场景子领域；通过现有 web 搜索接口按场景词取歌/歌单
+    return QStringList() << QStringLiteral("儿歌") << QStringLiteral("乡村")
+                         << QStringLiteral("雨天") << QStringLiteral("KTV必点")
+                         << QStringLiteral("快乐时光") << QStringLiteral("动感健身")
+                         << QStringLiteral("电子") << QStringLiteral("爵士")
+                         << QStringLiteral("古风") << QStringLiteral("摇滚")
+                         << QStringLiteral("轻音乐") << QStringLiteral("睡前")
+                         << QStringLiteral("学习专注") << QStringLiteral("运动")
+                         << QStringLiteral("咖啡馆") << QStringLiteral("车载");
+}
+
+void AppController::loadQishuiRecommend(const QString &mode, const QString &category)
+{
+    if (!mode.isEmpty()) d->qishuiRecommendMode = mode;
+    d->qishuiRecommendCategory = category;
+    const quint64 gen = ++d->qishuiGen;
+    ++d->searchRequestId;   // 作废挂起的搜索/榜单请求
+    d->discoveryLoading = true;
+    emit discoveryChanged();
+    setStatus(QStringLiteral("正在加载汽水推荐…"));
+
+    const auto done = [this, gen](const QVector<Song> &songs, const QString &label) {
+        if (gen != d->qishuiGen) return;
+        d->discoveryLoading = false;
+        m_results->setSongs(songs);
+        setStatus(songs.isEmpty()
+                      ? QStringLiteral("%1暂无可用内容，请检查网络后重试").arg(label)
+                      : QStringLiteral("%1：%2 首").arg(label).arg(songs.size()));
+        emit discoveryChanged();
+        emit playerChanged();
+        // kind 用 "qishui" 而非 "song"：车机语音点歌的单次连接只认 kind=="song"，
+        // 这里若发 "song"，点歌 20s 窗口内加载汽水推荐会被误当点歌结果播放（互踩）
+        emit searchFinished(songs.size(), QStringLiteral("qishui"));
+    };
+
+    // 场景子领域：用场景词直接搜歌（web 端点可用，官方私有 feed API 需设备签名）
+    if (!category.trimmed().isEmpty()) {
+        // 实测 /luna/pc/search/track 匿名返回 HTTP 200 空响应（不是报错），
+        // 必须带登录态 Cookie——先预检，避免用户看到「检查网络」的误导提示
+        const Account qsAcct = AuthManager::instance()->account(QStringLiteral("qishui"));
+        if (!qsAcct.logged || qsAcct.cookie.isEmpty()) {
+            d->discoveryLoading = false;
+            emit discoveryChanged();
+            setStatus(QStringLiteral("「%1」需要汽水登录：设置 → 账号 → 汽水音乐 填入 Cookie")
+                          .arg(category.trimmed()));
+            return;
+        }
+        const QString kw = category.trimmed();
+        SourceManager::instance()->search(kw, QStringLiteral("qishui"), 60,
+            [done, kw](const QVector<Song> &songs) { done(songs, kw); });
+        return;
+    }
+
+    const QString m = d->qishuiRecommendMode;
+    if (m == QLatin1String("familiar") || m == QLatin1String("fresh")) {
+        // 熟悉/新鲜：以本地历史/收藏为种子做相似推荐（官方私有 API 需设备签名，
+        // 这里用已可用的 web 相似接口近似：熟悉扩列 / 新鲜发现）。
+        QVector<Song> seeds;
+        const QVector<Song> hist = Library::instance()->history(8);
+        const QVector<Song> fav = Library::instance()->favorites();
+        if (m == QLatin1String("familiar")) {
+            for (int i = 0; i < fav.size() && seeds.size() < 3; ++i) seeds.append(fav.at(i));
+            for (int i = 0; i < hist.size() && seeds.size() < 3; ++i) seeds.append(hist.at(i));
+        } else {
+            for (int i = hist.size() - 1; i >= 0 && seeds.size() < 2; --i) seeds.append(hist.at(i));
+        }
+        const QString label = m == QLatin1String("familiar")
+                            ? QStringLiteral("熟悉模式") : QStringLiteral("新鲜模式");
+        if (seeds.isEmpty()) { done(QVector<Song>(), label); return; }
+
+        auto out = std::make_shared<QVector<Song>>();
+        auto left = std::make_shared<int>(seeds.size());
+        for (const Song &seed : seeds) {
+            SourceManager::instance()->related(seed, m == QLatin1String("fresh") ? 40 : 25,
+                [this, gen, done, out, left, seeds, label](const QVector<Song> &list) {
+                    if (gen != d->qishuiGen) return;
+                    QSet<QString> known;
+                    for (const Song &s : seeds) known.insert(s.uid);
+                    for (const Song &s : *out) known.insert(s.uid);
+                    for (const Song &s : list) {
+                        if (known.contains(s.uid)) continue;
+                        known.insert(s.uid);
+                        out->append(s);
+                    }
+                    if (--(*left) == 0) {
+                        std::sort(out->begin(), out->end(), [](const Song &a, const Song &b) {
+                            return a.title < b.title;
+                        });
+                        done(*out, label);
+                    }
+                });
+        }
+        return;
+    }
+
+    // 默认模式：官方推荐歌单 → 第一份歌单详情
+    SourceManager::instance()->rank(QStringLiteral("qishui"), 30,
+        [this, gen, done](const QVector<Playlist> &list) {
+            if (gen != d->qishuiGen) return;
+            if (list.isEmpty()) { done(QVector<Song>(), QStringLiteral("默认模式")); return; }
+            m_discovery->setPlaylists(list);
+            SourceManager::instance()->playlistDetail(list.first(),
+                [done](const QVector<Song> &songs) { done(songs, QStringLiteral("默认模式")); });
         });
 }
 
@@ -1085,18 +1337,31 @@ void AppController::resolveAndPlay(const Song &song)
     // 重置播放失败的换源状态，记录当前歌（供失败换源复用）。
     d->currentSong = song;
     d->triedFallback.clear();
+    // 任何新歌都递增取链代次：缓存命中时也要作废上一首仍在途的 resolve，
+    // 否则旧结果会在新歌已经开始播放后把播放地址换回去。
+    const quint64 resolveGeneration = ++d->resolveGen;
     d->inFallback = false;
+    d->preloadTriggered = false;   // 新歌从 0 开始计时，播起来后再预取下一首
     setStatus(QStringLiteral("正在解析「%1」的播放地址…").arg(song.title));
 
     // 歌词/封面在「切歌」这一刻就开始取，不等播放地址解析结果。
     // 原来这段写在 p.ok 分支里：VIP 歌曲取链失败直接 return，歌词请求根本
     // 没发出，界面就一直停在「暂无歌词」，封面也只剩占位图。
+    const QString key = preloadKey(song, d->quality);
     const quint64 lyricGeneration = ++d->lyricGen;
-    SourceManager::instance()->lyric(song, [this, lyricGeneration](const QString &lrc,
-                                                                  const QString &trans) {
-        if (lyricGeneration != d->lyricGen) return;   // 已切歌，迟到结果丢弃
-        PlayerController::instance()->setLyrics(lrc, trans);
-    });
+    const auto cachedLyrics = d->preloadedLyrics.constFind(key);
+    if (cachedLyrics != d->preloadedLyrics.constEnd()) {
+        // 上一首播放时已预取过歌词：直接上屏，不再发一轮 lyric 请求
+        PlayerController::instance()->setLyrics(cachedLyrics->first, cachedLyrics->second);
+    } else {
+        SourceManager::instance()->lyric(song, [this, key, lyricGeneration](const QString &lrc,
+                                                                              const QString &trans) {
+            if (lyricGeneration != d->lyricGen) return;   // 已切歌，迟到结果丢弃
+            if (d->preloadedLyrics.size() >= 64) d->preloadedLyrics.clear();
+            d->preloadedLyrics.insert(key, qMakePair(lrc, trans));
+            PlayerController::instance()->setLyrics(lrc, trans);
+        });
+    }
 
     const quint64 coverGeneration = ++d->coverGen;
     if (song.cover.trimmed().isEmpty() && !song.sourceId.isEmpty()) {
@@ -1111,39 +1376,136 @@ void AppController::resolveAndPlay(const Song &song)
         });
     }
 
-    const quint64 resolveGeneration = ++d->resolveGen;
-    SourceManager::instance()->resolve(song, d->quality, [this, song, resolveGeneration](const Playable &p) {
-        if (resolveGeneration != d->resolveGen) return;   // 已切到别的歌，丢弃迟到的取链结果
-        if (!p.ok) {
-            // 取链阶段所有音源都失败（含 VIP 替代/跨源都试过）：同样自动跳下一首。
-            autoAdvanceAfterFailure(song.title + QLatin1String(" - ") + song.artist,
-                                    p.message, p.message);
-            return;
+    // 预取缓存命中：直链已在手，跳过整轮网络/脚本取链，切歌近乎即时。
+    // 超过 5 分钟的缓存视为过期（网易/咪咕临时链会失效），重新取链。
+    const auto cached = d->preloaded.constFind(key);
+    if (cached != d->preloaded.constEnd()
+        && QDateTime::currentMSecsSinceEpoch() - d->preloadedAt.value(key, 0) < 5 * 60 * 1000) {
+        const Playable hit = cached.value();
+        d->preloaded.remove(key);
+        d->preloadedAt.remove(key);
+        setStatus(QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist));
+        applyResolveResult(song, hit);
+        return;
+    }
+
+    SourceManager::instance()->resolve(song, d->quality,
+        [this, song, key, resolveGeneration](const Playable &p) {
+            if (resolveGeneration != d->resolveGen) return;   // 已切到别的歌，丢弃迟到的取链结果
+            if (!p.ok) {
+                // 取链阶段所有音源都失败（含 VIP 替代/跨源都试过）：同样自动跳下一首。
+                autoAdvanceAfterFailure(song.title + QLatin1String(" - ") + song.artist,
+                                        p.message, p.message);
+                return;
+            }
+            // 缓存成功的直链：下次再播/预取命中时直接用（上限防止长会话无限增长）
+            if (d->preloaded.size() >= 32) {
+                d->preloaded.clear();
+                d->preloadedAt.clear();
+            }
+            d->preloaded.insert(key, p);
+            d->preloadedAt.insert(key, QDateTime::currentMSecsSinceEpoch());
+            applyResolveResult(song, p);
+        });
+}
+
+void AppController::applyResolveResult(const Song &song, const Playable &p)
+{
+    d->lastResolvedUrl = p.url.toString();
+    d->lastPlayableHeaders = p.headers;
+    d->pendingEngine = p.engineId;
+    d->pendingKey = p.platformKey;
+    // 同步记录本条直链的提供者（曲中断流重罚用；pending* 确认能播后就清了）
+    d->playingEngine = p.engineId;
+    d->playingKey = p.platformKey;
+    d->playingProviderSource = p.engineId.isEmpty()
+            ? (p.source.isEmpty() ? song.source : p.source) : QString();
+    // 非 VIP 歌走「全部自定义」时也被标了 substituted，但写「VIP 替代」会误导：
+    // 直接用它自己的来源名（脚本层已带「在线音源 · 」前缀）
+    d->substituteBadge = p.substituted
+            ? (song.vip ? QStringLiteral("VIP 替代 · %1").arg(p.substituteSource)
+                        : p.substituteSource)
+            : (song.vip ? QStringLiteral("VIP") : QString());
+    d->currentSourceLabel = SourceConfig::instance()->nameOf(song.source);
+    // 原平台取链成功：把成功源置顶，让后续换源优先尝试它（"成功源放到第一位"）。
+    SourceManager::instance()->promoteSource(song.source);
+    PlayerController::instance()->playUrl(p.url, p.headers);
+    Library::instance()->addHistory(song);
+    setStatus(p.substituted ? p.message : QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist));
+    if (p.substituted) emit substituteInfo(p.message);
+    emit playerChanged();
+}
+
+void AppController::preloadNext()
+{
+    PlayerController *player = PlayerController::instance();
+    const QVector<Song> queue = player->queue();
+    const int cur = player->currentIndex();
+    if (queue.isEmpty() || cur < 0 || cur >= queue.size()) return;
+
+    int next = -1;
+    switch (player->mode()) {
+    case 3:   // 随机：不抽到自己
+        if (queue.size() > 1) {
+            for (int guard = 0; guard < 8 && next == cur; ++guard)
+                next = QRandomGenerator::global()->bounded(queue.size());
+            if (next == cur) next = (cur + 1) % queue.size();
         }
-        d->lastResolvedUrl = p.url.toString();
-        d->lastPlayableHeaders = p.headers;
-        d->pendingEngine = p.engineId;
-        d->pendingKey = p.platformKey;
-        // 同步记录本条直链的提供者（曲中断流重罚用；pending* 确认能播后就清了）
-        d->playingEngine = p.engineId;
-        d->playingKey = p.platformKey;
-        d->playingProviderSource = p.engineId.isEmpty()
-                ? (p.source.isEmpty() ? song.source : p.source) : QString();
-        // 非 VIP 歌走「全部自定义」时也被标了 substituted，但写「VIP 替代」会误导：
-        // 直接用它自己的来源名（脚本层已带「在线音源 · 」前缀）
-        d->substituteBadge = p.substituted
-                ? (song.vip ? QStringLiteral("VIP 替代 · %1").arg(p.substituteSource)
-                            : p.substituteSource)
-                : (song.vip ? QStringLiteral("VIP") : QString());
-        d->currentSourceLabel = SourceConfig::instance()->nameOf(song.source);
-        // 原平台取链成功：把成功源置顶，让后续换源优先尝试它（"成功源放到第一位"）。
-        SourceManager::instance()->promoteSource(song.source);
-        PlayerController::instance()->playUrl(p.url, p.headers);
-        Library::instance()->addHistory(song);
-        setStatus(p.substituted ? p.message : QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist));
-        if (p.substituted) emit substituteInfo(p.message);
-        emit playerChanged();
-    });
+        break;
+    case 0:   // 顺序播放：末尾不预取（留给推荐续播）
+        if (cur + 1 < queue.size()) next = cur + 1;
+        break;
+    case 2:   // 单曲循环：缓存当前这首，重播时直接命中
+        next = cur;
+        break;
+    default:  // 列表循环
+        next = (cur + 1) % queue.size();
+        break;
+    }
+    if (next < 0 || next >= queue.size()) return;
+    preloadSong(queue.at(next));
+}
+
+void AppController::preloadSong(const Song &song)
+{
+    if (song.title.isEmpty()) return;
+    const QString key = preloadKey(song, d->quality);
+    if (d->preloading.contains(key)) return;
+    d->preloading.insert(key);
+
+    const quint64 gen = d->preloadGen;
+    if (!d->preloadedLyrics.contains(key)) {
+        SourceManager::instance()->lyric(song, [this, key, gen](const QString &lrc,
+                                                                const QString &trans) {
+            if (gen != d->preloadGen) return;
+            if (d->preloadedLyrics.size() >= 64) d->preloadedLyrics.clear();
+            d->preloadedLyrics.insert(key, qMakePair(lrc, trans));
+        });
+    }
+    // quiet=true：预取早于真正播放，不能提前给音源降权/记「需要替代」
+    SourceManager::instance()->resolve(song, d->quality, [this, key, song, gen](const Playable &p) {
+        if (gen != d->preloadGen) return;
+        d->preloading.remove(key);
+        if (!p.ok) return;
+        if (d->preloaded.size() >= 32) {
+            d->preloaded.clear();
+            d->preloadedAt.clear();
+        }
+        d->preloaded.insert(key, p);
+        d->preloadedAt.insert(key, QDateTime::currentMSecsSinceEpoch());
+        qInfo().noquote() << QStringLiteral("[预取] 下一首直链已缓存：%1 - %2")
+                                 .arg(song.title, song.artist);
+    }, true);
+}
+
+void AppController::clearPreloadCache()
+{
+    ++d->preloadGen;   // 在途预取结果全部作废
+    d->preloaded.clear();
+    d->preloadedAt.clear();
+    d->preloadedLyrics.clear();
+    d->preloading.clear();
+    d->preloadTriggered = false;
 }
 
 void AppController::onPlayerError(const QString &msg)
@@ -1673,6 +2035,10 @@ void AppController::setSetting(const QString &key, const QVariant &value)
             api->start(Settings::integer(QStringLiteral("openApiPort"), 23330), false);
         else api->stop();
     }
+    // 取链策略/音质变了：已缓存的直链与歌词不再可信，全部作废
+    if (key == QLatin1String("quality") || key == QLatin1String("sourceFirst")
+        || key == QLatin1String("vipSubstitute") || key == QLatin1String("autoToggleSource"))
+        clearPreloadCache();
     emit settingsChanged();
 }
 

@@ -74,18 +74,24 @@ public class BydControlReceiver extends BroadcastReceiver {
 
         if ("com.byd.action.AUTOVOICE_SEARCH_PLUS".equals(action)
                 || "com.byd.action.AUTOVOICE_SEARCH".equals(action)) {
-            // 语音点歌「播放晴天」：网易云车机版的 extras 约定（参考
-            // MediaCenterTestActivity 反编译源码）——
+            // 语音点歌「播放周杰伦的晴天」。协议对照网易云车机版反编译：
             //   EXTRA_KEYWORDS_SEARCH 歌名/关键词（必有）
             //   EXTRA_ARTIST_SEARCH   歌手（可空）
-            //   另有 EXTRA_GENRE/LANG/SOURCE/AREA_SEARCH 等过滤项，暂不参与匹配
-            String keywords = intent.getStringExtra("EXTRA_KEYWORDS_SEARCH");
-            String artist = intent.getStringExtra("EXTRA_ARTIST_SEARCH");
+            // 官方 BydControlReceiver.m8705g/m8706h 的做法是：候选字段按优先级取，
+            // 字段里若带 '|' 只取第一段（小迪常把多个识别候选塞在同一个 extra 里）。
+            // 旧实现把整个 extra（可能含 '|'）与歌手直接拼成 "周杰伦 晴天|..." 去搜，
+            // 聚合搜索拿不到结果 —— 这正是「播放周杰伦的晴天无效」的根因。
+            String keywords = firstCandidate(intent.getStringExtra("EXTRA_KEYWORDS_SEARCH"),
+                    intent.getStringExtra("EXTRA_PROGRAM_TAGS"),
+                    intent.getStringExtra("EXTRA_GENRE_SEARCH"),
+                    intent.getStringExtra("EXTRA_LANG_SEARCH"),
+                    intent.getStringExtra("EXTRA_SOURCE_SEARCH"),
+                    intent.getStringExtra("EXTRA_AREA_SEARCH"));
+            String artist = firstCandidate(intent.getStringExtra("EXTRA_ARTIST_SEARCH"));
             BydVoiceHelper.log("search keywords=" + keywords
                     + " artist=" + artist + " extras=" + describeExtras(intent));
-            String query = buildSearchQuery(keywords, artist);
-            if (!query.isEmpty())
-                MediaSessionService.dispatchVoiceSearch(query);
+            if (!keywords.isEmpty() || !artist.isEmpty())
+                MediaSessionService.dispatchVoiceSearch(keywords, artist);
             else
                 BydVoiceHelper.log("search ignored: empty query");
             return;
@@ -121,15 +127,24 @@ public class BydControlReceiver extends BroadcastReceiver {
                 + " extras=" + describeExtras(intent));
     }
 
-    /** 歌手 + 歌名拼一条搜索词（与网易云语义一致）；两者都空则返回空串。 */
-    private static String buildSearchQuery(String keywords, String artist) {
-        String k = keywords == null ? "" : keywords.trim();
-        String a = artist == null ? "" : artist.trim();
-        if (a.isEmpty())
-            return k;
-        if (k.isEmpty())
-            return a;
-        return a + " " + k;
+    /**
+     * 取第一个非空候选；与网易云 m8706h 一致：含 '|' 时只取 '|' 前第一段。
+     * 小迪常把一个字段写成 "晴天|周杰伦的晴天|..." 供 app 挑选。
+     */
+    private static String firstCandidate(String... values) {
+        for (String v : values) {
+            if (v == null)
+                continue;
+            String s = v.trim();
+            if (s.isEmpty())
+                continue;
+            int bar = s.indexOf('|');
+            if (bar >= 0)
+                s = s.substring(0, bar).trim();
+            if (!s.isEmpty())
+                return s;
+        }
+        return "";
     }
 
     private static int parseSeconds(Intent intent) {

@@ -73,7 +73,7 @@ public:
 
     // ---- 启动续播 ----
     // 把队列 / 当前曲目 / 播放位置 / 是否在播写入本地设置；每 5 秒、切歌、
-    // 播放状态变化与退出时都会落盘，Android 被系统杀进程也能续上。
+    // 播放状态变化（1.2s 防抖）与退出时都会落盘，Android 被系统杀进程也能续上。
     void saveState();
     // 启动时从本地设置恢复上一次的队列与位置；若上次正在播则自动续播并跳到原位置。
     // 由 AppController 在信号连接完成后调用（此时 requestPlay 已被接住）。
@@ -155,6 +155,9 @@ private:
     QString m_lyricsText;
     QStringList m_lyricLines;
     QStringList m_lyricTransLines;   // 与 m_lyricLines 同长度；无翻译行为空串
+    // lyricTimes() 的缓存：QML 绑定在每次换行（lyricsChanged）时都会重新读取，
+    // 预生成可避免每次重新遍历整份歌词。
+    QVariantList m_lyricTimes;
     int m_lyricIndex = -1;
     QUrl m_currentUrl;
     // 每次换歌递增：迟到的带 headers 下载结果不能盖掉新歌
@@ -181,6 +184,9 @@ private:
     // 正在切歌取链：旧源已停止但新地址还没到，期间的播放命令一律忽略。
     bool m_switching = false;
     QTimer *m_saveTimer = nullptr;
+    // 队列/状态变化的落盘防抖：整队列序列化成 JSON 在千首队列上并不便宜，
+    // 连续 addQueue/removeQueue 时没必要每次都做，攒一小段再写。
+    QTimer *m_saveDebounce = nullptr;
     // 播放看门狗：部分后端（尤其 Android MediaPlayer）在线流播完/出错时既不派发
     // EndOfMedia 也不派发 errorOccurred，表现为「播完一首停住」或「失败卡住不换源」。
     // 每秒巡检一次：起播超时判失败换源、播完停滞判结束切歌、中途停滞超时判失败换源。

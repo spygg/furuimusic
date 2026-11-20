@@ -31,6 +31,8 @@ msvc: QMAKE_CXXFLAGS += /utf-8
 CORE_HEADERS += \
     core/QtCompat.h \
     core/Types.h \
+    core/Pinyin.h \
+    core/PinyinTable.h \
     core/Version.h \
     core/Settings.h \
     core/JsonMapper.h \
@@ -61,6 +63,7 @@ CORE_HEADERS += \
 
 CORE_SOURCES += \
     core/Types.cpp \
+    core/Pinyin.cpp \
     core/HttpClient.cpp \
     core/UpdateChecker.cpp \
     core/SourceConfig.cpp \

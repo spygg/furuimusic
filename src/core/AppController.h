@@ -8,6 +8,7 @@
 #include <QSortFilterProxyModel>
 #include <QVariant>
 #include <QVariantList>
+#include <QVector>
 
 #include "Types.h"
 #include "Version.h"
@@ -23,7 +24,9 @@ public:
         FavoriteRole, InQueueRole,
         // 源模型行号：歌单详情视图挂在过滤代理上，QML 拿到的 index 是代理行；
         // playResult/toggleFavoriteResult 这些按源模型下标取歌的调用都用本角色对齐
-        RowRole
+        RowRole,
+        // 预生成的检索键（原文 + 全拼 + 首字母），供歌单内拼音搜索用
+        SearchKeyRole
     };
     Q_ENUM(Roles)
     explicit SongListModel(QObject *parent = nullptr);
@@ -32,6 +35,9 @@ public:
     QHash<int, QByteArray> roleNames() const override;
     void setSongs(const QVector<Song> &songs);
     void appendSongs(const QVector<Song> &songs);
+    // 播放队列专用增量同步：队列变化常只是尾部追加一首，避免整表 beginResetModel
+    // 让 QML 列表丢滚动位置、重放入场动画；结构与旧数据无法复用时才退化为 setSongs。
+    void syncSongs(const QVector<Song> &songs);
     void refreshRow(int row);
     // 播放时异步补到封面后，把同一首歌在结果/队列模型里的行一起刷新
     void setCover(const QString &uid, const QString &cover);
@@ -42,6 +48,7 @@ public:
     void setQueueUids(const QSet<QString> &uids);
 private:
     QVector<Song> m_songs;
+    QVector<QString> m_searchKeys;   // 与 m_songs 同序，setSongs 时一次生成
     QSet<QString> m_queueUids;
 };
 
@@ -157,6 +164,8 @@ class AppController : public QObject {
     Q_PROPERTY(bool keepScreenOn READ keepScreenOn NOTIFY settingsChanged)
     // 搜索态（曲库页有关键词）：外壳据此隐藏播放栏，给搜索结果/软键盘让出空间
     Q_PROPERTY(bool searchActive READ searchActive WRITE setSearchActive NOTIFY searchActiveChanged)
+    // 冷启动时若有播放历史或续播状态，外壳直接进播放页
+    Q_PROPERTY(bool showPlayerOnStart READ showPlayerOnStart CONSTANT)
     Q_PROPERTY(QString searchType READ searchType NOTIFY settingsChanged)
     Q_PROPERTY(bool openApiEnabled READ openApiEnabled NOTIFY settingsChanged)
     Q_PROPERTY(QString openApiAddress READ openApiAddress NOTIFY settingsChanged)
@@ -240,6 +249,7 @@ public:
     bool keepScreenOn() const;
     bool searchActive() const;
     Q_INVOKABLE void setSearchActive(bool value);
+    bool showPlayerOnStart() const;
     QString searchType() const;
     bool openApiEnabled() const;
     QString openApiAddress() const;
@@ -282,6 +292,11 @@ public:
     // 并发拉取平台公开榜单（无需登录）写入 discovery 模型；sourceId 为空=全部平台，
     // 指定平台则只拉该平台的默认榜单（配合平台筛选：未登录也按平台给默认歌单）。
     Q_INVOKABLE void loadDiscovery(const QString &sourceId = QString());
+    // 汽水推荐：默认/熟悉/新鲜模式 + 场景子领域（儿歌/乡村/雨天…）
+    Q_INVOKABLE QStringList qishuiModes() const;
+    Q_INVOKABLE QStringList qishuiCategories() const;
+    Q_INVOKABLE void loadQishuiRecommend(const QString &mode,
+                                         const QString &category = QString());
     // 打开 discovery 里的公开歌单：走公共 playlistDetail 端点，不触碰本地账号歌单
     Q_INVOKABLE void openDiscoveryPlaylist(const QString &playlistUid);
     Q_INVOKABLE int playlistCount() const;
@@ -428,6 +443,13 @@ signals:
 private:
     void setStatus(const QString &text);
     void resolveAndPlay(const Song &song);
+    // 取到可用直链后的统一落地：状态、歌词/封面之外的播放元数据、playUrl、历史记录。
+    // 提取出来供「正常取链」与「预取缓存命中」两条路径共用。
+    void applyResolveResult(const Song &song, const Playable &p);
+    // 当前歌真正播起来后，按播放模式预解析下一首的直链与歌词，缓存到 Impl::preloaded
+    void preloadNext();
+    void preloadSong(const Song &song);
+    void clearPreloadCache();
     // PlayerController 需要一首「推荐续播」：按当前汽水果取相似歌曲插到当前歌后面；
     // 取不到 / 非汽水果则走原队列（顺序播放末尾则停止）。
     void onRecommendationNeeded();

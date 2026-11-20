@@ -1,7 +1,11 @@
 {
-  "version": "1.4.34",
-  "desc": "新增\n- 比亚迪车机特供版：伪装网易云包名接入小迪语音，支持打开应用/切歌/暂停/快进快退等口令，与主流版完全隔离互不影响\n- 车机语音点歌：直接说「播放晴天」即可搜索并播放，支持「歌手 + 歌名」组合\n- 车机歌单口令：「播放我喜欢的歌」「播放最近在听」，及单曲循环/列表循环/顺序/随机播放模式切换\n- 车机语音「收藏这首歌 / 取消收藏」当前歌曲\n修复\n- 车机特供版启动即被强制竖屏的问题：显式锁定横屏\n",
+  "version": "1.4.35",
+  "desc": "新增\n- 汽水音乐推荐多模式：曲库页点开「汽水音乐」音源菜单即出模式选择（默认/熟悉/新鲜），并提供儿歌、乡村、雨天、KTV必点、快乐时光、动感健身等场景一键换一批推荐\n- 歌词外观自定义：设置页可关闭封面模糊背景、选择歌词对齐方式、调整译文缩放与行间距，播放页歌词底部新增可拖动进度线\n- 本地歌单搜索支持拼音与首字母检索（内置拼音表，无需第三方库）\n优化\n- 音源脚本 JS 引擎启动后空闲预热，首次播放取链更快\n- 播放队列落盘改防抖、歌词时间轴预生成缓存，大歌单切歌与歌词滚动更流畅\n- 后台预取链不再影响音源优先级排名\n修复\n- 汽水推荐场景未登录汽水账号时明确提示到「设置→账号→汽水音乐」填 Cookie\n- 汽水推荐结果类型标识错误导致漫游/歌词异常\n",
   "history": [
+    {
+      "version": "1.4.34",
+      "desc": "新增\n- 比亚迪车机特供版：伪装网易云包名接入小迪语音，支持打开应用/切歌/暂停/快进快退等口令，与主流版完全隔离互不影响\n- 车机语音点歌：直接说「播放晴天」即可搜索并播放，支持「歌手 + 歌名」组合\n- 车机歌单口令：「播放我喜欢的歌」「播放最近在听」，及单曲循环/列表循环/顺序/随机播放模式切换\n- 车机语音「收藏这首歌 / 取消收藏」当前歌曲\n修复\n- 车机特供版启动即被强制竖屏的问题：显式锁定横屏\n"
+    },
     {
       "version": "1.4.33",
       "desc": "新增\n- 在线升级支持国内加速镜像：下载前自动并行探测 GitHub 原链与多家加速站，只认返回真实安装包的线路，择优最快下载；某条线路失败自动切换下一条，直至成功\n修复\n- 网络不畅时在线升级「下载慢、经常失败、打不开」的问题\n"
@@ -152,10 +156,10 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-android-arm64-v8a.apk",
-    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-carcompat-netease-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.35/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.35/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.35/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.35/FuruiMusic-android-arm64-v8a.apk",
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.35/FuruiMusic-carcompat-netease-arm64-v8a.apk"
   }
 }

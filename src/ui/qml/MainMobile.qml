@@ -117,6 +117,8 @@ Item {
     // （这正是以前看着像没铺到屏幕左边缘的原因）。页面只负责内容，不再各自画背景。
     Backdrop {
         anchors.fill: parent
+        // 设置页关掉「封面作为歌词背景」后整窗退回纯主题底色
+        visible: theme.coverLyricBackground
         source: app.currentCover.length > 0 ? app.currentCover
                                             : "qrc:/qml/art/default_cover.jpg"
         dark: theme.dark

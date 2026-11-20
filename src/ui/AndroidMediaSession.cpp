@@ -23,6 +23,8 @@
 #include <QOperatingSystemVersion>
 #include <QTimer>
 #include <QUrl>
+#include <QVector>
+#include <functional>
 #include <jni.h>
 #include <memory>
 #endif
@@ -49,6 +51,15 @@ AndroidMediaSession *g_instance = nullptr;
 bool g_serviceStarted = false;
 bool g_permissionRequested = false;
 QMutex g_commandMutex;
+
+// 语音点歌的多轮搜索状态：先按歌名搜，没结果再拼歌手，最后只用歌手兜底。
+struct VoiceSearchCtx {
+    QVector<QString> queries;
+    int index = -1;
+    QMetaObject::Connection conn;
+    QTimer *timer = nullptr;
+    bool done = false;
+};
 
 // Android 13+ 的 POST_NOTIFICATIONS 是运行时权限，Qt 6.11 的 QPermission
 // 没有对应的封装类，只能直接向 Activity 申请。未授予时前台服务照常运行
@@ -155,21 +166,29 @@ void jniCommand(JNIEnv *, jclass, jint action, jlong position)
     AndroidMediaSession::handleCommand(int(action), qint64(position));
 }
 
-// 车机语音点歌：MediaSessionService.dispatchVoiceSearch() 回传关键词。
+// 车机语音点歌：MediaSessionService.dispatchVoiceSearch() 回传歌名/歌手。
 // 与 jniCommand 一样跑在 Android 主线程，真正的工作排到 Qt 主线程做。
+static QString jniString(JNIEnv *env, jstring s)
+{
+    if (!s) return QString();
+    const jchar *chars = env->GetStringChars(s, nullptr);
+    if (!chars) return QString();
+    const jsize len = env->GetStringLength(s);
+    const QString out = QString::fromUtf16(reinterpret_cast<const char16_t *>(chars), len);
+    env->ReleaseStringChars(s, chars);
+    return out;
+}
+
 void jniSearch(JNIEnv *env, jclass, jstring keyword)
 {
-    if (!g_instance || !keyword)
-        return;
-    const jchar *chars = env->GetStringChars(keyword, nullptr);
-    if (!chars)
-        return;
-    const jsize len = env->GetStringLength(keyword);
-    const QString query = QString::fromUtf16(reinterpret_cast<const char16_t *>(chars), len);
-    env->ReleaseStringChars(keyword, chars);
-    if (query.trimmed().isEmpty())
-        return;
-    AndroidMediaSession::handleVoiceSearch(query);
+    if (!g_instance) return;
+    AndroidMediaSession::handleVoiceSearch(jniString(env, keyword));
+}
+
+void jniSearchEx(JNIEnv *env, jclass, jstring keyword, jstring artist)
+{
+    if (!g_instance) return;
+    AndroidMediaSession::handleVoiceSearch(jniString(env, keyword), jniString(env, artist));
 }
 
 } // namespace
@@ -190,9 +209,12 @@ void AndroidMediaSession::install()
                   reinterpret_cast<void *>(&jniCommand) },
                 // 车机语音点歌（主流版无人调用，注册无害）
                 { const_cast<char *>("onNativeSearch"), const_cast<char *>("(Ljava/lang/String;)V"),
-                  reinterpret_cast<void *>(&jniSearch) }
+                  reinterpret_cast<void *>(&jniSearch) },
+                { const_cast<char *>("onNativeSearchEx"),
+                  const_cast<char *>("(Ljava/lang/String;Ljava/lang/String;)V"),
+                  reinterpret_cast<void *>(&jniSearchEx) }
             };
-            env.jniEnv()->RegisterNatives(clazz, methods, 2);
+            env.jniEnv()->RegisterNatives(clazz, methods, 3);
             env.jniEnv()->DeleteLocalRef(clazz);
         }
     }
@@ -359,6 +381,9 @@ void AndroidMediaSession::handleCommand(int action, qint64 position)
     case CmdStop:
         player->stop();
         g_serviceStarted = false;
+        // 与 CmdPause 一样：MV 沉浸页有自己的播放器，停止命令必须一起停，
+        // 否则「小迪停止播放」后音乐停了、MV 还在响。
+        emit AppController::instance()->mvPauseRequested();
         // 主动清空队列/停止时把焦点还给系统
         releaseAudioFocus();
         break;
@@ -415,39 +440,86 @@ void AndroidMediaSession::handleVoiceListCommand(int action)
     }, Qt::QueuedConnection);
 }
 
-void AndroidMediaSession::handleVoiceSearch(const QString &keyword)
+void AndroidMediaSession::handleVoiceSearch(const QString &keyword, const QString &artist)
 {
-    // 点歌不需要音频焦点（app 可能没在放歌），与媒体键不同。
-    // JNI 回调来自 Android 主线程：search/playResult 会操作 UI 模型，
-    // 必须排队到 Qt 主线程执行。
-    QMetaObject::invokeMethod(AppController::instance(), [keyword] {
+    const QString kw = keyword.trimmed();
+    const QString ar = artist.trimmed();
+    if (kw.isEmpty() && ar.isEmpty())
+        return;
+
+    // JNI 回调来自 Android 主线程：search/playResult 会操作 UI 模型，必须排到 Qt 主线程。
+    QMetaObject::invokeMethod(AppController::instance(), [kw, ar] {
         AppController *app = AppController::instance();
-        app->setSearchType(QStringLiteral("song"));  // 语音点歌固定搜歌曲
-        Logger::write(QStringLiteral("I"),
-                      QStringLiteral("[语音点歌] 搜索: %1").arg(keyword));
-        // 搜完播第一条；连接用 shared_ptr 持有，成功回调与 20s 兜底两条路径
-        // 谁先到谁断开，后到的 disconnect 在已断开的连接上是安全空操作
-        auto conn = std::make_shared<QMetaObject::Connection>();
-        *conn = QObject::connect(app, &AppController::searchFinished, app,
-                [conn, app](int count, const QString &kind) {
-                    QObject::disconnect(*conn);
-                    if (count > 0 && kind == QLatin1String("song")) {
-                        Logger::write(QStringLiteral("I"),
-                                      QStringLiteral("[语音点歌] %1 条结果，播放第一条").arg(count));
-                        app->playResult(0);
-                    } else {
-                        Logger::write(QStringLiteral("I"),
-                                      QStringLiteral("[语音点歌] 无可用结果 kind=%1").arg(kind));
+        auto ctx = std::make_shared<VoiceSearchCtx>();
+        if (!kw.isEmpty()) ctx->queries.append(kw);
+        if (!ar.isEmpty() && !kw.isEmpty()) ctx->queries.append(ar + QLatin1Char(' ') + kw);
+        // 小迪常把整句「周杰伦的晴天」塞进关键词；去掉「的」再搜一次，命中率更高
+        if (kw.contains(QStringLiteral("的"))) {
+            QString alt = kw;
+            alt.replace(QStringLiteral("的"), QStringLiteral(" "));
+            alt = alt.simplified();
+            if (!alt.isEmpty() && !ctx->queries.contains(alt)) ctx->queries.append(alt);
+        }
+        if (!ar.isEmpty() && kw.isEmpty()) ctx->queries.append(ar);
+        ctx->timer = new QTimer(app);
+        ctx->timer->setSingleShot(true);
+
+        const auto finish = [ctx] {
+            if (ctx->done) return;
+            ctx->done = true;
+            QObject::disconnect(ctx->conn);
+            ctx->timer->stop();
+            ctx->timer->deleteLater();
+        };
+
+        auto tryNext = std::make_shared<std::function<void()>>();
+        *tryNext = [ctx, app, finish, tryNext, ar] {
+            if (ctx->done) return;
+            QObject::disconnect(ctx->conn);
+            ctx->timer->stop();
+            ++ctx->index;
+            if (ctx->index >= ctx->queries.size()) { finish(); return; }
+
+            const QString q = ctx->queries.at(ctx->index);
+            Logger::write(QStringLiteral("I"),
+                          QStringLiteral("[语音点歌] 搜索尝试 %1/%2：%3")
+                              .arg(ctx->index + 1).arg(ctx->queries.size()).arg(q));
+            app->setSearchType(QStringLiteral("song"));
+            ctx->conn = QObject::connect(app, &AppController::searchFinished, app,
+                [ctx, app, finish, tryNext, ar](int count, const QString &kind) {
+                    if (ctx->done) return;
+                    if (count < 0) { finish(); return; }        // 搜索被取消
+                    if (kind != QLatin1String("song")) return;  // 等歌曲搜索的结果
+                    if (count <= 0) { (*tryNext)(); return; }   // 这一轮没结果，换下一种拼法
+
+                    // 有歌手信息时优先挑「歌手匹配」的行，而不是无脑播第一条
+                    int row = 0;
+                    if (!ar.isEmpty()) {
+                        const QVector<Song> songs = app->results()->songs();
+                        const QString needle = normalize(ar);
+                        for (int i = 0; i < songs.size(); ++i) {
+                            if (songs.at(i).normalizedKey().contains(needle)) { row = i; break; }
+                        }
                     }
+                    row = qBound(0, row, app->results()->rowCount() - 1);
+                    Logger::write(QStringLiteral("I"),
+                                  QStringLiteral("[语音点歌] 命中 %1 条，播放第 %2 行")
+                                      .arg(count).arg(row));
+                    app->playResult(row);
+                    finish();
                 });
-        QTimer::singleShot(20000, app, [conn] { QObject::disconnect(*conn); });
-        app->search(keyword);
+            ctx->timer->start(12000);   // 单轮 12s 超时，避免语音点歌永久挂住
+            app->search(q);
+        };
+        // 超时只接一次：放在循环外，避免每轮重试都叠一个连接而跳过候选查询
+        QObject::connect(ctx->timer, &QTimer::timeout, app, [tryNext] { (*tryNext)(); });
+        (*tryNext)();
     }, Qt::QueuedConnection);
 }
 #else
 void AndroidMediaSession::install() {}
 void AndroidMediaSession::handleCommand(int, qint64) {}
-void AndroidMediaSession::handleVoiceSearch(const QString &) {}
+void AndroidMediaSession::handleVoiceSearch(const QString &, const QString &) {}
 void AndroidMediaSession::handleVoiceListCommand(int) {}
 #endif
 

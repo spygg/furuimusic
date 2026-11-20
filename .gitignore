@@ -16,6 +16,7 @@
 /bin_qt5/
 /bin_qt6/
 /bin_android/
+/bin_android_carcompat/
 *.exe
 *.dll
 # 例外：Qt 5 Windows 运行必需的 OpenSSL 1.1 运行库

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 车机兼容版：比亚迪小迪的语音路由按「默认音乐应用」名称识别，
+         官方只认 网易云 / 搜狗 / 酷我。本包 applicationId 已伪装为
+         com.netease.cloudmusic，应用名也必须同步伪装，否则语音点歌
+         （如「播放周杰伦的晴天」）不会投递到本应用。 -->
+    <string name="app_name">网易云音乐</string>
+    <string name="app_desc">网易云音乐车载版</string>
+</resources>

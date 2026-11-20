@@ -96,7 +96,7 @@ Item {
                 }
             }
 
-            // 歌词字号与高亮色：蓝色高亮对红绿色弱友好，字号按百分比持久化
+            // 歌词字号与外观：字号、译文缩放、行距、对齐、背景、进度线均由设置页持久化
             Text { Layout.fillWidth: true; text: "歌词字号"; color: cSub; font.pixelSize: 12 }
             ColumnLayout {
                 Layout.fillWidth: true
@@ -186,10 +186,144 @@ Item {
                         font.bold: true
                     }
                     Item { Layout.fillWidth: true }
-                    Text {
-                        text: "蓝色高亮对色弱更友好"
-                        color: cSub
-                        font.pixelSize: theme.fontXs
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Text { Layout.fillWidth: true; text: "封面作为歌词背景"; color: cText; font.pixelSize: 13 }
+                    Switch {
+                        checked: theme.coverLyricBackground
+                        onToggled: theme.coverLyricBackground = checked
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Text { Layout.fillWidth: true; text: "歌词对齐"; color: cText; font.pixelSize: 13 }
+                    ComboBox {
+                        id: lyricAlignCombo
+                        Layout.preferredWidth: 160
+                        Layout.preferredHeight: theme.touchMin
+                        model: ["自动（宽屏左/竖屏中）", "左对齐", "居中", "右对齐"]
+                        currentIndex: ["auto", "left", "center", "right"].indexOf(theme.lyricAlign)
+                        onActivated: theme.lyricAlign = ["auto", "left", "center", "right"][index]
+                        background: Rectangle { color: cCard; radius: 6; border.color: cLine }
+                        contentItem: Text {
+                            text: lyricAlignCombo.displayText
+                            color: cText
+                            font.pixelSize: theme.fontSm
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: 8
+                        }
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Text { Layout.fillWidth: true; text: "译文缩放"; color: cText; font.pixelSize: 13 }
+                    Text { text: theme.lyricTransScale + "%"; color: cPrimary; font.pixelSize: theme.fontSm }
+                    Button {
+                        text: "默认"
+                        Layout.preferredWidth: 56
+                        Layout.preferredHeight: theme.touchMin
+                        background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
+                        contentItem: Text {
+                            text: parent.text
+                            color: cPrimary
+                            font.pixelSize: theme.fontSm
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        onClicked: theme.lyricTransScale = 100
+                    }
+                }
+                Slider {
+                    id: transScaleSlider
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: theme.touchMin
+                    from: 60; to: 160; stepSize: 5
+                    Component.onCompleted: value = theme.lyricTransScale
+                    Connections {
+                        target: theme
+                        function onLyricStyleChanged() {
+                            if (Math.abs(transScaleSlider.value - theme.lyricTransScale) > 0.5)
+                                transScaleSlider.value = theme.lyricTransScale
+                        }
+                    }
+                    onMoved: theme.lyricTransScale = Math.round(value)
+                    background: Rectangle {
+                        x: transScaleSlider.leftPadding
+                        y: transScaleSlider.topPadding + transScaleSlider.availableHeight / 2 - 2
+                        width: transScaleSlider.availableWidth; height: 4; radius: 2; color: cLine
+                        Rectangle {
+                            width: transScaleSlider.visualPosition * parent.width
+                            height: parent.height; radius: 2; color: cPrimary
+                        }
+                    }
+                    handle: Rectangle {
+                        x: transScaleSlider.leftPadding
+                           + transScaleSlider.visualPosition * transScaleSlider.availableWidth - 9
+                        y: transScaleSlider.topPadding + transScaleSlider.availableHeight / 2 - 9
+                        width: 18; height: 18; radius: 9; color: cPrimary; border.color: cCard; border.width: 2
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Text { Layout.fillWidth: true; text: "歌词行距"; color: cText; font.pixelSize: 13 }
+                    Text { text: theme.lyricLineGap + " px"; color: cPrimary; font.pixelSize: theme.fontSm }
+                    Button {
+                        text: "默认"
+                        Layout.preferredWidth: 56
+                        Layout.preferredHeight: theme.touchMin
+                        background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
+                        contentItem: Text {
+                            text: parent.text
+                            color: cPrimary
+                            font.pixelSize: theme.fontSm
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        onClicked: theme.lyricLineGap = 2
+                    }
+                }
+                Slider {
+                    id: lineGapSlider
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: theme.touchMin
+                    from: 0; to: 24; stepSize: 1
+                    Component.onCompleted: value = theme.lyricLineGap
+                    Connections {
+                        target: theme
+                        function onLyricStyleChanged() {
+                            if (Math.abs(lineGapSlider.value - theme.lyricLineGap) > 0.5)
+                                lineGapSlider.value = theme.lyricLineGap
+                        }
+                    }
+                    onMoved: theme.lyricLineGap = Math.round(value)
+                    background: Rectangle {
+                        x: lineGapSlider.leftPadding
+                        y: lineGapSlider.topPadding + lineGapSlider.availableHeight / 2 - 2
+                        width: lineGapSlider.availableWidth; height: 4; radius: 2; color: cLine
+                        Rectangle {
+                            width: lineGapSlider.visualPosition * parent.width
+                            height: parent.height; radius: 2; color: cPrimary
+                        }
+                    }
+                    handle: Rectangle {
+                        x: lineGapSlider.leftPadding
+                           + lineGapSlider.visualPosition * lineGapSlider.availableWidth - 9
+                        y: lineGapSlider.topPadding + lineGapSlider.availableHeight / 2 - 9
+                        width: 18; height: 18; radius: 9; color: cPrimary; border.color: cCard; border.width: 2
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Text { Layout.fillWidth: true; text: "歌词进度线（拖动定位）"; color: cText; font.pixelSize: 13 }
+                    Switch {
+                        checked: theme.showLyricProgressLine
+                        onToggled: theme.showLyricProgressLine = checked
                     }
                 }
             }

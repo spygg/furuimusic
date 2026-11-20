@@ -22,7 +22,7 @@ public:
     static void handleCommand(int action, qint64 position);
     // 车机语音点歌（BYD AUTOVOICE_SEARCH_PLUS → Java → 此处）：
     // 搜索关键词并自动播放第一条结果。非 Android 平台为空实现。
-    static void handleVoiceSearch(const QString &keyword);
+    static void handleVoiceSearch(const QString &keyword, const QString &artist = QString());
     // 车机歌单/模式类口令（播放我喜欢的歌/最近在听/随机/收藏切换），
     // 由 handleCommand 的 default 分支转入；非 Android 平台为空实现。
     static void handleVoiceListCommand(int action);

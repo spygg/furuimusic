@@ -264,8 +264,19 @@ PlayerController::PlayerController(QObject *parent)
     m_resumeSeekTimer = new QTimer(this);
     m_resumeSeekTimer->setInterval(200);
     connect(m_resumeSeekTimer, &QTimer::timeout, this, &PlayerController::applyPendingSeek);
-    connect(this, &PlayerController::queueChanged, this, &PlayerController::saveState);
-    connect(this, &PlayerController::stateChanged, this, &PlayerController::saveState);
+    // 队列/播放状态变化走防抖：千首队列每次 add/remove 都完整序列化一遍 JSON
+    // 会占住 UI 线程。真正落盘由 5s 定时器与 aboutToQuit 兜底，1.2s 只是让
+    // 「刚加的队列」尽快可恢复。
+    m_saveDebounce = new QTimer(this);
+    m_saveDebounce->setSingleShot(true);
+    m_saveDebounce->setInterval(1200);
+    connect(m_saveDebounce, &QTimer::timeout, this, &PlayerController::saveState);
+    connect(this, &PlayerController::queueChanged, this, [this] {
+        if (m_saveDebounce) m_saveDebounce->start();
+    });
+    connect(this, &PlayerController::stateChanged, this, [this] {
+        if (m_saveDebounce) m_saveDebounce->start();
+    });
     if (QCoreApplication::instance())
         connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
                 this, [this] {
@@ -1140,6 +1151,12 @@ void PlayerController::setLyrics(const QString &lrc, const QString &trans)
         }
     }
     m_lyricIndex = -1;
+    // 预生成时间轴：QML 的 `app.lyricTimes` 绑定会在每次 lyricsChanged 时读取，
+    // 这里一次建好，避免每次换行都重新遍历整份歌词。
+    m_lyricTimes.clear();
+    m_lyricTimes.reserve(m_lyrics.size());
+    for (const LyricLine &l : m_lyrics)
+        m_lyricTimes.append(static_cast<long long>(l.time));
     emit lyricsChanged();
 }
 
@@ -1152,11 +1169,8 @@ QString PlayerController::currentLyricLine() const
 
 QVariantList PlayerController::lyricTimes() const
 {
-    // 无时间轴歌词时返回空表，界面据此决定要不要做逐行扫光。
-    QVariantList out;
-    for (const LyricLine &l : m_lyrics)
-        out.append(static_cast<long long>(l.time));
-    return out;
+    // 无时间轴歌词时为空表，界面据此决定要不要做逐行扫光。
+    return m_lyricTimes;
 }
 
 void PlayerController::updateLyric(qint64 pos)
@@ -1170,10 +1184,19 @@ void PlayerController::updateLyric(qint64 pos)
                                : std::numeric_limits<qint64>::max();
         if (pos >= start && pos < end) return;
     }
+    // m_lyrics 按时间升序：二分找最后一个 time <= pos 的行。
+    // 原来是每次换行都从头线性扫描，长歌词（200+ 行）在拖动进度时会有可感开销。
     int idx = -1;
-    for (int i = 0; i < m_lyrics.size(); ++i) {
-        if (m_lyrics.at(i).time <= pos) idx = i;
-        else break;
+    int lo = 0;
+    int hi = m_lyrics.size() - 1;
+    while (lo <= hi) {
+        const int mid = lo + (hi - lo) / 2;
+        if (m_lyrics.at(mid).time <= pos) {
+            idx = mid;
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
     }
     if (idx != m_lyricIndex) {
         m_lyricIndex = idx;

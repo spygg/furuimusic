@@ -119,6 +119,7 @@ set_source_files_properties(core/config.qrc PROPERTIES
 set(CORE_FILES
     core/QtCompat.h
     core/Types.h core/Types.cpp
+    core/Pinyin.h core/Pinyin.cpp core/PinyinTable.h
     core/Version.h
     core/Settings.h core/JsonMapper.h
     core/HttpClient.h core/HttpClient.cpp
@@ -236,6 +237,10 @@ if(ANDROID)
                     "${FURUI_STAGED_PACKAGE_DIR}/AndroidManifest.xml")
         file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6-carcompat/src/"
              DESTINATION "${FURUI_STAGED_PACKAGE_DIR}/src")
+        # 应用名同步伪装：小迪按「网易云音乐」这个名字路由语音点歌，
+        # 只改包名不改 label 时广播不会发到本应用。
+        file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6-carcompat/res/"
+             DESTINATION "${FURUI_STAGED_PACKAGE_DIR}/res")
         set(FURUI_PACKAGE_SOURCE_DIR "${FURUI_STAGED_PACKAGE_DIR}")
         # 编译期标识：UpdateChecker 用它把在线更新的下载资产切到特供包
         # （特供版包名是伪装的网易云，收主流版 APK 装不上）

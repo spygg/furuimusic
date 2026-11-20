@@ -62,9 +62,19 @@ QImage GlyphImageProvider::requestImage(const QString &id, QSize *size,
     {
         QMutexLocker lock(&cacheMutex());
         QHash<QString, QImage> &c = cache();
-        // 图标种类 × 尺寸 × 配色本来是有限的，但颜色动画会不断产生新键，必须有上限
-        if (c.size() >= 4096)
-            c.clear();
+        // 图标种类 × 尺寸 × 配色本来是有限的，但颜色动画会不断产生新键，必须有上限。
+        // 整表 clear() 会让紧接着的一批请求全部重新栅格化（QPainterPathStroker 是重活），
+        // 形成周期性卡顿；改为只淘汰约 1/4 的键（QHash 无序，等价随机淘汰），把开销摊平。
+        if (c.size() >= 4096) {
+            // 用 key 列表删除：不依赖 QHash::erase 的返回值（老 Qt 5 上返回 void）
+            const int drop = c.size() / 4;
+            QStringList victims;
+            victims.reserve(drop);
+            for (auto it = c.constBegin(); it != c.constEnd() && victims.size() < drop; ++it)
+                victims << it.key();
+            for (const QString &k : victims)
+                c.remove(k);
+        }
         c.insert(key, image);
     }
     if (size)

@@ -56,6 +56,39 @@ Item {
     // 详情曲目正在从平台接口拉取：此时列表为空不等于「没有歌」，
     // 头部直接显示「0 首」会让人以为榜单是空的
     property bool detailLoading: false
+
+    // 汽水推荐模式选择框的条目（音源菜单点「汽水音乐」弹出）。
+    // modeKey 非空 = 三种推荐模式之一；categoryKey 非空 = 场景子领域
+    // （沿用当前模式下拉选中的模式）。label 避开 MenuItem.text 的属性遮蔽。
+    component QishuiModeItem: MenuItem {
+        property string label: ""
+        property string modeKey: ""
+        property int modeIndex: -1
+        property string categoryKey: ""
+        height: Math.max(40, theme.touchMin)
+        contentItem: Text {
+            text: label
+            color: hovered ? cPrimary : cText
+            font.pixelSize: 14
+            verticalAlignment: Text.AlignVCenter
+            leftPadding: 10
+            elide: Text.ElideRight
+        }
+        background: Rectangle {
+            radius: 10
+            color: hovered ? root.cChipHover : "transparent"
+        }
+        onClicked: {
+            qishuiModeMenu.close()
+            if (modeKey !== "") {
+                qishuiModeCombo.currentIndex = modeIndex
+                app.loadQishuiRecommend(modeKey, "")
+            } else if (categoryKey !== "") {
+                app.loadQishuiRecommend(qishuiModeCombo.model[qishuiModeCombo.currentIndex].key, categoryKey)
+            }
+        }
+    }
+
     // 只有「我的歌单」「发现榜单」和搜索结果有两种排布；收藏/历史/队列本身就是单列曲目列表，
     // 在这些 Tab 上显示切换按钮会是死按钮，直接不展示
     readonly property bool gridToggleAvailable: root.searchMode
@@ -147,8 +180,15 @@ Item {
             app.loadFavoritesBySource(sid)
         else if (root.tabIndex === 2)
             app.loadHistoryBySource(sid)
-        else if (root.tabIndex === 4)
-            app.loadDiscovery(root.selectedSourceId())
+        else if (root.tabIndex === 4) {
+            // 汽水音乐走官方车机版的推荐模式（默认/熟悉/新鲜 + 场景领域）。
+            // 传空串沿用上次选的模式：用户在音源菜单选过「熟悉」后，
+            // 切走再切回不会被悄悄重置成默认。
+            if (root.selectedSourceId() === "qishui")
+                app.loadQishuiRecommend("", "")
+            else
+                app.loadDiscovery(root.selectedSourceId())
+        }
         else if (root.tabIndex === 5)
             app.loadMvList(root.mvArea, false)
     }
@@ -614,13 +654,50 @@ Item {
                                 platformMenu.close()
                                 root.selectedPlatform = index
                                 app.filterPlaylists(index === 0 ? "" : app.sourceIds[index - 1])
-                                root.reloadSongs()
+                                if (index > 0 && app.sourceIds[index - 1] === "qishui") {
+                                    // 汽水音乐：切到发现页并弹推荐模式选择框——
+                                    // 模式入口放在音源菜单里比埋在发现页深处更好发现
+                                    root.tabIndex = 4
+                                    root.discoveryTitle = ""
+                                    root.openPlaylistTitle = ""
+                                    qishuiModeMenu.popup(platformBtn, 0, platformBtn.height + 6)
+                                } else {
+                                    root.reloadSongs()
+                                }
                             }
                         }
                         onObjectAdded: function(index, object) { platformMenu.insertItem(index, object) }
                         onObjectRemoved: function(index, object) { platformMenu.removeItem(object) }
                     }
                 }
+            }
+
+            // 汽水推荐模式选择框：音源菜单点「汽水音乐」时弹出。
+            // 与发现页里的模式下拉共用状态（qishuiModeCombo 是唯一状态源），
+            // 选完即加载；发现页的 chips 仍可换场景。
+            Menu {
+                id: qishuiModeMenu
+                padding: 6
+                background: Rectangle {
+                    implicitWidth: 210
+                    radius: 14
+                    color: theme.card
+                    border.color: cLine
+                    border.width: 1
+                }
+                // 条目数固定，逐个展开写（不用 inline component：contentItem 里
+                // 引用包裹 MenuItem 的属性有作用域坑）
+                QishuiModeItem { label: "默认模式 · 推荐歌单"; modeKey: "default"; modeIndex: 0 }
+                QishuiModeItem { label: "熟悉模式 · 收藏/历史扩列"; modeKey: "familiar"; modeIndex: 1 }
+                QishuiModeItem { label: "新鲜模式 · 近期发现"; modeKey: "fresh"; modeIndex: 2 }
+                MenuSeparator { contentItem: Rectangle { implicitHeight: 1; color: cLine } }
+                QishuiModeItem { label: "场景：快乐时光"; categoryKey: "快乐时光" }
+                QishuiModeItem { label: "场景：雨天"; categoryKey: "雨天" }
+                QishuiModeItem { label: "场景：KTV 必点"; categoryKey: "KTV必点" }
+                QishuiModeItem { label: "场景：睡前"; categoryKey: "睡前" }
+                QishuiModeItem { label: "场景：动感健身"; categoryKey: "动感健身" }
+                MenuSeparator { contentItem: Rectangle { implicitHeight: 1; color: cLine } }
+                QishuiModeItem { label: "更多场景 → 发现页场景标签" }
             }
 
             // 胶囊 Tab：选中 = 主色底白字 + 淡投影；放不下时横向滚动，右缘渐隐提示可左滑
@@ -934,7 +1011,7 @@ Item {
                                     id: detailSearchField
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
-                                    placeholderText: "搜索本歌单（歌名 / 歌手）"
+                                    placeholderText: "搜索本歌单（歌名 / 歌手 / 拼音 / 首字母）"
                                     color: root.cText
                                     placeholderTextColor: cSub
                                     font.pixelSize: 13
@@ -1160,6 +1237,118 @@ Item {
                 }
                 // 发现榜单：各平台公开榜单 / 推荐歌单，完全不需要登录
                 Item {
+                    // 汽水音乐推荐面板：默认/熟悉/新鲜三种模式 + 场景子领域
+                    Rectangle {
+                        id: qishuiPanel
+                        anchors.fill: parent
+                        z: 2
+                        visible: root.tabIndex === 4
+                                 && root.selectedSourceId() === "qishui"
+                                 && root.discoveryTitle === ""
+                        color: "transparent"
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: 8
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Text { text: "推荐模式"; color: cSub; font.pixelSize: theme.fontSm }
+                                ComboBox {
+                                    id: qishuiModeCombo
+                                    Layout.preferredWidth: 140
+                                    Layout.preferredHeight: theme.touchMin
+                                    model: [
+                                        { key: "default", label: "默认模式" },
+                                        { key: "familiar", label: "熟悉模式" },
+                                        { key: "fresh", label: "新鲜模式" }
+                                    ]
+                                    textRole: "label"
+                                    currentIndex: 0
+                                    onActivated: app.loadQishuiRecommend(model[index].key, "")
+                                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
+                                    contentItem: Text {
+                                        text: qishuiModeCombo.displayText
+                                        color: cText
+                                        font.pixelSize: theme.fontSm
+                                        verticalAlignment: Text.AlignVCenter
+                                        leftPadding: 8
+                                    }
+                                }
+                                Text { Layout.fillWidth: true }
+                                Text { text: "场景"; color: cSub; font.pixelSize: theme.fontSm }
+                            }
+                            Flickable {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 34
+                                contentWidth: qishuiCatRow.implicitWidth
+                                clip: true
+                                Row {
+                                    id: qishuiCatRow
+                                    spacing: 6
+                                    Repeater {
+                                        model: app.qishuiCategories()
+                                        delegate: Rectangle {
+                                            width: catText.implicitWidth + 20
+                                            height: 30
+                                            radius: 15
+                                            color: cSoft
+                                            border.color: cLine
+                                            Text {
+                                                id: catText
+                                                anchors.centerIn: parent
+                                                text: modelData
+                                                color: cPrimary
+                                                font.pixelSize: theme.fontSm
+                                            }
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: app.loadQishuiRecommend(
+                                                    qishuiModeCombo.model[qishuiModeCombo.currentIndex].key,
+                                                    modelData)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            ListView {
+                                id: qishuiSongList
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                clip: true
+                                spacing: 8
+                                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                                model: app.results
+                                delegate: SongRow {
+                                    width: ListView.view.width
+                                    rowNumber: index
+                                    title: model.title
+                                    artist: model.artist
+                                    album: model.album
+                                    cover: model.cover
+                                    sourceName: model.sourceName
+                                    sourceId: model.source
+                                    accent: app.sourceColor(model.source)
+                                    duration: model.duration
+                                    vip: model.vip
+                                    favorite: model.favorite
+                                    inQueue: model.inQueue
+                                    showMv: false
+                                    onPlayRequested: app.playResult(index)
+                                    onFavoriteRequested: app.toggleFavoriteResult(index)
+                                    onAddRequested: app.addResultToQueue(index)
+                                }
+                                EmptyState {
+                                    anchors.centerIn: parent
+                                    visible: qishuiSongList.count === 0 && !app.discoveryLoading
+                                    iconName: "music"
+                                    title: "暂无推荐内容"
+                                    hint: "检查网络后切换一次模式或场景再试"
+                                }
+                            }
+                        }
+                    }
+
                     GridView {
                         id: discoveryGrid
                         anchors.fill: parent
@@ -1168,7 +1357,7 @@ Item {
                         model: app.discovery
                         cellWidth: root.gridCellWidth
                         cellHeight: root.gridCellHeight
-                        visible: root.gridView && root.discoveryTitle === ""
+                        visible: root.gridView && root.discoveryTitle === "" && !qishuiPanel.visible
 
                         delegate: AlbumCard {
                             width: discoveryGrid.cellWidth
@@ -1191,7 +1380,7 @@ Item {
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                         spacing: 8
                         model: app.discovery
-                        visible: !root.gridView && root.discoveryTitle === ""
+                        visible: !root.gridView && root.discoveryTitle === "" && !qishuiPanel.visible
 
                         delegate: Rectangle {
                             width: discoveryList.width
