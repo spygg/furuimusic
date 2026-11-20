@@ -65,13 +65,25 @@ QStringList manifestUrls(const QString &ref)
 // 单条清单最多等 8s：10 个地址是并行发的，整体上限也就是这一个超时
 constexpr int kManifestTimeoutMs = 8000;
 
-// CI（.github/workflows/release.yml）上传到 Release 的产物命名，下载直链按它拼
+// CI（.github/workflows/release.yml）上传到 Release 的产物命名，下载直链按它拼。
+// 车机兼容版（FURUI_CAR_COMPAT_EDITION，CMake 在 FURUI_ANDROID_CAR_COMPAT=ON 时
+// 注入）必须下特供包：包名是伪装的 com.netease.cloudmusic，主流版 APK 装不上
+// （装上也会变成第二个应用），绝不能把主流版推给它。
+QString androidAssetName()
+{
+#ifdef FURUI_CAR_COMPAT_EDITION
+    return QStringLiteral("FuruiMusic-carcompat-netease-arm64-v8a.apk");
+#else
+    return QStringLiteral("FuruiMusic-android-arm64-v8a.apk");
+#endif
+}
+
 QString releaseAssetFor(const QString &platformKey)
 {
     if (platformKey == QLatin1String("windows"))
         return QStringLiteral("FuruiMusic-windows-x64.zip");
     if (platformKey == QLatin1String("android"))
-        return QStringLiteral("FuruiMusic-android-arm64-v8a.apk");
+        return androidAssetName();
     if (platformKey == QLatin1String("macos"))
         return QStringLiteral("FuruiMusic-macos-x86_64.zip");
     return QStringLiteral("FuruiMusic-linux-x86_64.AppImage");
@@ -379,8 +391,24 @@ bool UpdateChecker::applyManifest(const QJsonObject &obj)
 
 QString UpdateChecker::downloadUrlFor(const QString &version) const
 {
+#ifdef FURUI_CAR_COMPAT_EDITION
+    // 特供版：优先读清单里的 android-carcompat 直链；清单没给就忽略主流版
+    // android 直链（那是 cn.furui.music 的包，装到特供版上等于装第二个应用），
+    // 按 CI 产物名拼特供默认地址。
+    return downloadUrlForKey(version, QStringLiteral("android-carcompat"),
+                             QStringLiteral("FuruiMusic-carcompat-netease-arm64-v8a.apk"));
+#else
+    return downloadUrlForKey(version, platformKey(), releaseAssetFor(platformKey()));
+#endif
+}
+
+// downloadUrlFor 的公共体：key = 清单 downloads 里查的键，fallbackAsset =
+// 清单没给直链时按 CI 产物名拼的默认资产名。
+QString UpdateChecker::downloadUrlForKey(const QString &version, const QString &key,
+                                         const QString &fallbackAsset) const
+{
     // manifest 里声明了当前平台直链则优先（可发版时远程换镜像），否则按 CI 产物名拼默认地址
-    const QString fromManifest = m_downloads.value(platformKey()).toString();
+    const QString fromManifest = m_downloads.value(key).toString();
     if (!fromManifest.isEmpty()) {
         QString url = fromManifest;
         // 清单直链支持 {version}/{v} 占位符：模板写一次，发版不再需要逐条改 URL
@@ -401,7 +429,7 @@ QString UpdateChecker::downloadUrlFor(const QString &version) const
         return url;
     }
     return QStringLiteral("https://github.com/spygg/furuimusic/releases/download/v%1/%2")
-        .arg(version, releaseAssetFor(platformKey()));
+        .arg(version, fallbackAsset);
 }
 
 // 下载候选地址：清单/默认拼出的 GitHub 原链放首位兜底，再追加各加速前缀 +

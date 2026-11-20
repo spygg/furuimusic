@@ -80,6 +80,10 @@ private:
     void finishCheck(const std::shared_ptr<FetchState> &state);
     bool applyManifest(const QJsonObject &obj);
     QString downloadUrlFor(const QString &version) const;
+    // downloadUrlFor 公共体：key = 清单 downloads 键，fallbackAsset = 默认资产名。
+    // 车机特供版用它改查 android-carcompat 键 / 特供资产名。
+    QString downloadUrlForKey(const QString &version, const QString &key,
+                              const QString &fallbackAsset) const;
     QStringList downloadCandidates(const QString &version) const;
     void probeAndDownload(const QStringList &candidates);
     void startDownload(const QString &url);

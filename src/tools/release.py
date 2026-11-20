@@ -34,6 +34,9 @@ DOWNLOAD_TEMPLATES = {
     "linux": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-linux-x86_64.AppImage",
     "macos": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-macos-x86_64.zip",
     "android": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-android-arm64-v8a.apk",
+    # 比亚迪车机特供版（包名伪装 com.netease.cloudmusic）：UpdateChecker 的
+    # FURUI_CAR_COMPAT_EDITION 构建读这个键；发 CI 双变体矩阵后每版都有此资产
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-carcompat-netease-arm64-v8a.apk",
 }
 
 
@@ -76,7 +79,7 @@ def sync_manifest(new_version):
         print("publish/version.json: 已同步（与 src/version.json 一致）")
     else:
         print("publish/version.json: 不存在，跳过兼容副本")
-    print("version.json: version=%s，downloads 四条 URL 已指向 v%s" % (new_version, new_version))
+    print("version.json: version=%s，downloads %d 条 URL 已指向 v%s" % (new_version, len(data["downloads"]), new_version))
 
 
 def main():

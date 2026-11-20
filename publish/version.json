@@ -155,6 +155,7 @@
     "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-windows-x64.zip",
     "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-linux-x86_64.AppImage",
     "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-android-arm64-v8a.apk"
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-android-arm64-v8a.apk",
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.34/FuruiMusic-carcompat-netease-arm64-v8a.apk"
   }
 }

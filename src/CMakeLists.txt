@@ -237,6 +237,9 @@ if(ANDROID)
         file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6-carcompat/src/"
              DESTINATION "${FURUI_STAGED_PACKAGE_DIR}/src")
         set(FURUI_PACKAGE_SOURCE_DIR "${FURUI_STAGED_PACKAGE_DIR}")
+        # 编译期标识：UpdateChecker 用它把在线更新的下载资产切到特供包
+        # （特供版包名是伪装的网易云，收主流版 APK 装不上）
+        target_compile_definitions(FuruiMusic PRIVATE FURUI_CAR_COMPAT_EDITION=1)
         message(STATUS "车机兼容测试版：包名 com.netease.cloudmusic，BYD 对接已启用")
     endif()
     set_target_properties(FuruiMusic PROPERTIES
