@@ -158,6 +158,7 @@ Item {
         PlayerPage {
             id: playerPageMobile
             showControls: true
+            inMultiWindow: root.inMultiWindow
             // 背景已由外壳的 Backdrop 统一铺满整窗，页面内不再重复画一层
             // （重复画会在侧栏右侧形成一条接缝，且左右两侧封面错位）
             ownBackdrop: false
@@ -338,7 +339,8 @@ Item {
                             horizontalAlignment: Text.AlignHCenter
                             text: app.currentLyricLine.length > 0 ? app.currentLyricLine : "♪"
                             color: cSub
-                            font.pixelSize: theme.fontSm
+                            font.pixelSize: Math.max(10, Math.round(theme.fontSm
+                                                                   * theme.lyricFontScale / 100))
                             elide: Text.ElideRight
                             maximumLineCount: 1
                         }
@@ -399,13 +401,15 @@ Item {
         }
 
         // 底部标签栏（横屏改用左侧竖排导航，这里整条隐藏，省下 56dp 高度）
+        // 竖屏/分屏进入播放页(1)或 MV(4)时整条收起：播放页自带完整控件，下方再留一条
+        // 标签栏既重复又占地方；返回其它页后自动恢复（返回键 handleBack 会把 1 改回 0）。
         Rectangle {
             id: tabBar
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: 56
-            visible: !root.sideNav
+            visible: !root.sideNav && root.pageIndex !== 1 && root.pageIndex !== 4
             color: cCard
             Rectangle {
                 anchors.left: parent.left

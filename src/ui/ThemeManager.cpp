@@ -26,6 +26,7 @@ ThemeManager::ThemeManager(QObject *parent) : QObject(parent)
         m_mode = QStringLiteral("system");
 
     m_systemDark = detectSystemDark();
+    m_lyricFontScale = qBound(75, Settings::integer(QStringLiteral("lyricFontScale"), 100), 175);
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     // Qt 6.5+ 的 QStyleHints 直接给出系统配色（Windows / macOS / Linux / Android / iOS），
@@ -38,6 +39,16 @@ ThemeManager::ThemeManager(QObject *parent) : QObject(parent)
     m_watch.setInterval(4000);
     connect(&m_watch, &QTimer::timeout, this, &ThemeManager::refreshSystemDark);
     updateWatch();
+}
+
+void ThemeManager::setLyricFontScale(int scale)
+{
+    const int clamped = qBound(75, scale, 175);
+    if (clamped == m_lyricFontScale)
+        return;
+    m_lyricFontScale = clamped;
+    Settings::set(QStringLiteral("lyricFontScale"), clamped);
+    emit lyricFontScaleChanged();
 }
 
 void ThemeManager::updateWatch()

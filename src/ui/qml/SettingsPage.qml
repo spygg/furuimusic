@@ -96,6 +96,104 @@ Item {
                 }
             }
 
+            // 歌词字号与高亮色：蓝色高亮对红绿色弱友好，字号按百分比持久化
+            Text { Layout.fillWidth: true; text: "歌词字号"; color: cSub; font.pixelSize: 12 }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Text { Layout.fillWidth: true; text: "字号缩放"; color: cText; font.pixelSize: 13 }
+                    Text {
+                        text: theme.lyricFontScale + "%"
+                        color: cPrimary
+                        font.pixelSize: theme.fontSm
+                        font.bold: true
+                    }
+                    Button {
+                        id: resetLyricScaleBtn
+                        text: "默认"
+                        Layout.preferredWidth: 56
+                        Layout.preferredHeight: theme.touchMin
+                        background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
+                        contentItem: Text {
+                            text: resetLyricScaleBtn.text
+                            color: cPrimary
+                            font.pixelSize: theme.fontSm
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        onClicked: theme.lyricFontScale = 100
+                    }
+                }
+                Slider {
+                    id: lyricScaleSlider
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: theme.touchMin
+                    from: 75
+                    to: 175
+                    stepSize: 5
+                    // 不能用 value 绑定：Slider 拖动时会自行写 value，绑定会被悄悄清掉，
+                    // 之后点「默认」或外部改设置滑块就不跟了。用 Connections 双向同步。
+                    Component.onCompleted: value = theme.lyricFontScale
+                    Connections {
+                        target: theme
+                        function onLyricFontScaleChanged() {
+                            if (Math.abs(lyricScaleSlider.value - theme.lyricFontScale) > 0.5)
+                                lyricScaleSlider.value = theme.lyricFontScale
+                        }
+                    }
+                    onMoved: theme.lyricFontScale = Math.round(value)
+                    background: Rectangle {
+                        x: lyricScaleSlider.leftPadding
+                        y: lyricScaleSlider.topPadding + lyricScaleSlider.availableHeight / 2 - 2
+                        width: lyricScaleSlider.availableWidth
+                        height: 4
+                        radius: 2
+                        color: cLine
+                        Rectangle {
+                            width: lyricScaleSlider.visualPosition * parent.width
+                            height: parent.height
+                            radius: 2
+                            color: cPrimary
+                        }
+                    }
+                    handle: Rectangle {
+                        x: lyricScaleSlider.leftPadding
+                           + lyricScaleSlider.visualPosition * lyricScaleSlider.availableWidth - 9
+                        y: lyricScaleSlider.topPadding + lyricScaleSlider.availableHeight / 2 - 9
+                        width: 18
+                        height: 18
+                        radius: 9
+                        color: cPrimary
+                        border.color: cCard
+                        border.width: 2
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 0
+                    Text {
+                        text: "未唱歌词"
+                        color: Qt.rgba(cText.r, cText.g, cText.b, 0.45)
+                        font.pixelSize: Math.round(14 * theme.lyricFontScale / 100)
+                    }
+                    Text {
+                        text: " · 正在唱"
+                        color: theme.lyricHighlight
+                        font.pixelSize: Math.round(14 * theme.lyricFontScale / 100)
+                        font.bold: true
+                    }
+                    Item { Layout.fillWidth: true }
+                    Text {
+                        text: "蓝色高亮对色弱更友好"
+                        color: cSub
+                        font.pixelSize: theme.fontXs
+                    }
+                }
+            }
+
             Text { Layout.fillWidth: true; text: "音质"; color: cSub; font.pixelSize: 12 }
             RowLayout {
                 Layout.fillWidth: true

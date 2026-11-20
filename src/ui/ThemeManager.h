@@ -29,6 +29,9 @@ class ThemeManager : public QObject {
     Q_PROPERTY(QColor accent READ accent NOTIFY paletteChanged)
     Q_PROPERTY(QColor accentSoft READ accentSoft NOTIFY paletteChanged)
     Q_PROPERTY(QColor accentAlt READ accentAlt NOTIFY paletteChanged)
+    // 歌词逐字高亮：红绿色弱对品牌绿 #22C55E 与灰色未唱部分分辨困难，
+    // 单独用蓝轴色（浅色深蓝 / 深色亮蓝），红绿色盲也能靠蓝黄轴区分。
+    Q_PROPERTY(QColor lyricHighlight READ lyricHighlight NOTIFY paletteChanged)
     Q_PROPERTY(QColor heroStart READ heroStart NOTIFY paletteChanged)
     Q_PROPERTY(QColor heroEnd READ heroEnd NOTIFY paletteChanged)
     Q_PROPERTY(QColor vip READ vip NOTIFY paletteChanged)
@@ -57,6 +60,11 @@ class ThemeManager : public QObject {
     Q_PROPERTY(int fontLg READ fontLg NOTIFY metricsChanged)
     Q_PROPERTY(int fontXl READ fontXl NOTIFY metricsChanged)
     Q_PROPERTY(int titleBarHeight READ titleBarHeight NOTIFY metricsChanged)
+
+    // 歌词字号缩放（百分比，75~175，100=跟随视口基准）。设置页可改并持久化；
+    // 用独立信号，改字号不会连带重算所有与歌词无关的间距/圆角绑定。
+    Q_PROPERTY(int lyricFontScale READ lyricFontScale WRITE setLyricFontScale
+               NOTIFY lyricFontScaleChanged)
 
 public:
     explicit ThemeManager(QObject *parent = nullptr);
@@ -88,6 +96,8 @@ public:
     QColor accent() const { return QColor("#22C55E"); }
     QColor accentSoft() const { return isDark() ? QColor("#12301E") : QColor("#DCFCE7"); }
     QColor accentAlt() const { return isDark() ? QColor("#4ADE80") : QColor("#16A34A"); }
+    // 蓝轴高亮：浅色 #1D4ED8 对白底约 6.7:1，深色 #93C5FD 对近黑底约 10:1
+    QColor lyricHighlight() const { return isDark() ? QColor("#93C5FD") : QColor("#1D4ED8"); }
     QColor heroStart() const { return QColor("#22C55E"); }
     QColor heroEnd() const { return isDark() ? QColor("#15803D") : QColor("#16A34A"); }
     QColor vip() const { return isDark() ? QColor("#F0A23C") : QColor("#E8912A"); }
@@ -117,11 +127,15 @@ public:
     int fontXl() const { return scaled(20); }
     int titleBarHeight() const { return scaled(44); }
 
+    int lyricFontScale() const { return m_lyricFontScale; }
+    void setLyricFontScale(int scale);
+
 signals:
     void modeChanged();
     void paletteChanged();
     void systemDarkChanged();
     void metricsChanged();
+    void lyricFontScaleChanged();
 
 private:
     void refreshSystemDark();
@@ -133,6 +147,7 @@ private:
     bool m_systemDark = false;
     QTimer m_watch;
     qreal m_uiScale = 1.0;
+    int m_lyricFontScale = 100;
 };
 
 } // namespace Furui

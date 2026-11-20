@@ -24,6 +24,9 @@ Item {
 
     // 兼容旧调用点：播放页现在始终自带控件，这个属性只为老外壳不报错
     property bool showControls: true
+    // 分屏标记由外壳传入。分屏即使被拉到接近正方形，也保持横分屏的「封面/歌词二选一」
+    // 版式，不因为底栏收起后内容区变高就误判成竖屏（竖屏才在封面下留歌词速览）。
+    property bool inMultiWindow: false
 
     // 竖屏音量弹层：横条收成按钮，点一下才展开垂直滑块
     property bool volumePopupOpen: false
@@ -42,7 +45,8 @@ Item {
     // 中等宽度的横屏窗口（车机分屏：约 560×500）：双栏会把封面和歌词各挤成一条，
     // 改走单栏 pager，一次只显示封面或歌词（与竖屏一致，左右滑动切换）。
     // 矮横屏(<420)没有可用单栏高度，仍保留双栏，否则 compactTiny 会把封面/歌词全部隐藏。
-    readonly property bool splitSingle: !root.wide && root.width >= root.height
+    readonly property bool splitSingle: !root.wide
+                                        && (root.inMultiWindow || root.width >= root.height)
     // 宽窄形态切换时收起音量弹层：两个形态各有一个弹层实例，切换后旧实例已隐藏，
     // 不复位会让新形态的弹层莫名保持展开
     onWideChanged: volumePopupOpen = false
@@ -477,7 +481,7 @@ Item {
                                 text: app.currentLyricLine.length > 0
                                       ? app.currentLyricLine : "♪"
                                 color: root.inkSub
-                                font.pixelSize: 14
+                                font.pixelSize: Math.round(14 * theme.lyricFontScale / 100)
                                 font.bold: true
                                 wrapMode: Text.Wrap
                                 maximumLineCount: 2
@@ -1195,8 +1199,10 @@ Item {
                                 // 一起乘上 0.42，再叠上各自的透明度，结果全都没了。
                                 color: lyricRow.active && lyricView.timed
                                        ? Qt.rgba(root.ink.r, root.ink.g, root.ink.b, 0.45) : root.ink
-                                // 左对齐、当前行加粗放大：与参考项目一致
-                                font.pixelSize: root.wide ? 21 : 17
+                                // 左对齐、当前行加粗放大：与参考项目一致。
+                                // 字号按设置页的歌词缩放取，百分比作用在两档视口基准上。
+                                font.pixelSize: Math.round((root.wide ? 21 : 17)
+                                                           * theme.lyricFontScale / 100)
                                 font.bold: lyricRow.active
                                 wrapMode: Text.Wrap
                                 verticalAlignment: Text.AlignVCenter
@@ -1228,7 +1234,8 @@ Item {
                                     font.family: lineText.font.family
                                     font.pixelSize: lineText.font.pixelSize
                                     font.bold: lineText.font.bold
-                                    color: theme.accent
+                                    // 蓝轴高亮：红绿色弱也能与灰色未唱部分区分
+                                    color: theme.lyricHighlight
                                     wrapMode: Text.Wrap
                                     verticalAlignment: Text.AlignVCenter
                                     horizontalAlignment: lineText.horizontalAlignment
@@ -1248,7 +1255,8 @@ Item {
                                 color: lyricRow.active && lyricView.timed
                                        ? Qt.rgba(root.ink.r, root.ink.g, root.ink.b, 0.45) : root.ink
                                 opacity: 0.78
-                                font.pixelSize: root.wide ? 14 : 12
+                                font.pixelSize: Math.round((root.wide ? 14 : 12)
+                                                           * theme.lyricFontScale / 100)
                                 wrapMode: Text.Wrap
                                 horizontalAlignment: lineText.horizontalAlignment
                             }
