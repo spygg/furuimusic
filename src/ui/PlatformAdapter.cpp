@@ -271,30 +271,24 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
     // 360x734、屏幕 360x806，QML 原点在状态栏下沿）。此时再按系统 insets 内缩一次，
     // 就是「一笔边距扣两遍」：顶部多出一整个状态栏的空白。
     //
-    // 但在部分全面屏/挖孔机或 targetSdk 35 强制 edge-to-edge 时，Qt 没有（或没有足额）
-    // 让出顶部：窗口 geometry 接近甚至等于屏幕高度，状态栏压在 QML 顶部，搜索框被盖住、
-    // 点击无效。此时补「差额」——系统状态栏高度减去 Qt 已经让出的高度：
-    //   - Qt 已完整让出（窗口比屏幕矮一整个状态栏）→ 差额 0，不补，保持正常
-    //   - 窗口铺满整屏（edge-to-edge）→ 补满状态栏高度
-    //   - 只让出一部分 → 补足缺的那部分
-    // 竖屏、横屏顶部都补差额；横屏的左右挖孔边距继续交给 Qt，完全不改（保持原样）。
+    // 但在部分全面屏/挖孔机或 targetSdk 35 强制 edge-to-edge 时，Qt 没有让出顶部：
+    // 状态栏压在 QML 顶部，搜索框被盖住、点击无效。此时要补顶部边距。
+    //
+    // 补多少用 Qt 官方的 safeAreaMargins().top()：它已扣除窗口自身让出的部分，
+    // 「Qt 已让出 → 返回 0（不补）」「铺满整屏 → 返回需补的高度」，不会重复扣减，
+    // 也就不会出现「顶部空白过大」。之前用 ai.top - (screenH-windowH) 估算，在挖孔机上
+    // ai.top 取的是 systemBars|displayCutout 并集（偏高），补得过多导致顶部一大块空白。
+    // JNI 实测值 m_lastOsTop 只用作上限钳制，防 Qt 6.11 刘海机把状态栏+挖孔相加翻倍。
+    // 只补 top，横屏的左右挖孔边距继续交给 Qt，完全不碰（保持原样）。
     if (window) {
         const AndroidInsets ai = queryAndroidInsets(window->devicePixelRatio());
         if (ai.valid) {
             m_lastOsLeft = ai.left;
             m_lastOsTop = ai.top;
             m_insetRetries = 0;
-            const int screenH = window->screen() ? window->screen()->geometry().height() : 0;
-            if (screenH > 0) {
-                // Qt 已让出的顶部高度 = 屏幕高 - 窗口高（Qt geometry 与 screen 同为 dp）。
-                // 竖屏、横屏都要补顶部差额；横屏的左右挖孔边距仍交给 Qt，这里不碰 l/r。
-                const qreal qtInsetTop = qMax(0.0, static_cast<qreal>(screenH - window->height()));
-                const qreal missingTop = ai.top - qtInsetTop;
-                if (missingTop > 1.0) {
-                    t = missingTop;
-                    fromPlatform = true;   // 屏蔽兜底计算，避免再按 availableGeometry 重复算
-                }
-            }
+            // JNI 取到值即屏蔽后面的 availableGeometry 兜底：Android 上左右/底部一律交给
+            // Qt，不让兜底改动横屏左右边距；顶部由下面 safeAreaMargins 单独决定。
+            fromPlatform = true;
         } else if (m_insetRetries < 6) {
             ++m_insetRetries;
             QPointer<QQuickWindow> guard(window);
@@ -303,24 +297,19 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
                     refreshInsets(guard);
             });
         }
-    }
-#endif
 #if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
-    // Android 15 起 targetSdk 35 的应用被强制 edge-to-edge：窗口与屏幕可用区都是整屏，
-    // 下面「窗口几何 - availableGeometry」恒为 0，状态栏就会压到界面上。
-    // Qt 6.9+ 的 safeAreaMargins() 由平台直接上报系统栏/刘海占位（已转设备无关像素，
-    // 且扣除了窗口自身偏移），窗口本来就没铺到系统栏时它返回 0，不会二次留白。
-    if (!fromPlatform && window) {
+        // 只取 safeAreaMargins 的 top 补顶部：它已扣除窗口自身让出的部分，铺满整屏才返回
+        // 需补的高度，不会重复扣减、不会留出大块空白。用 JNI 的 m_lastOsTop 作上限钳制，
+        // 防 Qt 6.11 在刘海机把「状态栏+挖孔」相加翻倍。左右/底部一律不碰（保持原样）。
         const QMargins safe = window->safeAreaMargins();
         if (!safe.isNull()) {
-            l = qMax(0, safe.left());
             t = qMax(0, safe.top());
-            r = qMax(0, safe.right());
-            b = qMax(0, safe.bottom());
-            fromPlatform = !safe.isNull();
+            if (m_lastOsTop > 0)
+                t = qMin(t, m_lastOsTop);
+            if (t > 0)
+                fromPlatform = true;   // 顶已补，屏蔽下面按 availableGeometry 重算顶
         }
-        // 安全区是异步上报的（旋转、系统栏显隐都会变），只在尺寸变化时刷新会漏掉。
-        // 每个窗口只接一次；QPointer 防止窗口销毁后回调野指针。
+        // 安全区异步上报（旋转、系统栏显隐都会变），每个窗口只接一次监听。
         if (window != m_safeAreaWindow) {
             m_safeAreaWindow = window;
             QPointer<QQuickWindow> guard(window);
@@ -329,6 +318,20 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
                                  if (guard)
                                      refreshInsets(guard);
                              });
+        }
+#endif
+    }
+#endif
+#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0) && !defined(Q_OS_ANDROID)
+    // 非 Android 平台：safeAreaMargins 四边都可用（桌面全屏/刘海屏），照常应用。
+    if (!fromPlatform && window) {
+        const QMargins safe = window->safeAreaMargins();
+        if (!safe.isNull()) {
+            l = qMax(0, safe.left());
+            t = qMax(0, safe.top());
+            r = qMax(0, safe.right());
+            b = qMax(0, safe.bottom());
+            fromPlatform = !safe.isNull();
         }
     }
 #endif
