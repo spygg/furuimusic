@@ -42,6 +42,32 @@
 
 namespace Furui {
 
+// 找到某音源已登录账号的 Cookie（写回收藏需要）
+static QString cookieForSource(const QString &sourceId)
+{
+    for (const Account &a : Library::instance()->accounts())
+        if (a.source == sourceId && a.logged && !a.cookie.isEmpty())
+            return a.cookie;
+    return QString();
+}
+
+// 把收藏态写回云端（目前仅网易云内置实现）。失败只提示、不回滚本地收藏，
+// 避免一次网络失败让用户以为本地操作也没生效。
+static void syncFavoriteToCloud(const Song &s, bool favorite)
+{
+    if (!UserApi::canSetFavorite(s.source)) return;
+    const QString cookie = cookieForSource(s.source);
+    if (cookie.isEmpty() || s.sourceId.isEmpty()) return;
+    UserApi::instance()->setFavorite(s.source, cookie, s.sourceId, favorite,
+        [favorite](bool ok, const QString &err) {
+            if (!ok)
+                AppController::instance()->notify(
+                    QStringLiteral("本地已%1，但云端同步失败：%2")
+                        .arg(favorite ? QStringLiteral("收藏") : QStringLiteral("取消收藏"), err),
+                    QStringLiteral("warning"));
+        });
+}
+
 // 落盘后缀必须跟真实编码一致：flac/m4a 存成 .mp3 时，Windows 靠嗅探还能放，
 // Android/GStreamer 一侧直接拒绝打开，库里也会按扩展名判断格式。
 static QString extensionForUrl(const QUrl &url)
@@ -1843,9 +1869,11 @@ void AppController::toggleFavoriteResult(int index)
     const Song &s = songs.at(index);
     if (Library::instance()->isFavorite(s.uid)) {
         Library::instance()->removeFavorite(s.uid);
+        syncFavoriteToCloud(s, false);
         emit toast(QStringLiteral("已取消收藏"));
     } else {
         Library::instance()->addFavorite(s);
+        syncFavoriteToCloud(s, true);
         emit toast(QStringLiteral("已收藏"));
     }
     m_results->refreshRow(index);
@@ -1856,8 +1884,13 @@ void AppController::toggleFavoriteQueue(int index)
     const QVector<Song> &songs = m_queue->songs();
     if (index < 0 || index >= songs.size()) return;
     const Song &s = songs.at(index);
-    if (Library::instance()->isFavorite(s.uid)) Library::instance()->removeFavorite(s.uid);
-    else Library::instance()->addFavorite(s);
+    if (Library::instance()->isFavorite(s.uid)) {
+        Library::instance()->removeFavorite(s.uid);
+        syncFavoriteToCloud(s, false);
+    } else {
+        Library::instance()->addFavorite(s);
+        syncFavoriteToCloud(s, true);
+    }
     m_queue->refreshRow(index);
     emit toast(QStringLiteral("收藏状态已更新"));
 }
@@ -1877,9 +1910,11 @@ void AppController::toggleFavoriteCurrent()
     }
     if (Library::instance()->isFavorite(s.uid)) {
         Library::instance()->removeFavorite(s.uid);
+        syncFavoriteToCloud(s, false);
         emit toast(QStringLiteral("已取消收藏"));
     } else {
         Library::instance()->addFavorite(s);
+        syncFavoriteToCloud(s, true);
         emit toast(QStringLiteral("已收藏"));
     }
     emit playerChanged();

@@ -61,6 +61,8 @@ public:
     Q_INVOKABLE void downloadUpdate();
     // 下载完成后触发：Android 拉起系统安装器；桌面打开安装包所在文件夹
     Q_INVOKABLE void installUpdate();
+    // 打开下载结果所在目录（系统文件管理器），供车机等「只允许系统文件管理安装」的环境手动安装
+    Q_INVOKABLE void openDownloadFolder();
 
 signals:
     void stateChanged();

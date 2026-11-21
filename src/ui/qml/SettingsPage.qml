@@ -921,10 +921,22 @@ Item {
                         contentItem: Text { text: laterBtn.text; color: cPrimary; font.pixelSize: theme.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                         onClicked: updateOverlay.show = false
                     }
+                    Button {
+                        id: browseBtn
+                        Layout.preferredWidth: Math.max(96, theme.touchMin)
+                        Layout.preferredHeight: theme.touchMin
+                        text: "浏览下载结果"
+                        visible: updater.downloadedPath.length > 0
+                        enabled: !updater.downloading
+                        background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
+                        contentItem: Text { text: browseBtn.text; color: cPrimary; font.pixelSize: theme.fontXs; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                        onClicked: updater.openDownloadFolder()
+                    }
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: "更新包将直接在应用内下载，完成后自动拉起安装（桌面端打开所在文件夹）"
+                    text: "更新包将直接在应用内下载，完成后自动拉起安装（桌面端打开所在文件夹）。"
+                          + "若车机限制了自动安装，点「浏览下载结果」在系统文件管理器中找到更新包手动安装。"
                     color: cSub
                     font.pixelSize: theme.fontXs
                     wrapMode: Text.Wrap

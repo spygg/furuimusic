@@ -68,6 +68,11 @@ public:
     // 单个用户歌单的歌曲（点开歌单时的网络回退）
     void fetchPlaylistSongs(const QString &sourceId, const QString &cookie, const QString &id,
                             const std::function<void(const QVector<Song> &)> &cb);
+    // 写入「我喜欢的音乐」收藏态（网易云：weapi /weapi/song/like）。
+    // cb(是否成功, 错误说明)。仅内置实现 supported 的平台可用；其它平台返回明确不可用。
+    void setFavorite(const QString &sourceId, const QString &cookie, const QString &songId,
+                     bool favorite, const std::function<void(bool, const QString &)> &cb);
+    static bool canSetFavorite(const QString &sourceId);
 
 private:
     explicit UserApi(QObject *parent = nullptr);

@@ -867,4 +867,78 @@ void UserApi::fetchLibrary(const QString &sourceId, const QString &cookie,
         });
 }
 
+bool UserApi::canSetFavorite(const QString &sourceId)
+{
+    // 目前只有网易云内置了写入「我喜欢的音乐」的 weapi 实现；其它平台没有可靠的
+    // 写接口（QQ/酷狗需要各自的 g_tk/签名，自建账号 API 契约也没有收藏写入端点）。
+    return sourceId == QLatin1String("netease");
+}
+
+void UserApi::setFavorite(const QString &sourceId, const QString &cookie, const QString &songId,
+                          bool favorite, const std::function<void(bool, const QString &)> &cb)
+{
+    if (!canSetFavorite(sourceId)) {
+        if (cb) cb(false, QStringLiteral("该平台暂不支持在线同步收藏，已仅更新本地收藏"));
+        return;
+    }
+    if (cookie.trimmed().isEmpty() || songId.trimmed().isEmpty()) {
+        if (cb) cb(false, QStringLiteral("缺少登录态或歌曲 ID，无法同步收藏"));
+        return;
+    }
+
+    // 网易云 weapi 的 csrf_token 是双提交校验：body 与 Cookie 里的 __csrf 必须一致。
+    // 浏览器登录的 Cookie 通常带 __csrf；没有就生成一个稳定随机值补进 Cookie 头。
+    QString csrf = cookieValue(cookie, {QStringLiteral("__csrf")});
+    if (csrf.isEmpty()) {
+        static const char hex[] = "0123456789abcdef";
+        for (int i = 0; i < 32; ++i)
+            csrf.append(QChar(hex[QRandomGenerator::global()->bounded(16)]));
+    }
+    QString fullCookie = cookie;
+    if (!fullCookie.contains(QStringLiteral("__csrf=")))
+        fullCookie += QStringLiteral("; __csrf=") + csrf;
+
+    // 官方 /weapi/song/like 的 body：id 为歌曲 ID，like 为 "true"/"false"（字符串更通用），
+    // csrf_token 双提交。songid/trackIds 是旧版/部分实现兼容字段，一并带上不影响。
+    QJsonObject payload;
+    payload.insert(QStringLiteral("id"), songId);
+    payload.insert(QStringLiteral("songid"), songId);
+    payload.insert(QStringLiteral("like"), favorite ? QStringLiteral("true") : QStringLiteral("false"));
+    payload.insert(QStringLiteral("trackIds"), QStringLiteral("[%1]").arg(songId));
+    payload.insert(QStringLiteral("csrf_token"), csrf);
+
+    QVariantMap headers;
+    headers.insert(QStringLiteral("User-Agent"),
+                   QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"));
+    headers.insert(QStringLiteral("Referer"), QStringLiteral("https://music.163.com/"));
+    headers.insert(QStringLiteral("Origin"), QStringLiteral("https://music.163.com"));
+    headers.insert(QStringLiteral("Accept"), QStringLiteral("*/*"));
+    headers.insert(QStringLiteral("Content-Type"),
+                   QStringLiteral("application/x-www-form-urlencoded"));
+    headers.insert(QStringLiteral("Cookie"), fullCookie);
+
+    const QByteArray body = Netease::weapiForm(payload);
+    HttpClient::instance()->request(
+        QStringLiteral("POST"),
+        QUrl(QStringLiteral("https://music.163.com/weapi/song/like")),
+        headers, body,
+        [cb](const HttpClient::Reply &r) {
+            bool ok = false;
+            QString err;
+            if (!r.ok) {
+                err = r.error.isEmpty() ? QStringLiteral("网络请求失败") : r.error;
+            } else {
+                const QJsonObject o = r.json.object();
+                const int code = o.value(QStringLiteral("code")).toInt(-1);
+                if (code == 200) ok = true;
+                else {
+                    const QString msg = o.value(QStringLiteral("message")).toString();
+                    err = msg.isEmpty() ? QStringLiteral("接口返回 %1").arg(code) : msg;
+                }
+            }
+            if (cb) cb(ok, err);
+        });
+}
+
 } // namespace Furui

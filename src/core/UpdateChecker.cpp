@@ -663,4 +663,32 @@ void UpdateChecker::installUpdate()
 #endif
 }
 
+void UpdateChecker::openDownloadFolder()
+{
+    if (m_downloadedPath.isEmpty() || !QFile::exists(m_downloadedPath)) {
+        emit downloadFailed(QStringLiteral("更新包不存在，请重新下载"));
+        return;
+    }
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // 车机/部分 ROM 禁止应用直接拉起安装器，改由系统文件管理器打开下载目录，用户手动安装。
+    const QJniObject activity = QJniObject::callStaticObjectMethod(
+        "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
+    if (!activity.isValid()) {
+        AppController::instance()->notify(QStringLiteral("无法打开下载目录：%1").arg(m_downloadedPath),
+                                          QStringLiteral("warning"));
+        return;
+    }
+    const bool ok = QJniObject::callStaticMethod<jboolean>(
+        "cn/furui/music/UpdateInstaller", "openFolder",
+        "(Landroid/app/Activity;Ljava/lang/String;)Z",
+        activity.object(), QJniObject::fromString(m_downloadedPath).object<jstring>());
+    if (!ok)
+        AppController::instance()->notify(QStringLiteral("请到文件管理器手动打开：%1").arg(m_downloadedPath),
+                                          QStringLiteral("warning"));
+#else
+    // 桌面/Qt5 Android：直接打开所在文件夹
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(m_downloadedPath).absolutePath()));
+#endif
+}
+
 } // namespace Furui
