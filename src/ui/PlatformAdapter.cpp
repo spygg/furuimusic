@@ -266,22 +266,35 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
     qreal l = 0, t = 0, r = 0, b = 0;
     bool fromPlatform = false;
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    // ---- Android：Qt Quick 已经替我们做好了，这里不再叠一层 ----
-    // Qt 6.11 的 Qt Quick 内置 QQuickSafeArea，会把内容区摆到状态栏/挖孔下沿并相应缩小
-    // （实测竖屏窗口仍是 363x792，但 QML 原点在屏幕 y=40dp，场景实际可用 363x752）。
-    // 此时如果 QML 再按系统 insets 内缩一次，就是「一笔边距扣两遍」：竖屏顶部多出整整
-    // 一个状态栏的空白（本次 2.0 之前的表现），横屏左侧同理。
-    // 老版本 Qt（5.x / 6.9 之前）的 Android 端口同样把 surface 摆在系统栏下方，结论一致。
+    // ---- Android：Qt Quick 通常已把窗口摆到状态栏下方，这里不重复内缩 ----
+    // Qt 6.11 的 Qt Quick 会把内容区摆到状态栏/挖孔下沿并相应缩小窗口（实测竖屏窗口
+    // 360x734、屏幕 360x806，QML 原点在状态栏下沿）。此时再按系统 insets 内缩一次，
+    // 就是「一笔边距扣两遍」：顶部多出一整个状态栏的空白。
     //
-    // 所以这里只用 JNI 取一次系统 insets 做日志（现场核对机型差异用），不下发边距；
-    // 真要做全屏沉浸（内容画进挖孔区）时，再从这里把「Qt 已让出」的差额补回来。
+    // 但在部分全面屏/挖孔机或 targetSdk 35 强制 edge-to-edge 时，Qt 没有（或没有足额）
+    // 让出顶部：窗口 geometry 接近甚至等于屏幕高度，状态栏压在 QML 顶部，搜索框被盖住、
+    // 点击无效。此时补「差额」——系统状态栏高度减去 Qt 已经让出的高度：
+    //   - Qt 已完整让出（窗口比屏幕矮一整个状态栏）→ 差额 0，不补，保持正常
+    //   - 窗口铺满整屏（edge-to-edge）→ 补满状态栏高度
+    //   - 只让出一部分 → 补足缺的那部分
+    // 竖屏、横屏顶部都补差额；横屏的左右挖孔边距继续交给 Qt，完全不改（保持原样）。
     if (window) {
         const AndroidInsets ai = queryAndroidInsets(window->devicePixelRatio());
         if (ai.valid) {
             m_lastOsLeft = ai.left;
             m_lastOsTop = ai.top;
-            fromPlatform = true;
             m_insetRetries = 0;
+            const int screenH = window->screen() ? window->screen()->geometry().height() : 0;
+            if (screenH > 0) {
+                // Qt 已让出的顶部高度 = 屏幕高 - 窗口高（Qt geometry 与 screen 同为 dp）。
+                // 竖屏、横屏都要补顶部差额；横屏的左右挖孔边距仍交给 Qt，这里不碰 l/r。
+                const qreal qtInsetTop = qMax(0.0, static_cast<qreal>(screenH - window->height()));
+                const qreal missingTop = ai.top - qtInsetTop;
+                if (missingTop > 1.0) {
+                    t = missingTop;
+                    fromPlatform = true;   // 屏蔽兜底计算，避免再按 availableGeometry 重复算
+                }
+            }
         } else if (m_insetRetries < 6) {
             ++m_insetRetries;
             QPointer<QQuickWindow> guard(window);
