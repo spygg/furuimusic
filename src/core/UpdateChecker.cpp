@@ -1,5 +1,5 @@
 // 福瑞音乐 - 在线检测更新（参照洛雪音乐 version.json 机制）
-// 清单的唯一事实来源是 src/version.json；publish/version.json 只是为已发布的老客户端
+// 清单的唯一事实来源是 src/version.json；src/publish/version.json 只是为已发布的老客户端
 // 保留的兼容副本，由 CI 校验两者内容一致（见 .github/workflows/release.yml）。
 // 注意：CDN（jsDelivr）对 main 分支的缓存滞后可达数小时，甚至各节点版本不一致，
 // 所以这里先用 GitHub API 拿最新 tag，再按 tag 取清单，并取所有镜像里最大的版本号。
@@ -48,7 +48,10 @@ QString latestReleaseApiUrl()
 // 1.4.13 / 1.4.12 / 1.4.9），所以拿到 tag 就用 tag 取清单：不可变 ref 不会串到旧缓存。
 QStringList manifestUrls(const QString &ref)
 {
-    static const char *const paths[] = {"src/version.json", "publish/version.json"};
+    // src/publish/version.json 是迁移后的兼容副本；末尾的 publish/version.json 保留给
+    // 更早 tag（当时副本还在仓库根）的老客户端，找不到会自然跳过。
+    static const char *const paths[] = {"src/version.json", "src/publish/version.json",
+                                        "publish/version.json"};
     QStringList urls;
     for (const char *path : paths) {
         const QString p = QString::fromLatin1(path);

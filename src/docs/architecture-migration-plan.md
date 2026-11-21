@@ -13,7 +13,7 @@
 > | `src/android/*` | `src/platform/android-qt5/*` |
 > | `src/android_qt6/*` | `src/platform/android-qt6/*` |
 > | `src/packaging/windows/openssl/*` | `src/thirdparty/openssl1.1/*` |
-> | `publish/version.json` | `src/version.json`（`publish/` 只留兼容副本） |
+> | `publish/version.json` | `src/version.json`（兼容副本现为 `src/publish/version.json`，已一并收进 `src/`） |
 >
 > 现行目录约定见 `README.md` 的「目录结构」一节；本文件的阶段划分、验证结论仍保留作历史依据。
 

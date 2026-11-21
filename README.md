@@ -325,7 +325,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 目录命名约定：`core/` 纯 C++ 后端、`ui/` 在用的 QML 前端、`config/` 声明式配置、
 `platform/` 只放平台打包资源、`legacy/` 只放已退役代码、`thirdparty/` 只放外部代码/运行库、
 `cmake/` `scripts/` `tools/` `docs/` 分别是构建模块、构建脚本、辅助工具与文档。
-`version.json` 与所有运行期需要的资源都收在 `src/` 内，仓库根的 `publish/version.json`
+`version.json` 与所有运行期需要的资源都收在 `src/` 内，`src/publish/version.json`
 只是给已发布老客户端用的兼容副本（CI 会校验两者一致）。
 ```
 
@@ -355,12 +355,12 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 
 参照洛雪音乐的版本清单机制：[`src/version.json`](src/version.json) 是「最新版是什么、有什么更新、去哪下载」的唯一事实来源，应用（`src/core/UpdateChecker`）启动 5 秒后自动检查，设置页也可手动检查。
 
-- **拉取镜像链**（依次容错）：先按 `src/version.json` 走 `raw.githubusercontent.com` → `cdn.jsdelivr.net` → `fastly.jsdelivr.net` → `gcore.jsdelivr.net`；四个全失败才回退同一组镜像的 `publish/version.json`。全部走 `https`。
-- **兼容副本**：`publish/version.json` 只服务于已经发出去、还硬编码旧路径的老客户端，不是发版时该改的文件；`.github/workflows/release.yml` 的 `manifest` job 用 `cmp` 校验两份清单逐字节一致，不一致直接卡住 Release。
+- **拉取镜像链**（依次容错）：先按 `src/version.json` 走 `raw.githubusercontent.com` → `cdn.jsdelivr.net` → `fastly.jsdelivr.net` → `gcore.jsdelivr.net`；四个全失败才回退同一组镜像的 `src/publish/version.json`。全部走 `https`。
+- **兼容副本**：`src/publish/version.json` 只服务于已经发出去、还硬编码旧路径的老客户端，不是发版时该改的文件；`.github/workflows/release.yml` 的 `manifest` job 用 `cmp` 校验两份清单逐字节一致，不一致直接卡住 Release。
 - **离线兜底**：`src/core/config.qrc` 把 `src/version.json` 编译进 `:/config/version.json`；8 个远端地址全失败时用本地清单如实回「已是最新版本」，而不是把断网误报成「无法获取更新信息」。
 - **清单字段**：`version`（最新版本号，与 `src/core/Version.h` 的 `FURUI_APP_VERSION` 及 `src/CMakeLists.txt` 的 `project(... VERSION ...)` 三处同步）、`desc`（本次更新说明）、`history`（历史版本列表，弹层一并展示）、`downloads`（各平台下载直链，可选；缺省时按 CI 产物命名拼 `https://github.com/spygg/furuimusic/releases/download/v<version>/<产物名>`）。
 - **下载与安装**：用户在弹层点「下载更新」后，`HttpClient::download` 流式写入本地并上报进度（0-100）；Android 存到 AppData（`files-path` 已被 Qt 的 FileProvider 覆盖），完成后经 `androidx FileProvider` + `ACTION_VIEW` 拉起系统安装器（AndroidManifest 已声明 `REQUEST_INSTALL_PACKAGES`）；桌面端下载到用户下载目录，完成后打开安装包所在文件夹（Windows 产物是 zip，解压覆盖安装）。
-- **发版流程**：改 `Version.h` + CMake `project(VERSION)` + `src/version.json`（同步 `publish/version.json`）→ 推 tag（`v*`）→ CI 校验清单 → 自动构建并发布 Release → 老版本应用即可收到更新提示。
+- **发版流程**：改 `Version.h` + CMake `project(VERSION)` + `src/version.json`（同步 `src/publish/version.json`）→ 推 tag（`v*`）→ CI 校验清单 → 自动构建并发布 Release → 老版本应用即可收到更新提示。
 
 ## 许可证
 

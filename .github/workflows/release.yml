@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # 版本清单唯一事实来源是 src/version.json；publish/version.json 只是给已发布老客户端
+  # 版本清单唯一事实来源是 src/version.json；src/publish/version.json 只是给已发布老客户端
   # 用的兼容副本（UpdateChecker 会先拉 src、失败才回退 publish）。两者必须逐字节一致，
   # 否则发版后新旧客户端会看到不同的「最新版本」。
   manifest:
@@ -26,13 +26,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Compare src/version.json with publish/version.json
+      - name: Compare src/version.json with src/publish/version.json
         run: |
           test -f src/version.json || { echo "missing src/version.json"; exit 1; }
-          test -f publish/version.json || { echo "missing publish/version.json compatibility copy"; exit 1; }
-          cmp -s src/version.json publish/version.json || {
-            echo "::error::publish/version.json is out of sync with src/version.json";
-            diff -u publish/version.json src/version.json || true;
+          test -f src/publish/version.json || { echo "missing src/publish/version.json compatibility copy"; exit 1; }
+          cmp -s src/version.json src/publish/version.json || {
+            echo "::error::src/publish/version.json is out of sync with src/version.json";
+            diff -u src/publish/version.json src/version.json || true;
             exit 1;
           }
           echo "version manifest in sync"

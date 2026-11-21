@@ -6,7 +6,7 @@
 #   1. src/core/Version.h            改宏（唯一人工编辑点，也可只跑本脚本顺带改）
 #   2. src/CMakeLists.txt            不用改：configure 期 file(READ) 自动注入 project VERSION
 #   3. src/version.json              version 字段 + downloads 四条 URL 由本脚本重写
-#   4. publish/version.json          兼容副本，本脚本从 3 复制并校验一致
+#   4. src/publish/version.json       兼容副本，本脚本从 3 复制并校验一致
 #
 # desc/history（发版说明）是人工内容，本脚本不碰——发版时手工编辑 version.json 后跑：
 #   python src/tools/release.py 1.4.4
@@ -27,7 +27,7 @@ if hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parents[1]  # src/
 VERSION_H = ROOT / "core" / "Version.h"
 MANIFEST = ROOT / "version.json"
-MANIFEST_COPY = ROOT.parent / "publish" / "version.json"
+MANIFEST_COPY = ROOT / "publish" / "version.json"
 
 DOWNLOAD_TEMPLATES = {
     "windows": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-windows-x64.zip",
@@ -75,10 +75,10 @@ def sync_manifest(new_version):
     if MANIFEST_COPY.exists():
         shutil.copyfile(MANIFEST, MANIFEST_COPY)
         if MANIFEST_COPY.read_text(encoding="utf-8") != text:
-            fail("publish/version.json 与 src/version.json 不一致")
-        print("publish/version.json: 已同步（与 src/version.json 一致）")
+            fail("src/publish/version.json 与 src/version.json 不一致")
+        print("src/publish/version.json: 已同步（与 src/version.json 一致）")
     else:
-        print("publish/version.json: 不存在，跳过兼容副本")
+        print("src/publish/version.json: 不存在，跳过兼容副本")
     print("version.json: version=%s，downloads %d 条 URL 已指向 v%s" % (new_version, len(data["downloads"]), new_version))
 
 
@@ -96,7 +96,7 @@ def main():
 
     print()
     print("后续步骤（desc/history 发版说明请在 version.json 里手工编辑）:")
-    print('  git add src/core/Version.h src/version.json publish/version.json')
+    print('  git add src/core/Version.h src/version.json src/publish/version.json')
     print('  git commit -m "release: v%s"' % new_version)
     print('  git tag -a v%s -m "v%s"' % (new_version, new_version))
     print("  git push origin main v%s   # tag 触发 CI 发布" % new_version)
