@@ -384,12 +384,7 @@ void AuthManager::startQrLogin(const QString &sourceId)
             };
 
             switch (step) {
-            case 0:  // 官方客户端通道：eapi + 设备 header + 匿名令牌
-                m_qrEapi = true;
-                neteaseEapiPost(QStringLiteral("/api/login/qrcode/unikey"),
-                                QJsonObject{{QStringLiteral("type"), 3}}, onReply);
-                break;
-            case 1: {  // 网页通道：明文 + 精简设备指纹（不带任何会话 Cookie）
+            case 0: {  // 首选：明文 + 精简设备指纹（明文回包的 803 能直接解析出 cookie/MUSIC_U）
                 m_qrEapi = false;
                 QVariantMap headers = neeWebHeaders();
                 headers.insert(QStringLiteral("Cookie"),
@@ -402,7 +397,7 @@ void AuthManager::startQrLogin(const QString &sourceId)
                     headers, QByteArrayLiteral("type=3"), onReply);
                 break;
             }
-            default: {  // 最后一级：完全不带 Cookie，实测服务端仍会下发 unikey
+            case 1: {  // 次选：完全不带 Cookie，实测服务端仍会下发 unikey
                 m_qrEapi = false;
                 HttpClient::instance()->request(
                     QStringLiteral("POST"),
@@ -410,6 +405,11 @@ void AuthManager::startQrLogin(const QString &sourceId)
                     neeWebHeaders(), QByteArrayLiteral("type=3"), onReply);
                 break;
             }
+            default:  // 末级兜底：eapi 客户端通道（回包 803 加密，解析不出 cookie，仅出码兜底）
+                m_qrEapi = true;
+                neteaseEapiPost(QStringLiteral("/api/login/qrcode/unikey"),
+                                QJsonObject{{QStringLiteral("type"), 3}}, onReply);
+                break;
             }
         };
         (*stages)(0);
@@ -578,45 +578,39 @@ void AuthManager::pollQr()
                     m_qrStatus = QStringLiteral("二维码已过期，请重新获取"); emit qrChanged();
                 } else if (code == QLatin1String("803")) {
                     m_poll.stop(); m_polling = false;
-                    // 803 = 授权成功。登录态取法取决于通道：
-                    //  - 明文 web 通道：cookie 在回包 body 的 "cookie" 字段；
-                    //  - eapi 通道：回包 body 是 AES 加密的（本工程只有加密没有解密），
-                    //    MUSIC_U 解析不出来、Set-Cookie 头也不带它 → 会误报「取不到 MUSIC_U」。
-                    // 因此统一先用明文 web 通道再确认一次（同 key，服务端幂等），从明文回包取
-                    // cookie + profile；eapi 回包只用来判定 803 这个状态。
-                    const QString qrKeyEnc = QString::fromLatin1(QUrl::toPercentEncoding(m_qrKey));
-                    neteaseWebPost(
-                        QStringLiteral("/api/login/qrcode/client/login?key=%1&type=3").arg(qrKeyEnc),
-                        QByteArrayLiteral("key=") + qrKeyEnc.toUtf8() + QByteArrayLiteral("&type=3"),
-                        [this, sourceId](const HttpClient::Reply &cr) {
-                            if (m_qrSource != sourceId) return;
-                            absorbNeteaseCookies(cr);
-                            const QJsonValue cro = Json::rootOf(cr.json);
-                            QString cookie = cookiesFromReply(
-                                cr, QVariantMap{{QStringLiteral("cookiePath"), QStringLiteral("cookie")}}, cro);
-                            if (cookieValue(cookie, {QStringLiteral("MUSIC_U")}).isEmpty())
-                                cookie = neteaseCookieHeader();
-                            const bool hasU = !cookieValue(cookie, {QStringLiteral("MUSIC_U")}).isEmpty();
-                            Logger::write(hasU ? QStringLiteral("I") : QStringLiteral("W"),
-                                          QStringLiteral("[网易扫码] 803 取登录态 MUSIC_U=%1 body=%2")
-                                              .arg(hasU ? QStringLiteral("有") : QStringLiteral("无"),
-                                                   QString::fromUtf8(cr.body.left(200))));
-                            if (!hasU) {
-                                m_qrStatus = QStringLiteral("授权成功但未取到 MUSIC_U，请改用密码方式登录或重新扫码");
-                                emit qrChanged();
-                                emit toast(m_qrStatus);
-                                return;
-                            }
-                            m_qrStatus = QStringLiteral("授权成功，正在同步账号…"); emit qrChanged();
-                            const QJsonValue profile = cro.toObject().value(QStringLiteral("profile"));
-                            const QString uid = Json::firstString(profile, {QStringLiteral("userId"),
-                                                                           QStringLiteral("id")});
-                            const QString nick = Json::firstString(profile, {QStringLiteral("nickname")});
-                            const QString avatar = Json::firstString(profile, {QStringLiteral("avatarUrl")});
-                            saveSession(sourceId, cookie, uid, nick, avatar,
-                                        QStringLiteral("二维码登录成功"));
-                            syncUserLibrary(sourceId);
-                        });
+                    // 803 = 授权成功。出码已改为明文通道优先，轮询与出码同通道（m_qrEapi=false），
+                    // 因此回包 body 是明文 JSON，cookie 在 "cookie" 字段里，直接解析即可。
+                    // 之前先 eapi 出码时 803 回包加密解不开、web 重确认又 code:800，才取不到 MUSIC_U。
+                    QString cookie = cookiesFromReply(
+                        r, QVariantMap{{QStringLiteral("cookiePath"), QStringLiteral("cookie")}}, root);
+                    const bool fromBody = !cookieValue(cookie, {QStringLiteral("MUSIC_U")}).isEmpty();
+                    if (!fromBody) {
+                        // body 没拿到就试本次会话累积的 Set-Cookie（仍不行才判失败）
+                        absorbNeteaseCookies(r);
+                        cookie = neteaseCookieHeader();
+                    }
+                    Logger::write(!cookieValue(cookie, {QStringLiteral("MUSIC_U")}).isEmpty()
+                                      ? QStringLiteral("I") : QStringLiteral("W"),
+                                  QStringLiteral("[网易扫码] 803 取登录态 fromBody=%1 MUSIC_U=%2 body=%3")
+                                      .arg(fromBody ? QStringLiteral("是") : QStringLiteral("否"),
+                                           cookieValue(cookie, {QStringLiteral("MUSIC_U")}).isEmpty()
+                                               ? QStringLiteral("无") : QStringLiteral("有"),
+                                           QString::fromUtf8(r.body.left(200))));
+                    if (cookieValue(cookie, {QStringLiteral("MUSIC_U")}).isEmpty()) {
+                        m_qrStatus = QStringLiteral("授权成功但未取到 MUSIC_U，请改用密码方式登录或重新扫码");
+                        emit qrChanged();
+                        emit toast(m_qrStatus);
+                        return;
+                    }
+                    m_qrStatus = QStringLiteral("授权成功，正在同步账号…"); emit qrChanged();
+                    const QJsonValue profile = root.toObject().value(QStringLiteral("profile"));
+                    const QString uid = Json::firstString(profile, {QStringLiteral("userId"),
+                                                                   QStringLiteral("id")});
+                    const QString nick = Json::firstString(profile, {QStringLiteral("nickname")});
+                    const QString avatar = Json::firstString(profile, {QStringLiteral("avatarUrl")});
+                    saveSession(sourceId, cookie, uid, nick, avatar,
+                                QStringLiteral("二维码登录成功"));
+                    syncUserLibrary(sourceId);
                 } else if (code == QLatin1String("802")) {
                     m_qrStatus = QStringLiteral("已扫码，请在手机上确认登录"); emit qrChanged();
                 } else if (code == QLatin1String("801")) {
