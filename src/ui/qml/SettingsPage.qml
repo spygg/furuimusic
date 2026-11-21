@@ -437,37 +437,8 @@ Item {
                 wrapMode: Text.Wrap
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text {
-                    Layout.preferredWidth: 88
-                    text: "访问令牌"
-                    color: cText
-                    font.pixelSize: 13
-                }
-                TextField {
-                    id: openApiTokenField
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: theme.touchMin
-                    placeholderText: "留空则局域网设备无需鉴权（不推荐）"
-                    text: app.setting("openApiToken", "")
-                    color: cText
-                    font.pixelSize: 12
-                    leftPadding: 8
-                    echoMode: TextInput.Password
-                    onEditingFinished: app.setSetting("openApiToken", text)
-                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
-                }
-            }
-            Text {
-                Layout.fillWidth: true
-                text: "设置令牌后，局域网设备调用开放 API 需在请求头带 X-Furui-Token 或地址带 ?token=；本机访问不受影响。留空时局域网任意设备可控制播放，仅在可信网络下使用。"
-                color: cSub
-                font.pixelSize: theme.fontSm
-                wrapMode: Text.Wrap
-            }
-
+            // 访问令牌输入框已移除：开放 API 仅在可信局域网内使用，无需令牌鉴权。
+            // C++ 侧 OpenApiServer 的 token 校验仍保留（未设置时放行），不影响既有行为。
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
@@ -772,51 +743,8 @@ Item {
                 }
             }
 
-            Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
-
-            // 汽水音乐账号同步：资料/歌单/收藏已改走免签名的 web 接口族
-            // （/luna/me、/luna/me/playlist、/luna/playlist/detail），不再需要手工填
-            // X-Helios / X-Medusa。旧版本这里有两个签名输入框，现已移除；若本地
-            // settings.ini 里还留着 qishuiXHelios/qishuiXMedusa，也不会再被账号接口使用。
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 6
-                Text {
-                    text: "汽水音乐 · 账号同步"
-                    color: cText
-                    font.pixelSize: theme.fontMd
-                }
-                Text {
-                    Layout.fillWidth: true
-                    text: "汽水的资料、歌单与收藏已改走免签名的 web 账号接口，登录后点「同步全部账号」即可，"
-                          + "无需再填 X-Helios / X-Medusa。若同步仍失败，请重新登录汽水后再试。"
-                    color: cSub
-                    font.pixelSize: theme.fontSm
-                    wrapMode: Text.Wrap
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 2
-                        Text { text: "汽水漫游"; color: cText; font.pixelSize: 13 }
-                        Text {
-                            Layout.fillWidth: true
-                            text: "播放汽水歌曲时，下一首改由汽水的相似歌曲推荐决定（队列播到末尾也会自动续上）；"
-                                  + "关闭后仍按原播放队列切歌"
-                            color: cSub
-                            font.pixelSize: theme.fontSm
-                            wrapMode: Text.Wrap
-                        }
-                    }
-                    Switch {
-                        checked: app.qishuiRoam
-                        onToggled: app.setSetting("qishuiRoam", checked)
-                    }
-                }
-            }
-
+            // 汽水音乐设置区已移除（账号同步说明 + 汽水漫游开关）。汽水漫游保持默认开启，
+            // 默认值见 AppController::qishuiRoam / PlayerController::advance。
             Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
 
             // 在线检测更新：检查 -> 弹层展示更新说明 -> 同意后应用内直接下载 -> 安装

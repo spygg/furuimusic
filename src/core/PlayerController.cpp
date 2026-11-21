@@ -1021,7 +1021,7 @@ void PlayerController::advance(bool allowRecommend)
 
     const Song cur = current();
     if (allowRecommend && cur.source == QLatin1String("qishui") && !cur.sourceId.isEmpty()) {
-        if (Settings::boolean(QStringLiteral("qishuiRoam"), false)) {
+        if (Settings::boolean(QStringLiteral("qishuiRoam"), true)) {   // 设置页已隐藏该开关，默认保持开启
             emit recommendationNeeded();
             return;
         }

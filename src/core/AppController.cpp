@@ -765,7 +765,7 @@ bool AppController::autoToggleSource() const
 QString AppController::sourceFirstOrder() const
 { return Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip")); }
 bool AppController::qishuiRoam() const
-{ return Settings::boolean(QStringLiteral("qishuiRoam"), false); }
+{ return Settings::boolean(QStringLiteral("qishuiRoam"), true); }   // 设置页已隐藏该开关，默认保持开启
 bool AppController::keepScreenOn() const
 { return Settings::boolean(QStringLiteral("keepScreenOn"), true); }
 QString AppController::searchType() const { return d->searchType; }
