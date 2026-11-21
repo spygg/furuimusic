@@ -169,6 +169,9 @@ private:
     void refreshSystemDark();
     void updateWatch();
     static bool detectSystemDark();
+    // Android：按当前明暗主题设置状态栏图标颜色（浅色主题用深色图标，深色主题用浅色图标），
+    // 避免全面屏让出状态栏后白底白字看不见时间/信号。非 Android 平台空实现。
+    void syncStatusBarIcons() const;
     int scaled(int base) const { return qRound(base * m_uiScale); }
 
     QString m_mode;

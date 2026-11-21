@@ -8,6 +8,11 @@
 #include <QStandardPaths>
 #include <QStyleHints>
 
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QJniObject>
+#include <QtCore/qcoreapplication_platform.h>   // QNativeInterface::QAndroidApplication
+#endif
+
 namespace Furui {
 
 ThemeManager::ThemeManager(QObject *parent) : QObject(parent)
@@ -47,6 +52,8 @@ ThemeManager::ThemeManager(QObject *parent) : QObject(parent)
     m_watch.setInterval(4000);
     connect(&m_watch, &QTimer::timeout, this, &ThemeManager::refreshSystemDark);
     updateWatch();
+    // 构造时 Activity/Window 可能还没 attach，延迟到窗口就绪后再设一次状态栏图标色。
+    QTimer::singleShot(600, this, [this] { syncStatusBarIcons(); });
 }
 
 void ThemeManager::setLyricFontScale(int scale)
@@ -139,6 +146,7 @@ void ThemeManager::setMode(const QString &mode)
     emit modeChanged();
     if (wasDark != isDark())
         emit paletteChanged();
+    syncStatusBarIcons();
 }
 
 bool ThemeManager::systemThemeSupported() const
@@ -170,6 +178,7 @@ void ThemeManager::previewMode(const QString &mode)
     emit modeChanged();
     if (wasDark != isDark())
         emit paletteChanged();
+    syncStatusBarIcons();
 }
 
 // 车机/平板/高分屏的视口缩放。
@@ -194,6 +203,47 @@ void ThemeManager::setViewport(qreal width, qreal height, bool adaptive)
     emit metricsChanged();
 }
 
+void ThemeManager::syncStatusBarIcons() const
+{
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // 参考 legado 的 setLightStatusBar：浅色主题（背景白）用「深色图标」，
+    // 深色主题（背景黑）用「浅色图标」。全面屏让出状态栏后若图标颜色与背景同色，
+    // 时间/信号/电量就看不见。必须在 Android 主线程操作 Window/DecorView。
+    const bool lightIcons = !isDark();   // true = 深色图标（LIGHT_STATUS_BAR）
+    QNativeInterface::QAndroidApplication::runOnAndroidMainThread([lightIcons] {
+        const QJniObject activity = QJniObject::callStaticObjectMethod(
+            "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
+        if (!activity.isValid())
+            return;
+        const QJniObject window = activity.callObjectMethod(
+            "getWindow", "()Landroid/view/Window;");
+        if (!window.isValid())
+            return;
+        const jint sdk = QNativeInterface::QAndroidApplication::sdkVersion();
+        if (sdk >= 30) {
+            // WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS = 0x8
+            const QJniObject controller = window.callObjectMethod(
+                "getInsetsController", "()Landroid/view/WindowInsetsController;");
+            if (controller.isValid()) {
+                const jint statusBars = QJniObject::callStaticMethod<jint>(
+                    "android/view/WindowInsets$Type", "statusBars", "()I");
+                controller.callMethod<void>("setSystemBarsAppearance", "(II)V",
+                                            lightIcons ? jint(0x8) : jint(0), statusBars);
+                return;
+            }
+        }
+        // API < 30 或拿不到 controller：legacy SYSTEM_UI_FLAG_LIGHT_STATUS_BAR = 0x2000
+        const QJniObject decor = window.callObjectMethod(
+            "getDecorView", "()Landroid/view/View;");
+        if (!decor.isValid())
+            return;
+        const jint cur = decor.callMethod<jint>("getSystemUiVisibility", "()I");
+        const jint flags = lightIcons ? (cur | jint(0x2000)) : (cur & ~jint(0x2000));
+        decor.callMethod<void>("setSystemUiVisibility", "(I)V", flags);
+    });
+#endif
+}
+
 void ThemeManager::refreshSystemDark()
 {
     const bool dark = detectSystemDark();
@@ -203,8 +253,10 @@ void ThemeManager::refreshSystemDark()
         return;
     m_systemDark = dark;
     emit systemDarkChanged();
-    if (m_mode == QLatin1String("system"))
+    if (m_mode == QLatin1String("system")) {
         emit paletteChanged();
+        syncStatusBarIcons();   // 跟随系统时，系统深浅色变了要同步状态栏图标色
+    }
 }
 
 bool ThemeManager::detectSystemDark()
