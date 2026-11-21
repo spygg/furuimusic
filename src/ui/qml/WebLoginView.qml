@@ -648,12 +648,16 @@ Item {
         // 汽水：整页已按可视宽度缩小、完整可见，不需要裁剪/呈现管线
         //（present 在 zoom 后的坐标系里算不准），点一次登录入口后掀纱返回。
         + (root.sourceId === "qishui"
+           // 汽水整页已缩放可见：点一次登录入口后掀纱并提前返回（不需要下面的裁剪管线）。
+           // 注意 veilLift + return 必须留在这个分支里——放到三元外面会让所有平台
+           // 每轮都提前 return，probe/点击/裁剪全部变成死代码（酷狗登录框因此从不弹出，
+           // 掀纱后只露出首页 header/轮播）。
            ? "if(!window.__furuiQsClicked&&window.__furuiZoom){"
              + "window.__furuiQsClicked=1;"
              + browser.loginJs(root.sourceId) + ";}"
+             + root.veilLiftJs + ";"
+             + "document.title='[furui]ok:top';return 'ok:top';"
            : "")
-           + root.veilLiftJs + ";"
-           + "document.title='[furui]ok:top';return 'ok:top';"
         + "var ifs=document.querySelectorAll('iframe');"
         + "var fp=port(document);"
         + "var frameCss=" + JSON.stringify(browser.loginCss(root.sourceId)) + ";"
@@ -703,9 +707,17 @@ Item {
         + "var pws=document.querySelectorAll('input[type=password]');"
         + "for(var pi=0;pi<pws.length;pi++){if(vis(pws[pi])){opened=true;break;}}"
         + "var qrs=document.querySelectorAll('[class*=qrcode],[class*=qr-code],"
-        + "[class*=QRCode],[class*=qr_code],canvas');"
+        + "[class*=QRCode],[class*=qr_code]');"
         + "for(pi=0;pi<qrs.length;pi++){if(vis(qrs[pi])&&"
         + "qrs[pi].getBoundingClientRect().width>=80){opened=true;break;}}"
+        // canvas 只有在登录弹层里才算「登录框已开」。酷狗/QQ 首页轮播也用大 canvas，
+        // 若把它当登录框就跳过点击登录入口 → 登录框永远不弹，只露出首页 header/轮播。
+        + "var cvs=document.querySelectorAll('canvas');"
+        + "for(pi=0;pi<cvs.length;pi++){var cv=cvs[pi];if(!vis(cv)||"
+        + "cv.getBoundingClientRect().width<80)continue;"
+        + "var anc=cv.closest&&cv.closest('[class*=login],[class*=dialog],[class*=popup],"
+        + "[class*=modal],[id*=login],[class*=qrcode],[class*=qr-code]');"
+        + "if(anc){opened=true;break;}}"
         + "if(!opened){" + browser.loginJs(root.sourceId) + ";}"
         + "return 'clicked';}"
         // 主文档裁剪只做一次（隐藏兄弟节点不可重复），但「呈现」每轮都重算：

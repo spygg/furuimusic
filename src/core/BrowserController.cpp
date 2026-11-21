@@ -326,8 +326,14 @@ const WebLoginSpec *webLoginSpec(const QString &sourceId)
     static const WebLoginSpec kugou = {
         "https://www.kugou.com/",
         "KuGoo;token",
+        // 首页除登录入口外的外壳全部收掉：.cmhead1 必须留（登录入口 .cmhead1_d5 _login
+        // 就在其中），其余导航栏/轮播/下载条/歌单榜单/页脚都藏掉。这样即便 probe 定位
+        // 登录框不够准，手机上也不会堆一整页桌面布局的无关内容。登录浮层是独立的
+        // fixed 弹层，不在这些容器里，不会被隐藏。
         R"CSS(html,body{background:#fff!important}
-.cmfoot1,.cmfoot,.footer{display:none!important})CSS",
+.cmhead2,.banner,.download,.content,#content,.mainPage>.homep_d1,
+.cmfoot1,.cmfoot,.footer{display:none!important}
+.cmhead1{position:relative!important;z-index:1!important})CSS",
         kClickLoginJs
     };
     // 酷我 /login 会跳回首页，登录框同样由首页 header 的「登录/注册」弹出
