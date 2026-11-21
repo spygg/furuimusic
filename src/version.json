@@ -1,7 +1,11 @@
 {
-  "version": "1.4.38",
-  "desc": "新增\n- 更新包可一键「复制到下载目录」：车机/受限系统禁止应用内安装时，无需进应用私有目录，\n  直接用系统文件管理器安装；同名旧包自动清理，不再残留 (1)(2) 副本\n\n修复\n- 网易云扫码登录成功却丢登录态：写库后回读核对 Cookie 内容，数据库打不开（SELinux 标签错乱、\n  磁盘满）时不再谎报成功，改为明确提示并给出排查方向\n- 「我喜欢的音乐」等 583 首大歌单只同步 500 首：全库同步单歌单默认上限 500→1000（可配到 5000），\n  批量补全 200→400\n- Android 返回键一次退两级直接退出：浏览器开关两条按键通道统一去抖，关闭后不再误吞下一次按键\n- 汽水「熟悉/新鲜」模式在收藏 ≥3 首时丢掉历史/队列种子：修正本次新增数统计\n- 浏览器登录成功后偶发不自动导入 Cookie：登录轮询改状态驱动，不再被 running=false 打断\n- Android 通知/存储权限按系统版本申请（≤28 存储、≥33 通知），避免低版本无响应\n\n优化\n- 更新包写入先落 .part 临时项再替换，失败统一回滚，不再残留 IS_PENDING 半成品",
+  "version": "1.4.39",
+  "desc": "优化\n- 搜索入口合一：移除每个歌单内的「搜索本歌单」框和封面/列表项的放大镜入口，统一用曲库页顶部全局搜索；搜索结果「歌单」分类置顶并默认选中，点结果直达歌单详情加载全部曲目\n- 搜索歌单结果改用独立模型，不再冲掉「我的歌单」中你自己的列表；切换「歌单/歌曲」时按当前关键词立即重搜\n\n修复\n- 全局搜索框中文输入法 bug：参照内置浏览器地址栏方案，关闭输入预测/联想/自动大写，去掉会被后台重求值打断拼音组合的 text 绑定，读取关键词前先失焦提交未完成的候选词（退格删不掉、搜出半成品拼音不再出现）",
   "history": [
+    {
+      "version": "1.4.38",
+      "desc": "新增\n- 更新包可一键「复制到下载目录」：车机/受限系统禁止应用内安装时，无需进应用私有目录，\n  直接用系统文件管理器安装；同名旧包自动清理，不再残留 (1)(2) 副本\n\n修复\n- 网易云扫码登录成功却丢登录态：写库后回读核对 Cookie 内容，数据库打不开（SELinux 标签错乱、\n  磁盘满）时不再谎报成功，改为明确提示并给出排查方向\n- 「我喜欢的音乐」等 583 首大歌单只同步 500 首：全库同步单歌单默认上限 500→1000（可配到 5000），\n  批量补全 200→400\n- Android 返回键一次退两级直接退出：浏览器开关两条按键通道统一去抖，关闭后不再误吞下一次按键\n- 汽水「熟悉/新鲜」模式在收藏 ≥3 首时丢掉历史/队列种子：修正本次新增数统计\n- 浏览器登录成功后偶发不自动导入 Cookie：登录轮询改状态驱动，不再被 running=false 打断\n- Android 通知/存储权限按系统版本申请（≤28 存储、≥33 通知），避免低版本无响应\n\n优化\n- 更新包写入先落 .part 临时项再替换，失败统一回滚，不再残留 IS_PENDING 半成品"
+    },
     {
       "version": "1.4.37",
       "desc": "修复\n- 全面屏顶部安全区：竖屏与横屏顶部按「系统状态栏高度减去 Qt 已让出高度」补差额，\n  修复状态栏遮挡搜索框导致点击无效的问题；横屏左右边距保持不变，不重复扣减留白"
@@ -168,10 +172,10 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.38/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.38/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.38/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.38/FuruiMusic-android-arm64-v8a.apk",
-    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.38/FuruiMusic-carcompat-netease-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.39/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.39/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.39/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.39/FuruiMusic-android-arm64-v8a.apk",
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.39/FuruiMusic-carcompat-netease-arm64-v8a.apk"
   }
 }
