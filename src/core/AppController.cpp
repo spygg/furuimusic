@@ -43,11 +43,14 @@
 namespace Furui {
 
 // 找到某音源已登录账号的 Cookie（写回收藏需要）
-static QString cookieForSource(const QString &sourceId)
+static QString cookieForSource(const QString &sourceId, QString *userId = nullptr)
 {
-    for (const Account &a : Library::instance()->accounts())
-        if (a.source == sourceId && a.logged && !a.cookie.isEmpty())
+    for (const Account &a : Library::instance()->accounts()) {
+        if (a.source == sourceId && a.logged && !a.cookie.isEmpty()) {
+            if (userId) *userId = a.uid;
             return a.cookie;
+        }
+    }
     return QString();
 }
 
@@ -62,7 +65,8 @@ static void syncFavoriteToCloud(const Song &s, bool favorite)
         Logger::write(QStringLiteral("I"), QStringLiteral("[收藏同步] 该音源不支持写回，跳过"));
         return;
     }
-    const QString cookie = cookieForSource(s.source);
+    QString userId;
+    const QString cookie = cookieForSource(s.source, &userId);
     if (cookie.isEmpty() || s.sourceId.isEmpty()) {
         Logger::write(QStringLiteral("W"),
                       QStringLiteral("[收藏同步] 缺少 cookie(%1) 或 sourceId(%2)，跳过")
@@ -71,8 +75,9 @@ static void syncFavoriteToCloud(const Song &s, bool favorite)
         return;
     }
     Logger::write(QStringLiteral("I"),
-                  QStringLiteral("[收藏同步] 发起 weapi 请求 sourceId=%1").arg(s.sourceId));
-    UserApi::instance()->setFavorite(s.source, cookie, s.sourceId, favorite,
+                  QStringLiteral("[收藏同步] 发起 weapi 请求 sourceId=%1 userid=%2")
+                      .arg(s.sourceId, userId));
+    UserApi::instance()->setFavorite(s.source, cookie, userId, s.sourceId, favorite,
         [favorite](bool ok, const QString &err) {
             Logger::write(ok ? QStringLiteral("I") : QStringLiteral("W"),
                           QStringLiteral("[收藏同步] 结果=%1 err=%2")

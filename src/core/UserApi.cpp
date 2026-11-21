@@ -875,8 +875,9 @@ bool UserApi::canSetFavorite(const QString &sourceId)
     return sourceId == QLatin1String("netease");
 }
 
-void UserApi::setFavorite(const QString &sourceId, const QString &cookie, const QString &songId,
-                          bool favorite, const std::function<void(bool, const QString &)> &cb)
+void UserApi::setFavorite(const QString &sourceId, const QString &cookie, const QString &userId,
+                          const QString &songId, bool favorite,
+                          const std::function<void(bool, const QString &)> &cb)
 {
     if (!canSetFavorite(sourceId)) {
         if (cb) cb(false, QStringLiteral("该平台暂不支持在线同步收藏，已仅更新本地收藏"));
@@ -899,12 +900,22 @@ void UserApi::setFavorite(const QString &sourceId, const QString &cookie, const 
     if (!fullCookie.contains(QStringLiteral("__csrf=")))
         fullCookie += QStringLiteral("; __csrf=") + csrf;
 
-    // 官方 /weapi/song/like 的 body：id 为歌曲 ID，like 为 "true"/"false"（字符串更通用），
-    // csrf_token 双提交。songid/trackIds 是旧版/部分实现兼容字段，一并带上不影响。
+    // userid 兜底：账号里没存就从 Cookie 里取（网易云 Cookie 常带 userid/uid）
+    QString effectiveUserId = userId;
+    if (effectiveUserId.isEmpty())
+        effectiveUserId = cookieValue(cookie, {QStringLiteral("userid"), QStringLiteral("uid"),
+                                               QStringLiteral("musicid")});
+
+    // 参数依据 NeteaseCloudMusicApiEnhanced 的官方逆向：/api/song/like 的 body 为
+    // {trackId: 歌曲id, userid: 用户id, like: 布尔}。之前传 like="false"(字符串) + songid/id
+    // 被服务端判「参数错误」(code 400)。改回 trackId + 布尔 like，并补 userid。
+    // csrf_token 双提交。保留 id/songid/trackIds 兼容其它端点的历史实现。
     QJsonObject payload;
+    payload.insert(QStringLiteral("trackId"), songId);
     payload.insert(QStringLiteral("id"), songId);
     payload.insert(QStringLiteral("songid"), songId);
-    payload.insert(QStringLiteral("like"), favorite ? QStringLiteral("true") : QStringLiteral("false"));
+    payload.insert(QStringLiteral("userid"), effectiveUserId);
+    payload.insert(QStringLiteral("like"), favorite);   // 布尔，不是字符串
     payload.insert(QStringLiteral("trackIds"), QStringLiteral("[%1]").arg(songId));
     payload.insert(QStringLiteral("csrf_token"), csrf);
 
@@ -921,8 +932,8 @@ void UserApi::setFavorite(const QString &sourceId, const QString &cookie, const 
 
     const QByteArray body = Netease::weapiForm(payload);
     Logger::write(QStringLiteral("I"),
-                  QStringLiteral("[收藏同步] POST /weapi/song/like id=%1 like=%2 csrf=%3 bodyLen=%4")
-                      .arg(songId, favorite ? QStringLiteral("true") : QStringLiteral("false"),
+                  QStringLiteral("[收藏同步] POST /weapi/song/like trackId=%1 userid=%2 like=%3 csrf=%4 bodyLen=%5")
+                      .arg(songId, effectiveUserId, favorite ? QStringLiteral("true") : QStringLiteral("false"),
                            csrf, QString::number(body.size())));
     HttpClient::instance()->request(
         QStringLiteral("POST"),
