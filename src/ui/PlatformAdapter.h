@@ -135,6 +135,8 @@ private:
     // 最近一次系统上报的原始 insets（扣掉 Qt 已让出的部分之前），只用于日志排查
     qreal m_lastOsLeft = 0;
     qreal m_lastOsTop = 0;
+    // Qt safeAreaMargins().top() 的原始值（钳制前），仅日志排查用
+    qreal m_lastSafeTop = 0;
     // 窗口矩形变化时打一行几何日志（旋转/分屏/上下分屏切换时定位问题用）
     QRect m_lastGeom;
 };

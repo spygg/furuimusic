@@ -266,21 +266,19 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
     qreal l = 0, t = 0, r = 0, b = 0;
     bool fromPlatform = false;
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    // ---- Android：安全区完全交给 Qt Quick，这里不下发任何边距（l/t/r/b 保持 0）----
-    // Qt 6.11 的 Qt Quick 已把窗口摆到状态栏/挖孔下沿（实测竖屏窗口 360x734、屏幕
-    // 360x806，QML 原点即在状态栏下沿），内容本就不会被系统栏盖住。最初误以为
-    // 「搜索框与状态栏重合、点击无效」，真正原因是状态栏图标白底白字看不见（已由
-    // ThemeManager::syncStatusBarIcons 修复），并非位置偏移。
-    // 因此这里不再补 insetTop：补多少都会在状态栏下沿之上多出一块白色空白。
-    // JNI 仅取一次系统 insets 记日志（现场核对机型用）；取到值即屏蔽下面的
-    // availableGeometry 兜底，避免兜底在 Android 上算出左右/底部边距、改动横屏布局。
+    // ---- Android：顶部边距用「JNI 系统状态栏 − Qt 已让出高度」补差额，绝不恒为 0 ----
+    // 之前 f34967e 把边距全设 0，只适合 Qt 已把窗口摆到状态栏下沿的机型；在强制
+    // edge-to-edge / targetSdk 35 的机型上 Qt 没让出顶部，窗口铺满整屏，边距恒 0 会让
+    // 搜索框贴住状态栏、点击无效——即用户反馈的「上边距又为 0」。
+    // 差额算法：Qt 已让出（窗口比屏幕矮）→ 差额≤0 不补（不产生空白）；铺满整屏 → 补满
+    // 状态栏高度；只让出一部分 → 补足缺口。不能用 safeAreaMargins().top()：实测机型上
+    // 它返回 0、但 JNI 读到状态栏 24dp，会导致该类机型上边距仍为 0。只补 top，横屏左右不碰。
     if (window) {
         const AndroidInsets ai = queryAndroidInsets(window->devicePixelRatio());
         if (ai.valid) {
             m_lastOsLeft = ai.left;
             m_lastOsTop = ai.top;
             m_insetRetries = 0;
-            fromPlatform = true;   // 屏蔽 availableGeometry 兜底，边距全部保持 0
         } else if (m_insetRetries < 6) {
             ++m_insetRetries;
             QPointer<QQuickWindow> guard(window);
@@ -289,6 +287,36 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
                     refreshInsets(guard);
             });
         }
+        // 顶部补「差额」= 系统状态栏高度 − Qt 已让出的高度。
+        // 不能依赖 safeAreaMargins().top()：实测机型上它返回 0、但 JNI 读到系统状态栏 24dp，
+        // 若直接用它当边距就会让 edge-to-edge 机型的搜索框贴住状态栏（上边距=0）。
+        //   - Qt 已让出（窗口比屏幕矮一整个状态栏）→ 差额≤0 → 不补（不产生空白）
+        //   - 窗口铺满整屏（edge-to-edge）→ 差额=状态栏高度 → 补齐
+        //   - 只让出一部分 → 补足缺口
+        // ai.top 带 displayCutout 并集（每边取最大），已是该边的合理高度，直接钳制上限即可。
+        const int screenH = window->screen() ? window->screen()->geometry().height() : 0;
+        if (screenH > 0) {
+            const qreal qtInsetTop = qMax(0.0, static_cast<qreal>(screenH - window->height()));
+            const qreal missingTop = ai.top - qtInsetTop;
+            if (missingTop > 1.0)
+                t = qMin(missingTop, ai.top);   // 钳制，防挖孔并集偏高补过头
+        }
+#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+        m_lastSafeTop = window->safeAreaMargins().top();   // 仅日志参考，不用于计算
+        // 安全区异步上报（旋转、系统栏显隐），每个窗口只接一次监听触发重算。
+        if (window != m_safeAreaWindow) {
+            m_safeAreaWindow = window;
+            QPointer<QQuickWindow> guard(window);
+            QObject::connect(window, &QWindow::safeAreaMarginsChanged, this,
+                             [this, guard] {
+                                 if (guard)
+                                     refreshInsets(guard);
+                             });
+        }
+#endif
+        // 取到有效 insets 或补了 top 即屏蔽 availableGeometry 兜底，避免它改动横屏左右/底部
+        if (ai.valid || t > 0)
+            fromPlatform = true;
     }
 #endif
 #if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0) && !defined(Q_OS_ANDROID)
@@ -365,15 +393,18 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
               c ? int(c->x()) : -1, c ? int(c->y()) : -1,
               c ? int(c->width()) : -1, c ? int(c->height()) : -1);
     }
-    if (qFuzzyCompare(l, m_insetLeft) && qFuzzyCompare(t, m_insetTop)
+    // 首次或值变化都打一行；原来值恒为 0 时会因 qFuzzyCompare 早退、永远看不到诊断日志。
+    static bool s_firstInsetsLog = true;
+    if (!s_firstInsetsLog && qFuzzyCompare(l, m_insetLeft) && qFuzzyCompare(t, m_insetTop)
         && qFuzzyCompare(r, m_insetRight) && qFuzzyCompare(b, m_insetBottom))
         return;
+    s_firstInsetsLog = false;
     // 每次安全区变化都留一行：现场排查「界面被挤到顶部 / 留白太大」时，
     // 一眼能看出是窗口被压扁、系统栏占位，还是两套算法给出了不同答案
-    qInfo("insets: win=%dx%d at %d,%d os=%d,%d ime=%d src=%s -> %d,%d,%d,%d",
+    qInfo("insets: win=%dx%d at %d,%d os=%d,%d safeTop=%.0f ime=%d src=%s -> %d,%d,%d,%d",
           window ? int(window->width()) : -1, window ? int(window->height()) : -1,
           window ? window->x() : -1, window ? int(window->y()) : -1,
-          int(m_lastOsLeft), int(m_lastOsTop),
+          int(m_lastOsLeft), int(m_lastOsTop), m_lastSafeTop,
           int(imeVisible),
           fromPlatform ? "os" : "fallback",
           int(l), int(t), int(r), int(b));
