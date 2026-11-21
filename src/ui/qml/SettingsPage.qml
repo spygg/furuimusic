@@ -440,6 +440,37 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
+                Text {
+                    Layout.preferredWidth: 88
+                    text: "访问令牌"
+                    color: cText
+                    font.pixelSize: 13
+                }
+                TextField {
+                    id: openApiTokenField
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: theme.touchMin
+                    placeholderText: "留空则局域网设备无需鉴权（不推荐）"
+                    text: app.setting("openApiToken", "")
+                    color: cText
+                    font.pixelSize: 12
+                    leftPadding: 8
+                    echoMode: TextInput.Password
+                    onEditingFinished: app.setSetting("openApiToken", text)
+                    background: Rectangle { color: cCard; radius: 6; border.color: cLine }
+                }
+            }
+            Text {
+                Layout.fillWidth: true
+                text: "设置令牌后，局域网设备调用开放 API 需在请求头带 X-Furui-Token 或地址带 ?token=；本机访问不受影响。留空时局域网任意设备可控制播放，仅在可信网络下使用。"
+                color: cSub
+                font.pixelSize: theme.fontSm
+                wrapMode: Text.Wrap
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
                 Text { Layout.fillWidth: true; text: "写入日志文件"; color: cText; font.pixelSize: 13 }
                 Switch {
                     checked: app.logToFile

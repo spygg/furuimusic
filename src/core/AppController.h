@@ -489,6 +489,10 @@ private:
     int m_mvIndex = -1;
     bool m_mvLoading = false;
     bool m_mvHasMore = true;
+    // MV 列表请求代次：切地区/刷新/连点时作废旧回包，避免旧地区数据 append 到新列表
+    quint64 m_mvListGen = 0;
+    // MV 打开请求代次：openMv 并发时只认最后一次，防止先发后到的旧回调打开错 MV
+    quint64 m_mvOpenGen = 0;
     // 进入 MV 前音乐在播 → 暂停，关闭 MV 后恢复续播；解析失败则不会置位
     bool m_mvResumeOnClose = false;
     // 评论分页状态
@@ -497,6 +501,8 @@ private:
     int m_commentTotal = -1;
     bool m_commentsLoading = false;
     QString m_commentSourceName;
+    // 评论请求代次：切歌/重开评论时作废旧回包，避免上一首歌的评论写进当前歌
+    quint64 m_commentsGen = 0;
     static AppController *s_instance;
 };
 

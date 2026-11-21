@@ -846,6 +846,7 @@ void AppController::search(const QString &keyword, const QString &sourceId)
     emit searchStarted();
     // 任何新搜索都接管搜索状态：上一条（无论歌曲还是歌单）的迟到结果全部作废
     const quint64 req = ++d->searchRequestId;
+    ++d->qishuiGen;   // 作废旧汽水推荐回包：它只校验 qishuiGen，不认 searchRequestId
     d->searching = true;
     setStatus(QStringLiteral("正在聚合搜索「%1」…").arg(keyword));
     const int limit = Settings::integer(QStringLiteral("pageSize"), 30);
@@ -940,6 +941,7 @@ void AppController::loadQishuiRecommend(const QString &mode, const QString &cate
     const quint64 gen = ++d->qishuiGen;
     ++d->discoveryGen;   // 与榜单页互相当废：两路共用 m_discovery/discoveryLoading
     ++d->searchRequestId;   // 作废挂起的搜索/榜单请求
+    cancelPendingSearch();  // 收起挂起搜索的 loading（否则 search 回调早退后 searching 永久卡 true）
     d->discoveryLoading = true;
     emit discoveryChanged();
     setStatus(QStringLiteral("正在加载汽水推荐…"));
@@ -1117,6 +1119,7 @@ void AppController::openDiscoveryPlaylist(const QString &playlistUid)
     }
 
     ++d->searchRequestId;
+    ++d->qishuiGen;   // 作废在途汽水推荐回包（单向：汽水侧已作废搜索，这里补对称侧）
     cancelPendingSearch();
     const quint64 gen = d->searchRequestId;
     setStatus(QStringLiteral("正在加载榜单「%1」…").arg(target.title));
@@ -1135,6 +1138,7 @@ void AppController::openDiscoveryPlaylist(const QString &playlistUid)
 void AppController::loadRank(const QString &sourceId)
 {
     ++d->searchRequestId;
+    ++d->qishuiGen;   // 作废在途汽水推荐回包
     cancelPendingSearch();
     setStatus(QStringLiteral("正在加载榜单…"));
     const quint64 gen = ++d->playlistGen;
@@ -1436,6 +1440,13 @@ void AppController::resolveAndPlay(const Song &song)
     d->recoverStage = Impl::RecoverStage::None;   // 新歌重置断流恢复阶梯
     d->recoverPos = 0;
     d->preloadTriggered = false;   // 新歌从 0 开始计时，播起来后再预取下一首
+    // 切歌作废在途评论请求；抽屉可保持打开，新歌必须能重新拉第一页
+    ++m_commentsGen;
+    m_commentsLoading = false;
+    m_comments.clear();
+    m_commentPage = 1;
+    m_commentTotal = -1;
+    emit commentsChanged();
     setStatus(QStringLiteral("正在解析「%1」的播放地址…").arg(song.title));
 
     // 歌词/封面在「切歌」这一刻就开始取，不等播放地址解析结果。
@@ -1616,12 +1627,12 @@ void AppController::onPlayerError(const QString &msg)
     }
     const QString brief = QStringLiteral("播放失败");
     // 播过 10 秒以上才按「曲中断流」处理；秒失败多半是地址过期/防盗链。
-    // 与 PlayerController 看门狗的停滞报错门槛（10s）保持一致：否则播放 10~15s
-    // 处卡顿，看门狗已报「播放中断」却因这里判定非曲中而跳过两级自愈直接扣分换源。
-    const bool midStream = failedPos >= 10000;
+    // 注意量纲：failedPos 是「播放进度」，看门狗的 10s 是「停滞时长」。歌播到 3~5s
+    // 卡住 10s 时看门狗已报「播放中断」，但 failedPos 仍 <10000；若只看进度会误判
+    // 非曲中而跳过两级自愈直接扣分换源。看门狗消息带固定标记，据此一并纳入曲中断流。
+    const bool watchdogStall = msg.contains(QStringLiteral("播放中断"));
+    const bool midStream = failedPos >= 10000 || watchdogStall;
 
-    d->pendingEngine.clear();
-    d->pendingKey.clear();
     Logger::write(QStringLiteral("W"),
                   QStringLiteral("播放失败：%1 - %2（%3）").arg(song.title, song.artist, msg));
     if (song.title.isEmpty() || d->inFallback) {
@@ -1629,8 +1640,13 @@ void AppController::onPlayerError(const QString &msg)
         // 换源解析/播放期间，被 stop 掉的旧流会持续投递迟到的 error（真机日志里
         // 同一秒刷了 20+ 条 "Demuxing failed"）。此时弹「播放失败」是误导——换源
         // 很可能马上成功。真正的失败由 resolveAlternate 的失败回调统一提示。
+        // 关键：必须在早退之后才清 pendingEngine/pendingKey——换源成功后这两个字段
+        // 属于「新源」，迟到 error 若把它们清掉，新源播过 2s 就拿不到加分/置顶（:512-518）。
         return;
     }
+    // 只有确认是本次播放的 error 才清计分标记；早退路径保留新源的标记。
+    d->pendingEngine.clear();
+    d->pendingKey.clear();
 
     // ---- 曲中断流恢复阶梯：先自愈，最后才换源 ----
     // 1) 同一 URL 强制重连并从断点续播。绝大多数「放着放着停住」是后端缓冲/网络
@@ -1676,8 +1692,9 @@ void AppController::onPlayerError(const QString &msg)
 
 void AppController::startAlternateFallback(const Song &song, qint64 failedPos, const QString &msg)
 {
-    // 与 onPlayerError 的曲中断流门槛一致（10s），保证扣分力度判定统一
-    const bool midStream = failedPos >= 10000;
+    // 与 onPlayerError 的曲中断流门槛一致：播放进度 10s 或看门狗停滞标记（量纲不同，
+    // 短进度卡死 10s 也应算曲中断流），保证扣分力度判定统一。
+    const bool midStream = failedPos >= 10000 || msg.contains(QStringLiteral("播放中断"));
     const QString brief = QStringLiteral("播放失败");
     if (!d->playingEngine.isEmpty()) {
         // 直链由「脚本 × 平台」提供：重度扣分并记本首坏候选，让换源优先选别的
@@ -1909,7 +1926,11 @@ void AppController::openMv(const Song &song)
     // 不能在解析前就暂停：解析失败（无 MV）时音乐会一直停着。改为记住
     // 进入前的播放状态，解析成功后才暂停；关闭 MV 时由 mvClosed() 恢复。
     setStatus(QStringLiteral("正在解析「%1」的 MV…").arg(song.title));
-    SourceManager::instance()->mv(song, [this, song](bool ok, const QUrl &url, const QString &error) {
+    const quint64 gen = ++m_mvOpenGen;
+    const bool hasPrev = mvHasPrev();
+    const bool hasNext = mvHasNext();
+    SourceManager::instance()->mv(song, [this, song, gen, hasPrev, hasNext](bool ok, const QUrl &url, const QString &error) {
+        if (gen != m_mvOpenGen) return;   // 连点/连切时先发后到的旧回包直接丢弃
         if (!ok) {
             setStatus(error);
             emit notify(error, QStringLiteral("error"));
@@ -1925,14 +1946,15 @@ void AppController::openMv(const Song &song)
             {QStringLiteral("artist"), song.artist},
             {QStringLiteral("cover"), song.cover},
             {QStringLiteral("source"), song.source},
-            {QStringLiteral("hasPrev"), mvHasPrev()},
-            {QStringLiteral("hasNext"), mvHasNext()}});
+            {QStringLiteral("hasPrev"), hasPrev},
+            {QStringLiteral("hasNext"), hasNext}});
         setStatus(QStringLiteral("正在播放 MV：%1 - %2").arg(song.title, song.artist));
     });
 }
 
 void AppController::mvClosed()
 {
+    ++m_mvOpenGen;   // 关闭时在途的 openMv 回包全部作废，避免关掉后又弹出 MV
     if (!m_mvResumeOnClose) return;
     m_mvResumeOnClose = false;
     if (!playing()) togglePause();
@@ -1959,7 +1981,10 @@ void AppController::playMvCurrent()
 
 void AppController::loadMvList(const QString &area, bool append)
 {
-    if (m_mvLoading || (append && !m_mvHasMore)) return;
+    // 切地区/刷新（!append）不是翻页：必须允许打断在途请求，否则 QML 已把 mvArea
+    // 改成新地区、C++ 却被 loading 守卫吞掉，胶囊高亮与列表数据不一致。
+    if ((m_mvLoading && append) || (append && !m_mvHasMore)) return;
+    const quint64 gen = ++m_mvListGen;   // 每次请求（含切地区）作废旧回包
     if (!append) {
         m_mvList.clear();
         m_mvOffset = 0;
@@ -1973,7 +1998,8 @@ void AppController::loadMvList(const QString &area, bool append)
     const int pageSize = 24;
     SourceManager::instance()->mvList(QStringLiteral("netease"), m_mvArea, pageSize,
                                       m_mvOffset,
-        [this](const QVector<QVariantMap> &items, bool hasMore) {
+        [this, gen](const QVector<QVariantMap> &items, bool hasMore) {
+            if (gen != m_mvListGen) return;   // 旧地区/旧请求的迟到回包直接丢弃
             for (const QVariantMap &m : items)
                 m_mvList.append(m);
             m_mvOffset += items.size();
@@ -1988,36 +2014,47 @@ void AppController::loadMvList(const QString &area, bool append)
 
 void AppController::loadComments(int page)
 {
-    if (m_commentsLoading || page < 1) return;
+    if (page < 1) return;
     const Song song = d->currentSong;
     if (song.sourceId.isEmpty() || song.title.isEmpty()) {
         emit notify(QStringLiteral("请先播放一首歌曲再查看评论"), QStringLiteral("info"));
         return;
     }
+    // 切歌后必须允许新歌重新拉第一页：旧的 in-flight 请求由 generation 作废，
+    // 不再用 m_commentsLoading 守卫挡住新请求（否则新歌评论一直空）。
+    if (m_commentsLoading && page > 1) return;
+    const quint64 gen = ++m_commentsGen;
     m_commentsLoading = true;
     const bool append = (page > 1);
     if (!append) {
         m_comments.clear();
         m_commentTotal = -1;
     }
-    m_commentPage = page;
     m_commentSourceName = sourceName(song.source);
     emit commentsChanged();
 
     SourceManager::instance()->comments(song, page,
-        [this, page, append, song](const QVector<Comment> &list, int total) {
+        [this, page, append, song, gen](const QVector<Comment> &list, int total) {
+            if (gen != m_commentsGen) return;   // 切歌/重开评论后丢弃旧歌回包
             m_commentsLoading = false;
+            if (list.isEmpty()) {
+                // 失败/空页：不推进页码，避免 QML 反复请求不存在的下一页
+                m_commentTotal = total >= 0 ? total : m_commentTotal;
+                emit commentsChanged();
+                if (page == 1)
+                    emit notify(QStringLiteral("「%1」暂无评论或该平台未开放评论").arg(song.title),
+                                QStringLiteral("info"));
+                return;
+            }
             if (append) {
                 for (const Comment &c : list) m_comments.append(c.toVariant());
             } else {
                 m_comments.clear();
                 for (const Comment &c : list) m_comments.append(c.toVariant());
             }
+            m_commentPage = page;   // 只在成功拿到数据时推进
             if (total >= 0) m_commentTotal = total;
             emit commentsChanged();
-            if (m_comments.isEmpty() && page == 1)
-                emit notify(QStringLiteral("「%1」暂无评论或该平台未开放评论").arg(song.title),
-                            QStringLiteral("info"));
         });
 }
 

@@ -279,9 +279,16 @@ Item {
                 // 版式与交互参照 AlgerMusicPlayer 的播放抽屉。
                 // 子项顺序必须与左侧导航一一对应：0 曲库 / 1 播放 / 2 账号 / 3 设置
                 Item {
+                    id: playerPageWrapper
+                    // StackLayout 只隐藏这层外壳，PlayerPage.visible 自身仍为 true，
+                    // 歌词 60ms 插值定时器（依赖 root.visible）会在离开播放页后继续跑。
+                    // 把外层可见性显式同步进去，隐藏时定时器随之停止。
+                    onVisibleChanged: { if (playerPage) playerPage.visible = visible }
+                    visible: true
                     PlayerPage {
                         id: playerPage
                         anchors.fill: parent
+                        visible: true
                         onRequestClose: root.pageIndex = root.lastContentPage
                         onRequestSettings: root.pageIndex = 3
                         onRequestQueue: { root.commentsOpen = false; root.queueOpen = !root.queueOpen }
@@ -367,6 +374,9 @@ Item {
         }
     }
 
+    // 外壳重建（旋转/分屏）后由窗口层调用，用保存的载荷重新打开 MV
+    function restoreMv(mv) { mvPage.open(mv) }
+
     // app.mvOpened 由 AppController 解析完 MV 地址后发出：
     // 收起队列 → 记住来路页 → 切到 MV 覆盖层 → 把地址交给页面
     Connections {
@@ -376,6 +386,7 @@ Item {
             if (root.pageIndex !== 4) root.mvReturnPage = root.pageIndex
             root.pageIndex = 4
             mvPage.open(mv)
+            if (saveMvSession) saveMvSession(mv, root.mvReturnPage)
         }
     }
 }

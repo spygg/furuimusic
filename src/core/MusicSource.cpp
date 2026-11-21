@@ -1291,6 +1291,12 @@ void MusicSource::qishuiSearchPlaylists(const QString &keyword, int limit, int o
 {
     const Endpoint ep = m_desc.endpoints.value(QStringLiteral("searchPlaylist"));
     QVariantMap v = baseVars();
+    // 歌单搜索是公开数据：登录后 baseVars 会把 cookie 注入源级 Cookie 头，
+    // /luna/pc/* 族带登录态反而被拒/空返回。与 qishuiRank/qishuiRelated 一致显式匿名。
+    // 注：/luna/pc/* 还需官方 bdms.node 动态签名，配置注释已记录该限制（静态签名返回
+    // 1000006）；签名需设备密钥，当前无可用的免签名歌单搜索端点，故本路可能仍为空，
+    // 由其它音源的歌单搜索兜底。
+    v.insert(QStringLiteral("cookie"), QString());
     v.insert(QStringLiteral("keyword"), keyword);
     v.insert(QStringLiteral("limit"), QString::number(limit));
     v.insert(QStringLiteral("offset"), QString::number(offset));

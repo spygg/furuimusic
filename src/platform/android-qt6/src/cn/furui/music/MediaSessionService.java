@@ -87,17 +87,19 @@ public class MediaSessionService extends MediaBrowserService {
     // 三条命令通路（MediaSession 回调 / MEDIA_BUTTON 广播 / Activity 媒体键）可能在
     // 同一次语音指令里同时到达；对照网易云车机版 MediaButtonEventReceiver 的 500ms
     // 去抖，这里也用 500ms（且广播 DOWN/UP 都会进来），只作用于切歌，暂停/播放不受影响。
-    private static long sLastSkipAt = 0;
+    // 这些字段由 C++ 的 Qt 线程写、MediaSession 回调/广播在 Android 主线程读，
+    // volatile 保证跨线程可见性（避免进度跳变/去抖读到陈旧值）。
+    private static volatile long sLastSkipAt = 0;
 
     // C++ 可能先 start() 再 update*()，而服务 onCreate 是异步的，
     // 所以状态同时存一份静态副本，onCreate 时用它构建首个通知。
-    private static String sTitle = "";
-    private static String sArtist = "";
-    private static String sAlbum = "";
-    private static String sCover = "";
-    private static long sDuration = 0;
-    private static boolean sPlaying = false;
-    private static long sPosition = 0;
+    private static volatile String sTitle = "";
+    private static volatile String sArtist = "";
+    private static volatile String sAlbum = "";
+    private static volatile String sCover = "";
+    private static volatile long sDuration = 0;
+    private static volatile boolean sPlaying = false;
+    private static volatile long sPosition = 0;
 
     private MediaSession mSession;
     private NotificationManager mNotificationManager;

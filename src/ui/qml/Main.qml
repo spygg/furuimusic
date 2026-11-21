@@ -63,6 +63,10 @@ ApplicationWindow {
     property bool queueOpen: false
     property bool commentsOpen: false
     property int lastContentPage: 0
+    // MV 覆盖层的来路页与播放载荷也常驻窗口层：形态切换会销毁重建外壳，
+    // 不同步的话新外壳拿到 pageIndex=4 但 MvPage 从没 open 过 → 黑屏 / 返回错页。
+    property int mvReturnPage: 1
+    property var mvSession: null
     // 反向同步时压制回写，避免 win <-> shell.item 互相触发形成循环
     property bool shellSyncing: false
 
@@ -171,8 +175,14 @@ ApplicationWindow {
             // 外壳自己也有 Keys.onReleased（更内层，会先吃掉返回键），所以把
             // 「浏览器返回」作为回调注入外壳：无论事件落在哪一层，都先走网页
             // 历史后退、退无可退才关浏览器，并且共用同一套去抖逻辑。
-            if (item)
+            if (item) {
                 item.browserBack = function() { return win.handleBrowserBack() }
+                // 外壳在 onMvOpened 时主动回传 MV 载荷与来路页，窗口层常驻保存
+                item.saveMvSession = function(mv, ret) {
+                    win.mvSession = mv
+                    win.mvReturnPage = ret
+                }
+            }
             win.syncShellState()
         }
     }
@@ -200,6 +210,11 @@ ApplicationWindow {
             item.commentsOpen = win.commentsOpen
         if (item.lastContentPage !== undefined)
             item.lastContentPage = win.lastContentPage
+        // MV 状态回填：新外壳重建后，若正处于 MV 页，用保存的载荷重新 open。
+        if (item.mvReturnPage !== undefined)
+            item.mvReturnPage = win.mvReturnPage
+        if (item.restoreMv !== undefined && win.pageIndex === 4 && win.mvSession)
+            item.restoreMv(win.mvSession)
         // 分屏状态也要进外壳：移动壳在宽而矮的半屏里默认会切成左侧导航，
         // 车机要求跟竖屏一致（底部标签栏），所以由它关掉侧栏布局。
         if (item.inMultiWindow !== undefined)

@@ -18,6 +18,7 @@
 #include "Library.h"
 #include "Logger.h"
 #include "OpenApiWeb.h"
+#include "Settings.h"
 
 namespace Furui {
 
@@ -358,6 +359,26 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
     if (method == QLatin1String("OPTIONS")) {
         respond(socket, 200, QStringLiteral("text/plain"), "OK");
         return;
+    }
+    // 可选访问令牌：设置 openApiToken 后，非本机来源必须带正确 token
+    //（X-Furui-Token 头或 ?token=），防止局域网任意设备无鉴权控制播放/读日志。
+    // 本机（127.0.0.1/::1）与同源网页控制台不受影响，保持既有本地工具/网页控制台行为。
+    const QString token = Settings::string(QStringLiteral("openApiToken"));
+    if (!token.isEmpty()) {
+        // isLoopback() 同时覆盖 127.0.0.1 / ::1 / IPv4-mapped ::ffff:127.0.0.1，
+        // 直接和 LocalHost 比较会在服务监听 :: 时漏判映射地址，误伤本机工具。
+        const bool local = socket->peerAddress().isLoopback();
+        if (!local) {
+            const QByteArray supplied = headerValue(request, "X-Furui-Token");
+            const QString suppliedStr = supplied.isEmpty()
+                ? query.queryItemValue(QStringLiteral("token"))
+                : QString::fromUtf8(supplied);
+            if (suppliedStr != token) {
+                respond(socket, 401, QStringLiteral("application/json; charset=utf-8"),
+                        "{\"error\":\"unauthorized\"}");
+                return;
+            }
+        }
     }
     // 浏览器跨站保护：控制类端点不接受外部 Origin/Referer；
     // 不带这两个头的本地工具（curl / 洛雪兼容脚本）行为完全不变。

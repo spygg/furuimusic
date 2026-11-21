@@ -254,8 +254,9 @@ Item {
             // 歌单详情异步加载完成：定位正在播放的那首（缓存路径已在 openPlaylist 里做过）
             if (root.openPlaylistTitle !== "")
                 root.locatePlayingInDetail()
-            // kind 为空是「榜单/歌单详情」的回包，别把它当成搜索结果显示成「搜索到 N 首」
-            if (count >= 0 && kind.length > 0)
+            // kind 为 song/playlist 才是真正的搜索回包；空串是榜单/歌单详情，
+            // "qishui" 是汽水推荐加载完成（不是搜索），都别显示「搜索到 N 首」
+            if (count >= 0 && (kind === "song" || kind === "playlist"))
                 root.hint = kind === "playlist" ? ("搜索到 " + count + " 个歌单")
                                                 : ("搜索到 " + count + " 首歌曲")
         }

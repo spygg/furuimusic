@@ -627,6 +627,9 @@ Item {
         }
     }
 
+    // 外壳重建（旋转/分屏）后由窗口层调用，用保存的载荷重新打开 MV
+    function restoreMv(mv) { mvPage.open(mv) }
+
     // app.mvOpened 由 AppController 解析完 MV 地址后发出：
     // 收起队列 → 记住来路页 → 切到 MV 覆盖层 → 把地址交给页面
     Connections {
@@ -636,6 +639,7 @@ Item {
             if (root.pageIndex !== 4) root.mvReturnPage = root.pageIndex
             root.pageIndex = 4
             mvPage.open(mv)
+            if (saveMvSession) saveMvSession(mv, root.mvReturnPage)
         }
     }
 }

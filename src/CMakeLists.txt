@@ -243,8 +243,11 @@ if(ANDROID)
              DESTINATION "${FURUI_STAGED_PACKAGE_DIR}/res")
         set(FURUI_PACKAGE_SOURCE_DIR "${FURUI_STAGED_PACKAGE_DIR}")
         # 编译期标识：UpdateChecker 用它把在线更新的下载资产切到特供包
-        # （特供版包名是伪装的网易云，收主流版 APK 装不上）
-        target_compile_definitions(FuruiMusic PRIVATE FURUI_CAR_COMPAT_EDITION=1)
+        # （特供版包名是伪装的网易云，收主流版 APK 装不上）。
+        # 必须挂在 FuruiCore 上：UpdateChecker.cpp 编进 FuruiCore 静态库，
+        # 只加到 FuruiMusic 可执行目标的话，库里的 #ifdef 永远不成立，
+        # 特供版仍会下载主流包（装不上）。PUBLIC 同时传播给链接它的 FuruiMusic。
+        target_compile_definitions(FuruiCore PUBLIC FURUI_CAR_COMPAT_EDITION=1)
         message(STATUS "车机兼容测试版：包名 com.netease.cloudmusic，BYD 对接已启用")
     endif()
     set_target_properties(FuruiMusic PROPERTIES

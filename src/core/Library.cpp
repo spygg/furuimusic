@@ -383,7 +383,10 @@ void Library::addHistory(const Song &s)
     q.prepare(QStringLiteral("INSERT OR REPLACE INTO history (song_uid,played) VALUES (?,?)"));
     q.addBindValue(s.uid);
     q.addBindValue(QDateTime::currentMSecsSinceEpoch());
-    execWrite(q, "addHistory");
+    if (!execWrite(q, "addHistory")) {   // 与 addFavorite 一致：写失败回滚，不谎报成功
+        m_db.rollback();
+        return;
+    }
     m_db.commit();
     emit changed();
 }

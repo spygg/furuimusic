@@ -202,14 +202,21 @@ bool androidInstallApk(const QString &path)
     QJniObject file("java/io/File", "(Ljava/lang/String;)V", jpath.object());
     if (!file.isValid())
         return false;
-    QJniObject activity = QNativeInterface::QAndroidApplication::context();
-    if (!activity.isValid())
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    if (!context.isValid())
         return false;
+    // manifest 里 authority = ${applicationId}.qtprovider。车机伪装版 applicationId 是
+    // com.netease.cloudmusic，写死 cn.furui.music.qtprovider 会让 getUriForFile 找不到
+    // provider 抛异常 → 更新包装不上。按运行时包名拼，主流/伪装版都正确。
+    const QJniObject pkgObj = context.callObjectMethod("getPackageName", "()Ljava/lang/String;");
+    const QString pkg = pkgObj.toString();
+    const QString authority = (pkg.isEmpty() ? QStringLiteral("cn.furui.music") : pkg)
+                              + QStringLiteral(".qtprovider");
     QJniObject uri = QJniObject::callStaticObjectMethod(
         "androidx/core/content/FileProvider", "getUriForFile",
         "(Landroid/content/Context;Ljava/lang/String;Ljava/io/File;)Landroid/net/Uri;",
-        activity.object(),
-        QJniObject::fromString(QStringLiteral("cn.furui.music.qtprovider")).object(),
+        context.object(),
+        QJniObject::fromString(authority).object(),
         file.object());
     if (!uri.isValid())
         return false;
@@ -231,7 +238,7 @@ bool androidInstallApk(const QString &path)
                             QJniObject::fromString(
                                 QStringLiteral("android.intent.extra.NOT_UNKNOWN_SOURCE")).object<jstring>(),
                             jboolean(true));
-    activity.callMethod<void>("startActivity", "(Landroid/content/Intent;)V", intent.object());
+    context.callMethod<void>("startActivity", "(Landroid/content/Intent;)V", intent.object());
     return true;
 }
 #endif
