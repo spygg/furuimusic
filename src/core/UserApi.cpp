@@ -134,7 +134,7 @@ Endpoint neteaseContract(const QString &name)
         e.extra = QVariantMap{{QStringLiteral("forwardMethod"), QStringLiteral("POST")},
                               {QStringLiteral("fullIdsPath"), QStringLiteral("playlist.trackIds")},
                               {QStringLiteral("fillEndpoint"), QStringLiteral("songDetail")},
-                              {QStringLiteral("fillBatch"), 200}};
+                              {QStringLiteral("fillBatch"), 400}};
         e.fields = QVariantMap{{QStringLiteral("id"), QStringLiteral("id")},
                                {QStringLiteral("title"), QStringLiteral("name")},
                                {QStringLiteral("artist"), QStringLiteral("ar[].name")},
@@ -646,7 +646,7 @@ void UserApi::completePlaylistSongs(const QString &sourceId, const QString &cook
         if (cb) cb(preview);
         return;
     }
-    const int batch = qBound(1, fillEp.extra.value(QStringLiteral("fillBatch"), 200).toInt(), 500);
+    const int batch = qBound(1, fillEp.extra.value(QStringLiteral("fillBatch"), 400).toInt(), 500);
     const QVariantMap base = vars(sourceId, cookie);
 
     auto want = std::make_shared<QStringList>(ids);
@@ -849,9 +849,12 @@ void UserApi::fetchLibrary(const QString &sourceId, const QString &cookie,
                         call(sourceId, t.name, t.v,
                             [this, sourceId, v, t, out, oneDone](const HttpClient::Reply &r) {
                                 // 整库同步按「每个歌单」限流：一次拉十几个大歌单时不能无上限
-                                // 地翻 song/detail，否则同步会跑上几分钟。
+                                // 地翻 song/detail，否则同步会跑上几分钟。默认 1000 与单歌单
+                                // 详情的 playlistMaxSongs 对齐——热门歌单动辄 500+ 首，旧的
+                                // 默认 500 会把「我喜欢的音乐」这类歌单悄悄砍掉一半（实测
+                                // 583 首只落库 500 首）。上限放宽到 5000 供大歌单用户配置。
                                 const int cap = qBound(1, Settings::integer(
-                                    QStringLiteral("syncPlaylistMaxSongs"), 500), 2000);
+                                    QStringLiteral("syncPlaylistMaxSongs"), 1000), 5000);
                                 const QString cookie = v.value(QStringLiteral("cookie")).toString();
                                 completePlaylistSongs(sourceId, cookie, t.name, r, cap,
                                     [t, out, oneDone](const QVector<Song> &songs) {

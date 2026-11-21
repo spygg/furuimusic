@@ -27,6 +27,10 @@ Item {
     readonly property string sourceId: browser.mode.indexOf("login:") === 0
                                        ? browser.mode.substring(6) : ""
     readonly property bool loginMode: sourceId.length > 0
+    // 本次登录是否已抓到 Cookie：驱动登录轮询 Timer 的 running（见文件末尾）。
+    // 每次浏览器打开时复位，保证同一平台二次登录、换平台登录都能重新启动轮询。
+    property bool loginCaptured: false
+    onVisibleChanged: { if (visible) loginCaptured = false }
 
     // 地址栏回车/跳转的唯一入口。
     // 不依赖 `url: browser.url` 绑定：站点内部跳转后 browser.url 是旧的，
@@ -335,14 +339,16 @@ Item {
     Timer {
         interval: 1500
         repeat: true
-        running: root.visible && root.loginMode
+        // 用 loginCaptured 状态驱动而非在 onTriggered 里写 running=false：
+        // 命令式赋值会永久破坏 running 绑定，第二次登录（换平台）时轮询不再启动。
+        running: root.visible && root.loginMode && !root.loginCaptured
         onTriggered: {
             const view = webLoader.item
             if (!view || !view.url || view.url.length === 0) return
             const cookie = browser.cookiesForUrl(view.url.toString())
             if (cookie.length === 0) return
             if (!browser.looksLoggedIn(root.sourceId, cookie)) return
-            running = false
+            root.loginCaptured = true
             app.loginByCookie(root.sourceId, cookie)
             browser.close()
         }

@@ -14,6 +14,7 @@
 #include <QVariant>
 
 #include "Settings.h"
+#include "Logger.h"
 
 namespace Furui {
 
@@ -451,6 +452,12 @@ QVector<Account> Library::accounts()
 
 void Library::saveAccount(const Account &a)
 {
+    Logger::write(QStringLiteral("I"),
+                  QStringLiteral("[saveAccount] ENTER ready=%1 db=%2 source=%3 logged=%4")
+                      .arg(m_ready ? QStringLiteral("1") : QStringLiteral("0"))
+                      .arg(m_db.databaseName())
+                      .arg(a.source)
+                      .arg(a.logged ? QStringLiteral("1") : QStringLiteral("0")));
     if (!m_ready) return;
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("INSERT OR REPLACE INTO accounts "
@@ -464,7 +471,16 @@ void Library::saveAccount(const Account &a)
     q.addBindValue(a.logged ? 1 : 0);
     q.addBindValue(QDateTime::currentMSecsSinceEpoch());
     q.addBindValue(a.status);
-    if (!q.exec()) qWarning() << "[FuruiMusic] saveAccount:" << q.lastError().text();
+    const bool written = q.exec();
+    Logger::write(written ? QStringLiteral("I") : QStringLiteral("W"),
+                  QStringLiteral("[saveAccount] written=%1 err=%2 rows=%3 source=%4 logged=%5 db=%6")
+                      .arg(written ? QStringLiteral("1") : QStringLiteral("0"))
+                      .arg(q.lastError().text())
+                      .arg(QString::number(q.numRowsAffected()))
+                      .arg(a.source)
+                      .arg(a.logged ? QStringLiteral("1") : QStringLiteral("0"))
+                      .arg(m_db.databaseName()));
+    if (!written) qWarning() << "[FuruiMusic] saveAccount:" << q.lastError().text();
     // 登录态是最贵的数据（汽水/网易云都要用户手动扫码）：
     // WAL 模式下它可能长期只存在于 -wal 文件里，进程被 SIGKILL（Android 装
     // 覆盖包、强杀、闪退）后 WAL 一旦被判无效，登录态直接蒸发。

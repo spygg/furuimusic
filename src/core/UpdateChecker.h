@@ -63,6 +63,9 @@ public:
     Q_INVOKABLE void installUpdate();
     // 打开下载结果所在目录（系统文件管理器），供车机等「只允许系统文件管理安装」的环境手动安装
     Q_INVOKABLE void openDownloadFolder();
+    // 把已下载的 APK 复制到公共 Download 目录（MediaStore），车机禁应用内安装时
+    // 供系统文件管理器找到并手动安装。返回展示名，空串表示失败；结果经 toast 提示。
+    Q_INVOKABLE QString copyToDownloads();
 
 signals:
     void stateChanged();

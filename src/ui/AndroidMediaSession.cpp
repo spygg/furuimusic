@@ -21,6 +21,7 @@
 #include <QMetaObject>
 #include <QMutex>
 #include <QOperatingSystemVersion>
+#include <QStringList>
 #include <QTimer>
 #include <QUrl>
 #include <QVector>
@@ -61,16 +62,15 @@ struct VoiceSearchCtx {
     bool done = false;
 };
 
-// Android 13+ 的 POST_NOTIFICATIONS 是运行时权限，Qt 6.11 的 QPermission
-// 没有对应的封装类，只能直接向 Activity 申请。未授予时前台服务照常运行
-// （锁屏/车机控制来自 MediaSession），仅通知栏不显示条目。
+// Android 运行时权限申请：
+// - API 33+ 的 POST_NOTIFICATIONS：通知栏条目（前台服务本身不依赖它）
+// - API <=28 的 WRITE_EXTERNAL_STORAGE：老机/车机把更新 APK 复制到公共 Download
+//   （API 29+ 走 MediaStore 不需要该权限）。
 void requestNotificationPermission()
 {
     if (g_permissionRequested)
         return;
     g_permissionRequested = true;
-    if (QOperatingSystemVersion::current() < QOperatingSystemVersion::Android13)
-        return;
 
     QJniEnvironment env;
     JNIEnv *jni = env.jniEnv();
@@ -82,13 +82,26 @@ void requestNotificationPermission()
     if (!activity.isValid() || !activity.object())
         return;
 
+    // 读 Build.VERSION.SDK_INT，按版本决定申请哪些权限
+    jclass buildClass = jni->FindClass("android/os/Build$VERSION");
+    if (!buildClass) return;
+    jfieldID sdkField = jni->GetStaticFieldID(buildClass, "SDK_INT", "I");
+    const int sdk = sdkField ? jni->GetStaticIntField(buildClass, sdkField) : 0;
+    jni->DeleteLocalRef(buildClass);
+
+    QStringList perms;
+    if (sdk >= 33) perms << QStringLiteral("android.permission.POST_NOTIFICATIONS");
+    if (sdk <= 28) perms << QStringLiteral("android.permission.WRITE_EXTERNAL_STORAGE");
+    if (perms.isEmpty()) return;
+
     jclass stringClass = jni->FindClass("java/lang/String");
-    if (!stringClass)
-        return;
-    jobjectArray permissions = jni->NewObjectArray(1, stringClass, nullptr);
-    jstring name = jni->NewStringUTF("android.permission.POST_NOTIFICATIONS");
-    jni->SetObjectArrayElement(permissions, 0, name);
-    jni->DeleteLocalRef(name);
+    if (!stringClass) return;
+    jobjectArray permissions = jni->NewObjectArray(perms.size(), stringClass, nullptr);
+    for (int i = 0; i < perms.size(); ++i) {
+        jstring name = jni->NewStringUTF(perms.at(i).toUtf8().constData());
+        jni->SetObjectArrayElement(permissions, i, name);
+        jni->DeleteLocalRef(name);
+    }
     jni->DeleteLocalRef(stringClass);
 
     jclass activityClass = jni->FindClass("android/app/Activity");

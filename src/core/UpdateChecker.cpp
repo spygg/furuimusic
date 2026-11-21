@@ -244,6 +244,23 @@ bool androidInstallApk(const QString &path)
     context.callMethod<void>("startActivity", "(Landroid/content/Intent;)V", intent.object());
     return true;
 }
+
+// 把私有目录里的 APK 复制到公共 Download（MediaStore），供车机系统文件管理器手动安装。
+// 车机上 startActivity 可能「假成功」——不弹安装界面却返回 true，所以调用方在车机版
+// 下载完成后无条件复制一份。返回展示名，空串失败。
+QString androidCopyToDownloads(const QString &path, const QString &displayName)
+{
+    const QJniObject activity = QJniObject::callStaticObjectMethod(
+        "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
+    if (!activity.isValid()) return QString();
+    const QJniObject result = QJniObject::callStaticObjectMethod(
+        "cn/furui/music/UpdateInstaller", "copyToDownloads",
+        "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+        activity.object(),
+        QJniObject::fromString(path).object<jstring>(),
+        QJniObject::fromString(displayName).object<jstring>());
+    return result.toString();
+}
 #endif
 
 } // namespace
@@ -626,6 +643,15 @@ void UpdateChecker::installUpdate()
     }
 #if defined(Q_OS_ANDROID)
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // 车机特供版：比亚迪 DiLink 禁止应用内拉起安装器，startActivity 常「假成功」
+    // （不弹安装界面却返回 true）。下载完成后无条件复制一份到公共 Download，
+    // 保证系统文件管理器一定能找到 APK；随后仍尝试拉起安装器（个别 ROM 允许）。
+    // 复制是整包 Binder 写入（耗时），全流程只做一次——用 copied 闸门收敛，
+    // 避免车机版无条件复制 + verdict==1 + 安装失败三处叠加成 2~3 次拷贝与重复 toast。
+    bool copied = false;
+#ifdef FURUI_CAR_COMPAT_EDITION
+    copied = !copyToDownloads().isEmpty();
+#endif
     // 系统安装器对「同签名已安装 / 应用已安装」这类失败只给一句含糊提示，
     // 先自己把 versionCode 与签名核对清楚，能装的才拉起安装器。
     const int verdict = androidApkInstallability(m_downloadedPath);
@@ -637,17 +663,26 @@ void UpdateChecker::installUpdate()
         return;
     }
     if (verdict == 1) {
-        const QString msg = QStringLiteral(
-            "更新包与当前应用签名不同（常见原因：本机装的是本地调试包，在线包是发布签名）。"
-            "请先卸载当前应用，再安装已下载的更新包：%1").arg(m_downloadedPath);
+        // 签名不同：本机装的是调试包、在线包是发布签名，强制给用户留一份可手动安装的包
+        if (!copied) copied = !copyToDownloads().isEmpty();
+        const QString msg = copied
+            ? QStringLiteral("更新包与当前应用签名不同（常见原因：本机装的是本地调试包，在线包是发布签名）。"
+                             "已复制到系统「下载」目录，请用文件管理器安装")
+            : QStringLiteral("更新包与当前应用签名不同，且复制到下载目录失败，请检查存储权限后手动安装：%1")
+                  .arg(m_downloadedPath);
         AppController::instance()->notify(msg, QStringLiteral("warning"));
         emit downloadFailed(msg);
         return;
     }
     if (androidInstallApk(m_downloadedPath))
         return;
-    AppController::instance()->notify(QStringLiteral("拉起安装器失败，请手动安装：%1").arg(m_downloadedPath),
-                                      QStringLiteral("warning"));
+    // 拉起安装器失败（部分 ROM 禁止应用内安装）：复制到公共 Download 供文件管理器手动装
+    if (!copied) copied = !copyToDownloads().isEmpty();
+    AppController::instance()->notify(
+        copied ? QStringLiteral("拉起安装器失败，已复制到系统「下载」目录，请用文件管理器安装")
+               : QStringLiteral("拉起安装器失败，且复制到下载目录失败，请检查存储权限后手动安装：%1")
+                     .arg(m_downloadedPath),
+        QStringLiteral("warning"));
 #else
     // Qt5 Android 构建未链接 JNI 助手，退化为提示路径由用户手动安装
     AppController::instance()->notify(QStringLiteral("请手动安装已下载的更新包：%1").arg(m_downloadedPath),
@@ -688,6 +723,31 @@ void UpdateChecker::openDownloadFolder()
 #else
     // 桌面/Qt5 Android：直接打开所在文件夹
     QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(m_downloadedPath).absolutePath()));
+#endif
+}
+
+QString UpdateChecker::copyToDownloads()
+{
+    if (m_downloadedPath.isEmpty() || !QFile::exists(m_downloadedPath)) {
+        AppController::instance()->notify(QStringLiteral("更新包不存在，请重新下载"),
+                                          QStringLiteral("warning"));
+        return QString();
+    }
+#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const QString name = QFileInfo(m_downloadedPath).fileName();
+    const QString shown = androidCopyToDownloads(m_downloadedPath, name);
+    if (!shown.isEmpty()) {
+        const QString msg = QStringLiteral("已复制到系统「下载」目录：%1，请到文件管理器点此文件安装").arg(shown);
+        AppController::instance()->notify(msg, QStringLiteral("success"));
+        return shown;
+    }
+    AppController::instance()->notify(QStringLiteral("复制到下载目录失败，请检查存储权限或空间"),
+                                      QStringLiteral("warning"));
+    return QString();
+#else
+    // 桌面：更新包本就在 Download/FuruiMusicUpdate，直接打开所在文件夹即可
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(m_downloadedPath).absolutePath()));
+    return QFileInfo(m_downloadedPath).fileName();
 #endif
 }
 

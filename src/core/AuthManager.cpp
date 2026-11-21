@@ -1070,8 +1070,42 @@ void AuthManager::saveSession(const QString &sourceId, const QString &cookie,
     a.logged = !cookie.trimmed().isEmpty();
     a.status = a.logged ? (nickname.isEmpty() ? QStringLiteral("已登录") : nickname)
                         : QStringLiteral("登录态无效");
+    Logger::write(QStringLiteral("I"),
+                  QStringLiteral("[保存会话] source=%1 logged=%2 cookieLen=%3 uid=%4 nick=%5")
+                      .arg(sourceId, a.logged ? QStringLiteral("1") : QStringLiteral("0"),
+                           QString::number(cookie.size()), uid, nickname));
     Library::instance()->saveAccount(a);
+    bool verifyLogged = false;
+    QString verifyCookie;
+    for (const Account &va : Library::instance()->accounts())
+        if (va.source == sourceId) { verifyLogged = va.logged; verifyCookie = va.cookie; break; }
+    Logger::write(QStringLiteral("I"),
+                  QStringLiteral("[保存会话] 写库后核对：logged=%1 cookieLen=%2")
+                      .arg(verifyLogged ? QStringLiteral("1") : QStringLiteral("0"),
+                           QString::number(verifyCookie.size())));
+    // 数据库打不开（如真机覆盖安装后 SELinux 标签错乱、磁盘满）时 saveAccount 直接
+    // 静默返回，内存里看着登录成功、写库核对却全 0。此时绝不能再 emit「登录成功」——
+    // 否则用户以为 persists 了，重启后发现登录态丢失、歌单同步也是空的，无从排查。
+    // 用写库后的真实状态为准：登录时核对 cookie 内容完全一致（只比长度会在旧登录态
+    // 恰好同长度时误判成功）；退出登录（cookie 空）时核对库里已确实置为未登录。
+    const bool persisted = a.logged
+                         ? (verifyLogged && verifyCookie == cookie)
+                         : !verifyLogged;
     refresh();
+    if (!persisted) {
+        const QString failed = message + QStringLiteral("（登录态写入本地失败，重启后可能丢失）");
+        Logger::write(QStringLiteral("W"),
+                      QStringLiteral("[保存会话] 写库失败，登录态未持久化：source=%1 logged=%2 cookieLen=%3")
+                          .arg(sourceId, a.logged ? QStringLiteral("1") : QStringLiteral("0"),
+                               QString::number(cookie.size())));
+        // 登录失败：即便库里残留旧登录态也按未登录处理，避免 UI 显示错账号；
+        // 退出失败：如实显示库里的登录态（仍为 true），与「退出未生效」提示一致。
+        emit loginStateChanged(sourceId, a.logged ? false : verifyLogged, failed);
+        emit toast(a.logged
+                   ? QStringLiteral("登录已通过，但无法保存到本地，请检查应用存储权限或重新安装")
+                   : QStringLiteral("退出未生效，本地登录态仍在，请检查应用存储权限"));
+        return;
+    }
     emit loginStateChanged(sourceId, a.logged, message);
     emit toast(message);
 }

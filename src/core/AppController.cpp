@@ -1063,11 +1063,15 @@ void AppController::loadQishuiRecommend(const QString &mode, const QString &cate
         const QVector<Song> hist = Library::instance()->history(8);
         const QVector<Song> fav = Library::instance()->favorites();
         const QVector<Song> queue = PlayerController::instance()->queue();
+        // max 表示「本次调用最多新增几首」，不是累计上限——否则第一路填满后
+        // 后续历史/队列种子会被整段跳过（收藏 ≥3 首时熟悉模式只用收藏做种子）。
         auto addSeeds = [&localSeeds, &seedUids](const QVector<Song> &src, int max) {
-            for (int i = 0; i < src.size() && localSeeds.size() < max; ++i) {
+            int added = 0;
+            for (int i = 0; i < src.size() && added < max; ++i) {
                 if (seedUids.contains(src.at(i).uid)) continue;
                 seedUids.insert(src.at(i).uid);
                 localSeeds.append(src.at(i));
+                ++added;
             }
         };
         if (m == QLatin1String("familiar")) {

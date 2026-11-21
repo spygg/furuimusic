@@ -358,19 +358,23 @@ ApplicationWindow {
     property double browserBackAt: 0
     function handleBrowserBack() {
         const now = Date.now()
+        // 统一去抖：无论浏览器是否打开，同一次按键的两条通道间隔仅几 ms，
+        // 这里只放第一条通过。150ms 足够覆盖双通道，又不误伤用户的下一次独立按键。
+        // 关键：以前这个时间戳只在浏览器打开时更新，浏览器关闭后走 handleBack 的两条
+        // 通道都不更新它 → 一次按键退两级（播放页→首页→直接退后台）。
+        if (now - win.browserBackAt < 150) return true
+        win.browserBackAt = now
         if (browser.opened) {
-            // 600ms 内的第二条通道：本次按键已经处理过，直接吞掉
-            if (now - win.browserBackAt < 600) return true
-            win.browserBackAt = now
+            // 浏览器场景始终吞掉本次按键：退网页历史，退无可退才关浏览器，
+            // 绝不让底层页面同时回退。
             const item = browserLoader.item
             if (!(item && item.handleBack && item.handleBack()))
                 browser.close()
             return true
         }
-        // browser 已关闭：这里只拦「同一次按键的第二条通道」（两条通道间隔仅几 ms）。
-        // 窗口必须远小于 600ms，否则关闭浏览器后的下一次独立返回键（用户可能几百 ms
-        // 内再按）也被误吞，表现为「按返回没反应」。150ms 足够覆盖双通道又不误伤新按键。
-        return now - win.browserBackAt < 150
+        // 浏览器未打开：放行给调用方逐级 handleBack；时间戳已更新，
+        // 同一次按键的第二条通道会被上面的去抖吞掉。
+        return false
     }
 
     // 无边框窗口没有系统边框：浅色主题下窗口边缘与桌面/白底完全融合，拖动和

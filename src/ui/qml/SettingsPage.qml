@@ -926,17 +926,35 @@ Item {
                         Layout.preferredWidth: Math.max(96, theme.touchMin)
                         Layout.preferredHeight: theme.touchMin
                         text: "浏览下载结果"
-                        visible: updater.downloadedPath.length > 0
+                        // 移动端车机文件管理器进不去应用私有目录，浏览按钮无用；
+                        // 且与「复制到下载目录」并存会挤爆窄屏按钮行（主按钮被裁切）。
+                        visible: !platform.isMobile && updater.downloadedPath.length > 0
                         enabled: !updater.downloading
                         background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
                         contentItem: Text { text: browseBtn.text; color: cPrimary; font.pixelSize: theme.fontXs; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                         onClicked: updater.openDownloadFolder()
                     }
+                    Button {
+                        id: copyDownloadBtn
+                        Layout.preferredWidth: Math.max(96, theme.touchMin)
+                        Layout.preferredHeight: theme.touchMin
+                        text: "复制到下载目录"
+                        // copyToDownloads() 的 JNI 实现只在 Qt6 Android 有效；
+                        // Qt5 Android 上该按钮点了只会走桌面 openUrl 分支，故隐藏。
+                        visible: platform.isMobile && platform.qtMajor >= 6 && updater.downloadedPath.length > 0
+                        enabled: !updater.downloading
+                        background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
+                        contentItem: Text { text: copyDownloadBtn.text; color: cPrimary; font.pixelSize: theme.fontXs; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                        // 车机禁止应用内安装：把 APK 复制到公共 Download，供系统文件管理器手动安装
+                        onClicked: updater.copyToDownloads()
+                    }
                 }
                 Text {
                     Layout.fillWidth: true
                     text: "更新包将直接在应用内下载，完成后自动拉起安装（桌面端打开所在文件夹）。"
-                          + "若车机限制了自动安装，点「浏览下载结果」在系统文件管理器中找到更新包手动安装。"
+                          + (platform.isMobile && platform.qtMajor >= 6
+                             ? "若车机限制了自动安装，点「复制到下载目录」在系统文件管理器中找到更新包手动安装。"
+                             : "若车机限制了自动安装，请用系统文件管理器到应用下载目录手动安装。")
                     color: cSub
                     font.pixelSize: theme.fontXs
                     wrapMode: Text.Wrap
