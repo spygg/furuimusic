@@ -33,6 +33,8 @@ Item {
     }
     // MV 页从哪页进的，返回键/关闭就回哪页
     property int mvReturnPage: 1
+    // 由 Main.qml 注入：onMvOpened 时回传 MV 载荷与来路页，窗口层常驻保存
+    property var saveMvSession: function(mv, ret) { }
 
     // Android 返回键：内置浏览器 → 队列面板 → MV 页 → 播放页 → 音乐库 → 首页，逐级回退
     // 由 Main.qml 注入：先走网页历史后退，退无可退才关浏览器

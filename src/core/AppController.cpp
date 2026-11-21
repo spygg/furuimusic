@@ -55,11 +55,28 @@ static QString cookieForSource(const QString &sourceId)
 // 避免一次网络失败让用户以为本地操作也没生效。
 static void syncFavoriteToCloud(const Song &s, bool favorite)
 {
-    if (!UserApi::canSetFavorite(s.source)) return;
+    Logger::write(QStringLiteral("I"),
+                  QStringLiteral("[收藏同步] 入口：source=%1 sourceId=%2 favorite=%3")
+                      .arg(s.source, s.sourceId, favorite ? QStringLiteral("true") : QStringLiteral("false")));
+    if (!UserApi::canSetFavorite(s.source)) {
+        Logger::write(QStringLiteral("I"), QStringLiteral("[收藏同步] 该音源不支持写回，跳过"));
+        return;
+    }
     const QString cookie = cookieForSource(s.source);
-    if (cookie.isEmpty() || s.sourceId.isEmpty()) return;
+    if (cookie.isEmpty() || s.sourceId.isEmpty()) {
+        Logger::write(QStringLiteral("W"),
+                      QStringLiteral("[收藏同步] 缺少 cookie(%1) 或 sourceId(%2)，跳过")
+                          .arg(cookie.isEmpty() ? QStringLiteral("空") : QStringLiteral("有"),
+                               s.sourceId.isEmpty() ? QStringLiteral("空") : s.sourceId));
+        return;
+    }
+    Logger::write(QStringLiteral("I"),
+                  QStringLiteral("[收藏同步] 发起 weapi 请求 sourceId=%1").arg(s.sourceId));
     UserApi::instance()->setFavorite(s.source, cookie, s.sourceId, favorite,
         [favorite](bool ok, const QString &err) {
+            Logger::write(ok ? QStringLiteral("I") : QStringLiteral("W"),
+                          QStringLiteral("[收藏同步] 结果=%1 err=%2")
+                              .arg(ok ? QStringLiteral("成功") : QStringLiteral("失败"), err));
             if (!ok)
                 AppController::instance()->notify(
                     QStringLiteral("本地已%1，但云端同步失败：%2")

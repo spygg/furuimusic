@@ -14,6 +14,7 @@
 #include "KugouLoginCrypto.h"
 #include "KugouProtocol.h"
 #include "Library.h"
+#include "Logger.h"
 #include "MusicSource.h"
 #include "NeteaseCrypto.h"
 #include "QqProtocol.h"
@@ -919,6 +920,10 @@ void UserApi::setFavorite(const QString &sourceId, const QString &cookie, const 
     headers.insert(QStringLiteral("Cookie"), fullCookie);
 
     const QByteArray body = Netease::weapiForm(payload);
+    Logger::write(QStringLiteral("I"),
+                  QStringLiteral("[收藏同步] POST /weapi/song/like id=%1 like=%2 csrf=%3 bodyLen=%4")
+                      .arg(songId, favorite ? QStringLiteral("true") : QStringLiteral("false"),
+                           csrf, QString::number(body.size())));
     HttpClient::instance()->request(
         QStringLiteral("POST"),
         QUrl(QStringLiteral("https://music.163.com/weapi/song/like")),
@@ -928,6 +933,9 @@ void UserApi::setFavorite(const QString &sourceId, const QString &cookie, const 
             QString err;
             if (!r.ok) {
                 err = r.error.isEmpty() ? QStringLiteral("网络请求失败") : r.error;
+                Logger::write(QStringLiteral("W"),
+                              QStringLiteral("[收藏同步] HTTP 失败 status=%1 error=%2")
+                                  .arg(r.status).arg(err));
             } else {
                 const QJsonObject o = r.json.object();
                 const int code = o.value(QStringLiteral("code")).toInt(-1);
@@ -936,6 +944,10 @@ void UserApi::setFavorite(const QString &sourceId, const QString &cookie, const 
                     const QString msg = o.value(QStringLiteral("message")).toString();
                     err = msg.isEmpty() ? QStringLiteral("接口返回 %1").arg(code) : msg;
                 }
+                Logger::write(ok ? QStringLiteral("I") : QStringLiteral("W"),
+                              QStringLiteral("[收藏同步] 响应 status=%1 code=%2 body=%3")
+                                  .arg(r.status).arg(code)
+                                  .arg(QString::fromUtf8(r.body.left(300))));
             }
             if (cb) cb(ok, err);
         });

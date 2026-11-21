@@ -29,6 +29,8 @@ Item {
     property int lastContentPage: 0
     // MV 页同理：从哪页进的，返回键/关闭就回哪页
     property int mvReturnPage: 1
+    // 由 Main.qml 注入：onMvOpened 时回传 MV 载荷与来路页，窗口层常驻保存
+    property var saveMvSession: function(mv, ret) { }
     onPageIndexChanged: {
         // 切页收起软键盘并放掉输入焦点：焦点会活过页面切换，不处理的话
         // 键盘会一直盖在下一个页面上（触屏笔记本/二合一设备上很明显）
