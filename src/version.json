@@ -1,7 +1,11 @@
 {
-  "version": "1.4.37",
-  "desc": "修复\n- 全面屏顶部安全区：竖屏与横屏顶部按「系统状态栏高度减去 Qt 已让出高度」补差额，\n  修复状态栏遮挡搜索框导致点击无效的问题；横屏左右边距保持不变，不重复扣减留白",
+  "version": "1.4.38",
+  "desc": "新增\n- 更新包可一键「复制到下载目录」：车机/受限系统禁止应用内安装时，无需进应用私有目录，\n  直接用系统文件管理器安装；同名旧包自动清理，不再残留 (1)(2) 副本\n\n修复\n- 网易云扫码登录成功却丢登录态：写库后回读核对 Cookie 内容，数据库打不开（SELinux 标签错乱、\n  磁盘满）时不再谎报成功，改为明确提示并给出排查方向\n- 「我喜欢的音乐」等 583 首大歌单只同步 500 首：全库同步单歌单默认上限 500→1000（可配到 5000），\n  批量补全 200→400\n- Android 返回键一次退两级直接退出：浏览器开关两条按键通道统一去抖，关闭后不再误吞下一次按键\n- 汽水「熟悉/新鲜」模式在收藏 ≥3 首时丢掉历史/队列种子：修正本次新增数统计\n- 浏览器登录成功后偶发不自动导入 Cookie：登录轮询改状态驱动，不再被 running=false 打断\n- Android 通知/存储权限按系统版本申请（≤28 存储、≥33 通知），避免低版本无响应\n\n优化\n- 更新包写入先落 .part 临时项再替换，失败统一回滚，不再残留 IS_PENDING 半成品",
   "history": [
+    {
+      "version": "1.4.37",
+      "desc": "修复\n- 全面屏顶部安全区：竖屏与横屏顶部按「系统状态栏高度减去 Qt 已让出高度」补差额，\n  修复状态栏遮挡搜索框导致点击无效的问题；横屏左右边距保持不变，不重复扣减留白"
+    },
     {
       "version": "1.4.36",
       "desc": "新增\n- 开放 API 可选访问令牌：设置后可要求局域网设备带令牌访问，本机网页控制台与本地工具不受影响\n\n优化\n- 车机特供版在线更新修复：更新资产切换宏改挂到 FuruiCore，确保伪装包下载特供 APK；\n  FileProvider authority 改为按运行时包名推导，修复伪装包更新安装失败\n\n修复\n- 断流自愈门槛量纲错位：播放进度与看门狗停滞时长统一，短进度卡死不再跳过自愈直接换源\n- 换源成功后旧流迟到错误不再清掉新源计分标记、不再二次触发换源\n- 汽水推荐与搜索/榜单互相作废，修复结果串台与搜索状态卡死\n- 评论加载加代次守卫：切歌不再串评论，分页失败不再跳过页码\n- MV 列表切地区不被 loading 守卫吞掉；MV 打开/关闭加代次，连点不再乱序\n- 平板/车机旋转或分屏切换外壳后 MV 覆盖层不再黑屏、返回页不再错乱\n- 桌面隐藏播放页后歌词定时器停止刷新；汽水推荐加载不再误报「搜索到 N 首歌曲」\n- 历史记录写入失败正确回滚，不再谎报成功；汽水歌单搜索显式匿名请求\n- MediaSession 跨线程状态加 volatile，避免进度跳变与切歌去抖异常"
@@ -164,10 +168,10 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.37/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.37/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.37/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.37/FuruiMusic-android-arm64-v8a.apk",
-    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.37/FuruiMusic-carcompat-netease-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.38/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.38/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.38/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.38/FuruiMusic-android-arm64-v8a.apk",
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.38/FuruiMusic-carcompat-netease-arm64-v8a.apk"
   }
 }
