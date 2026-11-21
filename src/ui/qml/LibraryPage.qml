@@ -103,6 +103,11 @@ Item {
     property bool searching: false
     readonly property bool searchMode: searchKeyword.length > 0
     readonly property int searchViewIndex: root.tabTitles.length
+    // 输入法修复（同浏览器地址栏 addressEditing）：用户一开始手动输入就置位，
+    // 任何后台自动同步都不能再写 keyword.text，否则退格/删除时后台把旧词写回，
+    // 看起来像「删不掉、还剩字」。提交搜索后复位，才允许外部清空。
+    property bool keywordEditing: false
+    onVisibleChanged: { if (!visible) root.keywordEditing = false }
     // 搜索态变化时通知外壳：搜索时隐藏迷你播放条，给结果区和软键盘腾出空间，
     // 避免播放栏压住搜索内容（矮屏/键盘弹出时尤其明显）。输入框持有焦点（键盘开着）
     // 同样算搜索态，与 keyword.onActiveFocusChanged 双向对齐。
@@ -118,14 +123,19 @@ Item {
     // 曲库页退到后台/被切走时也要撤销搜索态，否则播放栏一直不回来
     Component.onDestruction: app.searchActive = false
 
+    // 搜索的唯一入口：放大镜、软键盘回车、类型切换重搜都走这里。
     function runSearch()
     {
+        // 移动端先收起输入法，强制把组合输入（拼音候选词）提交进 text 再读取，
+        // 否则取到的是未提交的半成品（同浏览器地址栏「前往」按钮的处理）。
+        if (platform.isMobile && keyword.activeFocus) keyword.focus = false
         // 以输入框内容为准：root.searchKeyword 只在真正发起搜索时才写入，
         // 早先读 root.searchKeyword 会让「敲完字直接点放大镜」变成空搜索
         const kw = keyword.text.trim()
         if (kw.length === 0)
             return
         root.searchKeyword = kw
+        root.keywordEditing = false       // 已提交，之后外部同步才允许写回
         app.search(kw, root.selectedSourceId())
     }
 
@@ -200,17 +210,8 @@ Item {
         detailTimeout.restart()
         app.loadPlaylist(uid)
         root.openPlaylistTitle = title
-        // 换歌单时清掉上一单的过滤态，避免「搜索框有字但列表已经是新歌单」的错觉
-        app.playlistDetailSongs.filter = ""
-        detailSearchField.text = ""
         // 本地缓存路径上结果已经就绪：跳到正在播放的那首（异步路径由 onSearchFinished 接力）
         Qt.callLater(root.locatePlayingInDetail)
-    }
-
-    // 歌单行/卡片上的 🔍：进入歌单并聚焦「搜索本歌单」，键盘直接就位
-    function searchInPlaylist(title, uid) {
-        openPlaylist(title, uid)
-        detailSearchField.forceActiveFocus()
     }
 
     // 定位正在播放的歌：滚动到可视区并高亮（SongRow 按 uid 匹配 app.currentSongUid 变色）。
@@ -493,21 +494,32 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.preferredWidth: 120
-                    text: root.searchKeyword
                     placeholderText: "搜索歌曲、歌手或歌单"
                     color: root.cText
                     placeholderTextColor: cSub
                     font.pixelSize: 13
                     background: null
                     selectByMouse: true
-                    // 输入框始终以 root 为准：清空搜索时外部把 searchKeyword 置空，输入框跟着清
+                    // 输入法修复（同浏览器地址栏）：关预测/联想和自动大写，否则候选词
+                    // （拼音 co/com、英文自动大写）会被塞进输入框，退格时像「删不掉」
+                    inputMethodHints: Qt.ImhNoPredictiveText
+                                      | Qt.ImhNoAutoUppercase
+                                      | Qt.ImhSensitiveData
+                    // 不用 text: root.searchKeyword 绑定：用户一输入就打断绑定，
+                    // 后台重求值会把旧词写回、打断拼音组合输入。改为下面的显式同步。
+                    Component.onCompleted: text = root.searchKeyword
+                    // 用户手动编辑（含退格/删除）一旦开始，禁止后台写回
+                    onTextEdited: root.keywordEditing = true
                     onTextChanged: {
                         if (text.length === 0 && root.searchKeyword.length > 0)
                             root.clearSearch()
                     }
                     // 一聚焦就进入搜索态：此时软键盘刚弹起，先把迷你播放条隐藏，
                     // 避免它和键盘挤压搜索结果（原先要敲出内容才隐藏，聚焦空档播放栏仍占位）
-                    onActiveFocusChanged: app.searchActive = activeFocus || root.searchMode
+                    onActiveFocusChanged: {
+                        if (activeFocus) root.keywordEditing = true
+                        app.searchActive = activeFocus || root.searchMode
+                    }
                     onAccepted: root.runSearch()
                 }
 
@@ -876,28 +888,6 @@ Item {
                                         onClicked: app.addPlaylistToQueue(model.uid)
                                     }
                                 }
-
-                                // 歌单内搜索：进入歌单并聚焦过滤框，只搜本歌单的歌
-                                Rectangle {
-                                    property bool hovered: searchBtnArea.containsMouse
-                                    Layout.preferredWidth: theme.touchMin * 0.72
-                                    Layout.preferredHeight: theme.touchMin * 0.72
-                                    radius: height / 2
-                                    color: hovered ? Qt.rgba(accent.r, accent.g, accent.b, 0.2)
-                                                   : Qt.rgba(accent.r, accent.g, accent.b, 0.12)
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: "🔍"
-                                        font.pixelSize: 15
-                                        color: accent
-                                    }
-                                    MouseArea {
-                                        id: searchBtnArea
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        onClicked: root.searchInPlaylist(model.title, model.uid)
-                                    }
-                                }
                             }
                         }
                     }
@@ -923,9 +913,7 @@ Item {
                             cover: model.cover
                             badge: model.sourceName
                             accent: app.sourceColor(model.source)
-                            searchable: true
                             onClicked: root.openPlaylist(model.title, model.uid)
-                            onSearchRequested: root.searchInPlaylist(model.title, model.uid)
                         }
                     }
 
@@ -981,84 +969,20 @@ Item {
                             }
                         }
 
-                        // 歌单内搜索：只过滤当前歌单的歌（歌名/歌手包含，大小写无关），
-                        // 不碰全局搜索结果。点歌单列表项右侧 🔍 会自动聚焦到这里。
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: Math.max(40, theme.touchMin * 0.8)
-                            radius: height / 2
-                            color: detailSearchField.activeFocus
-                                   ? (root.isDark ? Qt.rgba(1, 1, 1, 0.10) : Qt.rgba(0, 0, 0, 0.03))
-                                   : root.cChip
-                            border.width: 1
-                            border.color: detailSearchField.activeFocus
-                                          ? Qt.rgba(cPrimary.r, cPrimary.g, cPrimary.b, 0.6) : "transparent"
-                            Behavior on color { ColorAnimation { duration: 140 } }
-                            Behavior on border.color { ColorAnimation { duration: 140 } }
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: 14
-                                anchors.rightMargin: 6
-                                spacing: 8
-
-                                GlyphIcon {
-                                    name: "search"
-                                    size: 14
-                                    color: detailSearchField.activeFocus ? cPrimary : cSub
-                                }
-
-                                TextField {
-                                    id: detailSearchField
-                                    Layout.fillWidth: true
-                                    Layout.fillHeight: true
-                                    placeholderText: "搜索本歌单（歌名 / 歌手 / 拼音 / 首字母）"
-                                    color: root.cText
-                                    placeholderTextColor: cSub
-                                    font.pixelSize: 13
-                                    background: null
-                                    selectByMouse: true
-                                    // 直接驱动过滤代理；清空即恢复完整歌单
-                                    onTextChanged: app.playlistDetailSongs.filter = text
-                                }
-
-                                Rectangle {
-                                    Layout.preferredWidth: 26
-                                    Layout.preferredHeight: 26
-                                    Layout.alignment: Qt.AlignVCenter
-                                    radius: 13
-                                    visible: detailSearchField.text.length > 0
-                                    color: detailSearchClear.containsMouse ? root.cChipHover : "transparent"
-                                    GlyphIcon {
-                                        anchors.centerIn: parent
-                                        name: "close"
-                                        size: 12
-                                        color: cSub
-                                    }
-                                    MouseArea {
-                                        id: detailSearchClear
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        onClicked: detailSearchField.text = ""
-                                    }
-                                }
-                            }
-                        }
-
+                        // 歌单详情歌曲列表：直接用 app.results（歌单内搜索框已移除，
+                        // 找歌统一走顶部全局搜索），不再经过过滤代理。
                         ListView {
                             id: detailList
-                                cacheBuffer: visible ? height * 2 : 100   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
+                            cacheBuffer: visible ? height * 2 : 100   // 预渲染两屏：默认只多备 100px，长列表滚动时委托反复重建
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
                             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                             spacing: 8
-                            // 过滤代理：detailSearchField 为空时与 app.results 内容一致
-                            model: app.playlistDetailSongs
+                            model: app.results
                             delegate: SongRow {
                                 width: detailList.width
-                                // index 是过滤后的代理行号；取歌一律用源模型行号 row
-                                rowNumber: model.row
+                                rowNumber: index
                                 title: model.title
                                 artist: model.artist
                                 album: model.album
@@ -1072,11 +996,11 @@ Item {
                                 inQueue: model.inQueue
                                 playing: model.uid === app.currentSongUid
                                 showMv: model.source === "netease"
-                                onPlayRequested: app.playResult(model.row)
-                                onFavoriteRequested: app.toggleFavoriteResult(model.row)
-                                onAddRequested: app.addResultToQueue(model.row)
-                                onMvRequested: app.playMv(model.row)
-                                onDownloadRequested: app.downloadResult(model.row)
+                                onPlayRequested: app.playResult(index)
+                                onFavoriteRequested: app.toggleFavoriteResult(index)
+                                onAddRequested: app.addResultToQueue(index)
+                                onMvRequested: app.playMv(index)
+                                onDownloadRequested: app.downloadResult(index)
                                 showDownload: true
                             }
                         }
@@ -1086,12 +1010,8 @@ Item {
                             Layout.preferredHeight: 120
                             visible: detailList.count === 0 && !root.detailLoading
                             iconName: "music"
-                            title: detailSearchField.text.length > 0
-                                   ? "歌单内没有匹配的歌曲"
-                                   : "这个歌单是空的"
-                            hint: detailSearchField.text.length > 0
-                                  ? "换个关键词试试，清空搜索框恢复完整歌单"
-                                  : "可能需要在对应平台登录后刷新歌单"
+                            title: "这个歌单是空的"
+                            hint: "可能需要在对应平台登录后刷新歌单"
                         }
                     }
                 }
@@ -1896,10 +1816,10 @@ Item {
                             Row {
                                 spacing: 8
                                 Repeater {
-                                    model: ["歌曲", "歌单"]
+                                    model: ["歌单", "歌曲"]
                                     delegate: Rectangle {
-                                        property bool active: index === 0 ? searchView.songMode
-                                                                          : !searchView.songMode
+                                        property bool active: index === 0 ? !searchView.songMode
+                                                                          : searchView.songMode
                                         width: typeText.implicitWidth + 28
                                         height: theme.touchMin
                                         radius: height / 2
@@ -1919,7 +1839,13 @@ Item {
                                             anchors.fill: parent
                                             hoverEnabled: true
                                             cursorShape: Qt.PointingHandCursor
-                                            onClicked: app.setSearchType(index === 0 ? "song" : "songlist")
+                                            onClicked: {
+                                                const t = index === 0 ? "songlist" : "song"
+                                                if (t === app.searchType) return
+                                                app.setSearchType(t)
+                                                // 切换类型后用当前关键词重搜：否则列表停在上一类型的旧结果
+                                                if (keyword.text.trim().length > 0) root.runSearch()
+                                            }
                                         }
                                     }
                                 }
@@ -2031,7 +1957,7 @@ Item {
                                 clip: true
                                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                                 spacing: 8
-                                model: app.playlists
+                                model: app.searchPlaylists
                                 visible: !searchView.songMode && !root.gridView && count > 0
                                 delegate: Rectangle {
                                     width: searchPlaylistList.width
@@ -2103,7 +2029,7 @@ Item {
                                 anchors.fill: parent
                                 clip: true
                                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                                model: app.playlists
+                                model: app.searchPlaylists
                                 cellWidth: root.gridCellWidth
                                 cellHeight: root.gridCellHeight
                                 visible: !searchView.songMode && root.gridView && count > 0

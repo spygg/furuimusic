@@ -413,7 +413,8 @@ struct AppController::Impl {
     QString substituteBadge;
     QString currentSourceLabel;
     QString quality;
-    QString searchType = QStringLiteral("song");
+    // 默认歌单优先：与构造函数里 Settings 默认值保持一致
+    QString searchType = QStringLiteral("songlist");
     bool vipSubstitute = true;
     QString lastResolvedUrl;
     QVariantMap lastPlayableHeaders;
@@ -504,6 +505,7 @@ AppController::AppController(QObject *parent)
     m_results   = new SongListModel(this);
     m_queue     = new SongListModel(this);
     m_playlists = new PlaylistListModel(this);
+    m_searchPlaylists = new PlaylistListModel(this);
     m_discovery = new PlaylistListModel(this);
     m_accounts  = new AccountListModel(this);
     // 歌单详情的过滤代理：源永远是 m_results（歌单/榜单/收藏/搜索共用同一结果模型）
@@ -511,7 +513,9 @@ AppController::AppController(QObject *parent)
     m_detailFilter->setSourceModel(m_results);
 
     d->quality = Settings::string(QStringLiteral("quality"), QStringLiteral("standard"));
-    d->searchType = Settings::string(QStringLiteral("searchType"), QStringLiteral("song"));
+    // 全局搜索默认「歌单」优先：搜索结果先列匹配歌单，点进去即可浏览该歌单全部曲目，
+    // 替代原来每个歌单内的独立搜索框（歌单内搜索框已移除）。
+    d->searchType = Settings::string(QStringLiteral("searchType"), QStringLiteral("songlist"));
     d->vipSubstitute = Settings::boolean(QStringLiteral("vipSubstitute"), true);
 
     OpenApiServer *api = OpenApiServer::instance();
@@ -906,9 +910,10 @@ void AppController::search(const QString &keyword, const QString &sourceId)
         SourceManager::instance()->searchPlaylists(keyword.trimmed(), sourceId, limit,
             [this, keyword, req, gen](const QVector<Playlist> &list) {
                 if (req != d->searchRequestId || gen != d->playlistGen) return;
-                // 只更新内存模型：搜索出来的歌单不属于本地音乐库，不能写进 playlists 表，
-                // 否则会污染「音乐库 → 歌单」，同名 uid 还会覆盖真实用户歌单的类型。
-                m_playlists->setPlaylists(list);
+                // 只更新搜索专用模型：搜索出来的歌单不属于本地音乐库，不能写进 playlists 表，
+                // 否则会污染「音乐库 → 歌单」（同名 uid 覆盖真实用户歌单），且搜索后
+                // 用户自己的歌单列表会整段消失。退出搜索视图后本地歌单仍是原样。
+                m_searchPlaylists->setPlaylists(list);
                 d->searching = false;
                 d->searchKind.clear();
                 setStatus(QStringLiteral("歌单搜索「%1」完成，共 %2 个歌单").arg(keyword).arg(list.size()));

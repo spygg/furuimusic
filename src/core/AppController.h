@@ -119,7 +119,10 @@ class AppController : public QObject {
     Q_PROPERTY(SongListModel *results READ results CONSTANT)
     Q_PROPERTY(SongListModel *queue READ queue CONSTANT)
     Q_PROPERTY(PlaylistListModel *playlists READ playlists CONSTANT)
-    // 歌单详情视图（m_results 的过滤代理）：歌单内搜索过滤歌名/歌手，空 filter = 全部
+    // 全局搜索的「歌单」结果：与 users 自己的 playlists 分开，搜索不覆盖本地歌单
+    Q_PROPERTY(PlaylistListModel *searchPlaylists READ searchPlaylists CONSTANT)
+    // 歌单内搜索的过滤代理：包住 m_results，只按歌名/歌手「包含」过滤（大小写无关）。
+    // QML 已移除歌单内搜索框，此代理保留仅为兼容外部脚本绑定，正常情况下 filter 恒空。
     Q_PROPERTY(SongFilterModel *playlistDetailSongs READ playlistDetailSongs CONSTANT)
     // 公开榜单/推荐歌单：不依赖任何账号登录，未登录时音乐库也有内容
     Q_PROPERTY(PlaylistListModel *discovery READ discovery CONSTANT)
@@ -214,6 +217,7 @@ public:
     SongListModel *results() const { return m_results; }
     SongListModel *queue() const { return m_queue; }
     PlaylistListModel *playlists() const { return m_playlists; }
+    PlaylistListModel *searchPlaylists() const { return m_searchPlaylists; }
     SongFilterModel *playlistDetailSongs() const { return m_detailFilter; }
     PlaylistListModel *discovery() const { return m_discovery; }
     bool discoveryLoading() const;
@@ -480,6 +484,7 @@ private:
     SongFilterModel *m_detailFilter;
     SongListModel *m_queue;
     PlaylistListModel *m_playlists;
+    PlaylistListModel *m_searchPlaylists;
     PlaylistListModel *m_discovery;
     AccountListModel *m_accounts;
     // MV 榜单分页状态；m_mvIndex < 0 表示从歌曲行/播放页单点进入，无上下曲
