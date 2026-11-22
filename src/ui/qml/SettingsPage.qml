@@ -317,15 +317,6 @@ Item {
                         width: 18; height: 18; radius: 9; color: cPrimary; border.color: cCard; border.width: 2
                     }
                 }
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-                    Text { Layout.fillWidth: true; text: "歌词进度线（拖动定位）"; color: cText; font.pixelSize: 13 }
-                    Switch {
-                        checked: theme.showLyricProgressLine
-                        onToggled: theme.showLyricProgressLine = checked
-                    }
-                }
             }
 
             Text { Layout.fillWidth: true; text: "音质"; color: cSub; font.pixelSize: 12 }
@@ -534,7 +525,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: "在线音源自动从 pdone/lx-music-source 仓库页面解析全部脚本（LX 脚本协议），首次启动全部导入、当日可用的排在前面；也可自行导入其它脚本地址。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方。列表顺序即实际取链优先级（成功升权、失败降权）。"
+                    text: "在线音源自动从 pdone/lx-music-source 仓库页面动态解析脚本地址（LX 脚本协议），首次启动导入上游未下架的脚本、当日可用的排在前面；也可自行导入其它脚本地址。脚本在内嵌 QuickJS 中运行，无 Node/文件/进程能力，仅开放受限网络请求；上游已下架的恶意脚本（如 LX 独家音源）会被拒绝并自动移除。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方。列表顺序即实际取链优先级（成功升权、失败降权）。"
                 color: cSub
                 font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap

@@ -1106,7 +1106,6 @@ Item {
                         running: lyricView.timed && app.playing
                                  && root.visible && lyricView.visible
                         onTriggered: {
-                            if (lyricProgress.dragging) return
                             // anchorStamp 尚未由 position 回报初始化时（初始 0），
                             // ahead 会是 Date.now() 的巨大值被截到 tickMs*2，导致首帧闪跳。
                             if (lyricView.anchorStamp <= 0) return
@@ -1440,67 +1439,6 @@ Item {
                     }
                 }
 
-                // 歌词进度线（参考洛雪 PlayLine）：设置页可开关，拖动即可定位到任意时间。
-                // 拖动期间接管 shownPos，避免 60ms 插值定时器把滑块拽回播放器上报的位置。
-                Item {
-                    id: lyricProgress
-                    z: 6
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 4
-                    height: 20
-                    visible: theme.showLyricProgressLine && app.duration > 0
-                    property bool dragging: false
-                    property real ratio: Math.min(1, Math.max(0, lyricView.shownPos / Math.max(1, app.duration)))
-                    readonly property real trackX: 12
-                    readonly property real trackW: Math.max(1, width - 24)
-                    Rectangle {
-                        x: lyricProgress.trackX
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: lyricProgress.trackW
-                        height: 3
-                        radius: 1.5
-                        color: root.inkFaint
-                        Rectangle {
-                            width: parent.width * lyricProgress.ratio
-                            height: parent.height
-                            radius: 1.5
-                            color: theme.lyricHighlight
-                        }
-                    }
-                    Rectangle {
-                        x: lyricProgress.trackX + lyricProgress.trackW * lyricProgress.ratio - 6
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 12
-                        height: 12
-                        radius: 6
-                        color: theme.lyricHighlight
-                        border.color: root.isDark ? "#FFFFFF" : "#111111"
-                        border.width: 1
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onPressed: {
-                            lyricProgress.dragging = true
-                            lyricView.userScrolling = false
-                        }
-                        onMouseXChanged: {
-                            if (!lyricProgress.dragging) return
-                            const r = Math.min(1, Math.max(0,
-                                    (mouseX - lyricProgress.trackX) / lyricProgress.trackW))
-                            lyricView.shownPos = r * app.duration
-                        }
-                        onReleased: {
-                            if (!lyricProgress.dragging) return
-                            lyricProgress.dragging = false
-                            const r = Math.min(1, Math.max(0,
-                                    (mouseX - lyricProgress.trackX) / lyricProgress.trackW))
-                            app.seek(Math.round(r * app.duration))
-                        }
-                    }
-                }
             }
 
         }

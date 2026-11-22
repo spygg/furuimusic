@@ -77,9 +77,6 @@ class ThemeManager : public QObject {
     Q_PROPERTY(int lyricTransScale READ lyricTransScale WRITE setLyricTransScale NOTIFY lyricStyleChanged)
     // 歌词行间距（px）
     Q_PROPERTY(int lyricLineGap READ lyricLineGap WRITE setLyricLineGap NOTIFY lyricStyleChanged)
-    // 歌词区底部可拖动进度线（参考洛雪 PlayLine）
-    Q_PROPERTY(bool showLyricProgressLine READ showLyricProgressLine WRITE setShowLyricProgressLine
-               NOTIFY lyricStyleChanged)
 
 public:
     explicit ThemeManager(QObject *parent = nullptr);
@@ -153,8 +150,6 @@ public:
     void setLyricTransScale(int scale);
     int lyricLineGap() const { return m_lyricLineGap; }
     void setLyricLineGap(int gap);
-    bool showLyricProgressLine() const { return m_showLyricProgressLine; }
-    void setShowLyricProgressLine(bool on);
 
 signals:
     void modeChanged();
@@ -183,7 +178,6 @@ private:
     QString m_lyricAlign = QStringLiteral("auto");
     int m_lyricTransScale = 100;
     int m_lyricLineGap = 2;
-    bool m_showLyricProgressLine = false;
 };
 
 } // namespace Furui

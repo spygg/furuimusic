@@ -39,7 +39,6 @@ ThemeManager::ThemeManager(QObject *parent) : QObject(parent)
         m_lyricAlign = QStringLiteral("auto");
     m_lyricTransScale = qBound(60, Settings::integer(QStringLiteral("lyricTransScale"), 100), 160);
     m_lyricLineGap = qBound(0, Settings::integer(QStringLiteral("lyricLineGap"), 2), 24);
-    m_showLyricProgressLine = Settings::boolean(QStringLiteral("lyricProgressLine"), false);
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     // Qt 6.5+ 的 QStyleHints 直接给出系统配色（Windows / macOS / Linux / Android / iOS），
@@ -101,15 +100,6 @@ void ThemeManager::setLyricLineGap(int gap)
         return;
     m_lyricLineGap = clamped;
     Settings::set(QStringLiteral("lyricLineGap"), clamped);
-    emit lyricStyleChanged();
-}
-
-void ThemeManager::setShowLyricProgressLine(bool on)
-{
-    if (on == m_showLyricProgressLine)
-        return;
-    m_showLyricProgressLine = on;
-    Settings::set(QStringLiteral("lyricProgressLine"), on);
     emit lyricStyleChanged();
 }
 
