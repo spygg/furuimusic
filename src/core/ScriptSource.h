@@ -118,6 +118,7 @@ private:
     bool m_seeding = false;
     static QString scriptIdForUrl(const QString &url);
     static bool isBuiltinUrl(const QString &url);
+    static bool isBlockedScriptUrl(const QString &url);
     int rankOf(const QString &id) const;
     QStringList orderedIds() const;      // 按权重排好序的音源 id
     void saveOrder();

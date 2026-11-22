@@ -21,6 +21,8 @@ namespace Furui {
 
 namespace {
 
+QString normalizeSourceName(const QString &raw);
+
 // 内置在线音源（LX 脚本协议）动态发现：
 // 直接解析 github.com/pdone/lx-music-source 仓库页面（README 原文 + 每日可用性
 // health-state.json），不再维护硬编码清单。README 的每个「### 名称」小节给出一份
@@ -259,12 +261,28 @@ void ScriptSourceManager::load()
 {
     m_items.clear();
     const QVariantList rows = Library::instance()->scriptSources();
+    QStringList removedList = Settings::get(QStringLiteral("builtinScriptRemoved")).toStringList();
+    bool removedChanged = false;
     for (const QVariant &v : rows) {
         const QVariantMap m = v.toMap();
         Item item;
         item.id        = m.value(QStringLiteral("id")).toString();
         item.name      = m.value(QStringLiteral("name")).toString();
         item.url       = m.value(QStringLiteral("url")).toString();
+        // 上游已下架的恶意脚本：历史安装直接清掉，并记入「不再自动补回」
+        if (isBlockedScriptUrl(item.url)) {
+            Library::instance()->removeScriptSource(item.id);
+            if (!removedList.contains(item.url)) {
+                removedList << item.url;
+                removedChanged = true;
+            }
+            qWarning("已移除上游下架的恶意音源：%s", qUtf8Printable(item.name));
+            continue;
+        }
+        // 花体字/@name 里的形近字在车机字体下会显示成方框，载入时统一规整并回写
+        const QString normalized = normalizeSourceName(item.name);
+        const bool nameChanged = normalized != item.name;
+        if (nameChanged) item.name = normalized;
         item.version   = m.value(QStringLiteral("version")).toString();
         item.script    = m.value(QStringLiteral("script")).toString();
         item.hash      = m.value(QStringLiteral("hash")).toString();
@@ -285,8 +303,12 @@ void ScriptSourceManager::load()
         if (sourcesDoc.isArray()) item.sources = sourcesDoc.array();
         if (!item.enabled && item.status != QLatin1String("error"))
             item.status = QStringLiteral("disabled");
-        if (!item.id.isEmpty() && !item.script.isEmpty()) m_items.insert(item.id, item);
+        if (!item.id.isEmpty() && !item.script.isEmpty()) {
+            m_items.insert(item.id, item);
+            if (nameChanged) persist(item);
+        }
     }
+    if (removedChanged) Settings::set(QStringLiteral("builtinScriptRemoved"), removedList);
     // 音源使用顺序 = 权重顺序。老库没有该键时按名称补一份，之后由取链结果动态调整。
     const QStringList saved = Settings::get(QStringLiteral("scriptSourceOrder")).toStringList();
     m_order.clear();
@@ -437,6 +459,38 @@ bool ScriptSourceManager::isBuiltinUrl(const QString &url)
         && trimmed.endsWith(QLatin1String(".js"), Qt::CaseInsensitive);
 }
 
+bool ScriptSourceManager::isBlockedScriptUrl(const QString &url)
+{
+    // 上游 2026-11-22 下架通告：LX（独家音源）在具备 Node 能力的宿主里执行
+    // shutdown 强制关机。本应用用内嵌 QuickJS、没有 Node/process/shutdown，
+    // 但仍然按上游通告整条拉黑，避免其它宿主能力开放后重新中招。
+    const QString p = QUrl(url.trimmed()).path().toLower();
+    return p.contains(QLatin1String("/pdone/lx-music-source/"))
+        && p.contains(QLatin1String("/lx/latest.js"));
+}
+
+namespace {
+
+// 部分音源作者用「花体字」写 @name（数学字母 + 各种语言的形近字），普通字体
+// 渲染成方框/乱码。先做 Unicode NFKC（把数学粗体/花体还原成 ASCII），再补几个
+// 生成站点常用的形近字映射。
+QString normalizeSourceName(const QString &raw)
+{
+    QString s = raw.normalized(QString::NormalizationForm_KC).trimmed();
+    static const QVector<QPair<QChar, QChar>> kLookAlikes = {
+        {QChar(0x0C7F), QLatin1Char('e')}, // ౿ Telugu → e
+        {QChar(0x1963), QLatin1Char('l')}, // ᥣ Tai Le → l
+        {QChar(0x051C), QLatin1Char('W')}, // Ԝ Cyrillic → W
+        {QChar(0x146F), QLatin1Char('d')}, // ᑯ Canadian → d
+        {QChar(0x0131), QLatin1Char('i')}, // ı dotless i → i
+        {QChar(0x0456), QLatin1Char('i')}, // і Cyrillic → i
+    };
+    for (const auto &pair : kLookAlikes) s.replace(pair.first, pair.second);
+    return s;
+}
+
+} // namespace
+
 QVector<ScriptSourceManager::DiscoveredSource>
 ScriptSourceManager::parseRepoPage(const QString &text)
 {
@@ -470,11 +524,12 @@ ScriptSourceManager::parseRepoPage(const QString &text)
                     const int at = url.indexOf(QStringLiteral("raw.githubusercontent.com"));
                     const QString raw = at > 0
                         ? QStringLiteral("https://") + url.mid(at) : url;
+                    if (isBlockedScriptUrl(raw)) continue;
                     if (d.url.isEmpty()) d.url = raw;
                     // 页面里实际给出的地址原样保留（可能含镜像表里没有的加速站）
                     if (!d.mirrors.contains(url)) d.mirrors << url;
                 }
-                out.append(d);
+                if (!d.url.isEmpty()) out.append(d);
             }
         }
         sectionLinks.clear();
@@ -797,10 +852,11 @@ void ScriptSourceManager::fillMeta(Item &item, const QString &script)
     QString name = metaLine(script, QStringLiteral("name"));
     if (name.isEmpty()) {
         const QString path = QUrl(item.url).path();
-        name = path.section(QLatin1Char('/'), -2, -2);
+        name = QUrl::fromPercentEncoding(
+            path.section(QLatin1Char('/'), -2, -2).toUtf8());
         if (name.isEmpty()) name = QStringLiteral("LX 音源");
     }
-    item.name = name;
+    item.name = normalizeSourceName(name);
     item.version = metaLine(script, QStringLiteral("version"));
 }
 
@@ -967,6 +1023,12 @@ void ScriptSourceManager::importUrl(const QString &url, DoneCallback cb, bool si
     if (!target.isValid() || target.scheme().isEmpty()
         || !(target.scheme() == QLatin1String("http") || target.scheme() == QLatin1String("https"))) {
         const QString msg = QStringLiteral("请输入 http/https 开头的脚本地址");
+        if (!silent) emit message(QString(), false, msg);
+        if (cb) cb(false, msg);
+        return;
+    }
+    if (isBlockedScriptUrl(trimmed)) {
+        const QString msg = QStringLiteral("该音源已被上游下架（LX 独家音源含强制关机恶意逻辑），禁止导入");
         if (!silent) emit message(QString(), false, msg);
         if (cb) cb(false, msg);
         return;
