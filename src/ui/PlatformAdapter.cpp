@@ -58,10 +58,11 @@ AndroidInsets queryAndroidInsets(qreal devicePixelRatio)
 
     jint l = 0, t = 0, r = 0, b = 0;
     if (QNativeInterface::QAndroidApplication::sdkVersion() >= 30) {
-        // Type.systemBars()(1) | Type.displayCutout()(128)：并集按「每边取最大」合并，
-        // 正好是我们需要的「系统栏或挖孔压到的范围」，不会像相加那样翻倍
+        // 只取 Type.statusBars()(1)，不含 displayCutout(128)：
+        // 顶部补差额用的是「纯状态栏高度」，若并进挖孔，挖孔/刘海机会把 ai.top 抬高，
+        // 差额算大、补过头 → 顶部一大块白空白。挖孔只在横屏左右有意义，而左右不参与计算。
         QJniObject gi = insets.callObjectMethod("getInsets", "(I)Landroid/graphics/Insets;",
-                                                jint(1 | 128));
+                                                jint(1));
         if (gi.isValid()) {
             l = gi.getField<jint>("left");
             t = gi.getField<jint>("top");
