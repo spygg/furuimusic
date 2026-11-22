@@ -57,7 +57,8 @@ AndroidInsets queryAndroidInsets(qreal devicePixelRatio)
         return out;
 
     jint l = 0, t = 0, r = 0, b = 0;
-    if (QNativeInterface::QAndroidApplication::sdkVersion() >= 30) {
+    const jint sdkInt = QNativeInterface::QAndroidApplication::sdkVersion();
+    if (sdkInt >= 30) {
         // 只取 Type.statusBars()(1)，不含 displayCutout(128)：
         // 顶部补差额用的是「纯状态栏高度」，若并进挖孔，挖孔/刘海机会把 ai.top 抬高，
         // 差额算大、补过头 → 顶部一大块白空白。挖孔只在横屏左右有意义，而左右不参与计算。
@@ -76,6 +77,19 @@ AndroidInsets queryAndroidInsets(qreal devicePixelRatio)
         t = insets.callMethod<jint>("getSystemWindowInsetTop");
         r = insets.callMethod<jint>("getSystemWindowInsetRight");
         b = insets.callMethod<jint>("getSystemWindowInsetBottom");
+        // 关键：getSystemWindowInsetTop() 在挖孔/刘海机上把挖孔安全区也算进 top，
+        // 与上面 API 30+ 只取 statusBars 的口径不一致。若不剥离，挖孔机 ai.top
+        // 会虚高（实测白边约 80dp），补差额时补过头 → 状态栏下方一大块白空白。
+        // 这里减掉挖孔 safeInsetTop，让两条路径口径一致（纯状态栏高度）。
+        if (sdkInt >= 28) {
+            QJniObject cutout = insets.callObjectMethod(
+                "getDisplayCutout", "()Landroid/view/DisplayCutout;");
+            if (cutout.isValid()) {
+                const jint cutoutTop = cutout.callMethod<jint>("getSafeInsetTop");
+                if (cutoutTop > 0 && cutoutTop < t)
+                    t -= cutoutTop;
+            }
+        }
     }
     if (l == 0 && t == 0 && r == 0 && b == 0)
         return out;
@@ -297,13 +311,27 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
         // ai.top 带 displayCutout 并集（每边取最大），已是该边的合理高度，直接钳制上限即可。
         const int screenH = window->screen() ? window->screen()->geometry().height() : 0;
         if (screenH > 0) {
-            const qreal qtInsetTop = qMax(0.0, static_cast<qreal>(screenH - window->height()));
+            // Qt 已让出的顶部高度取「窗口让出」与「safeArea 内缩」两者较大值：
+            //  1) 窗口比屏幕矮：Qt 把窗口摆到状态栏下沿（win.y>0 / win.h<screenH），
+            //     这类机 QML 原点本就在状态栏下方，差额≤0 不补；
+            //  2) Qt 6.9+ 的 ApplicationWindow 会把 contentItem 按 safeAreaMargins 内缩，
+            //     此时窗口仍铺满整屏（win.h==screenH），单看高度差算出 0 就补满 ai.top，
+            //     与 Qt 的内缩叠加 → 状态栏下方多出一条与状态栏等高的纯白。
+            //     挖孔机实测白边 80dp = 40dp 状态栏 + 40dp 重复补，正是这条。
+            // 只取较大值屏蔽重复：两台机分别是「窗口让出 72dp / safeTop=0」与
+            // 「窗口让出 0 / safeTop=40」，都只补真正的缺口；真正 edge-to-edge 且
+            // 两个来源都是 0 的机型仍会补满 ai.top，不会出现贴住状态栏的回归。
+            qreal qtInsetTop = qMax(0.0, static_cast<qreal>(screenH - window->height()));
+#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+            const qreal safeTop = static_cast<qreal>(window->safeAreaMargins().top());
+            qtInsetTop = qMax(qtInsetTop, safeTop);
+            m_lastSafeTop = safeTop;
+#endif
             const qreal missingTop = ai.top - qtInsetTop;
             if (missingTop > 1.0)
                 t = qMin(missingTop, ai.top);   // 钳制，防挖孔并集偏高补过头
         }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
-        m_lastSafeTop = window->safeAreaMargins().top();   // 仅日志参考，不用于计算
         // 安全区异步上报（旋转、系统栏显隐），每个窗口只接一次监听触发重算。
         if (window != m_safeAreaWindow) {
             m_safeAreaWindow = window;
@@ -372,12 +400,12 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
     // 扁扁一条，下面一片空白）。真实系统栏最厚也就 60dp 上下，上下加起来超过窗口高度
     // 40% 一定是有误 —— 此时整组丢弃，让内容直接铺满窗口（键盘本身已经把窗口压小了）。
     if (window && window->height() > 0 && t + b > window->height() * 0.4) {
-        qWarning("insets: 上下边距异常（%.0f+%.0f / 窗口高 %.0f dp），丢弃安全区",
+        qWarning("insets: 上下边距异常（%.0f+%.0f / 窗口高 %d dp），丢弃安全区",
                  t, b, window->height());
         l = t = r = b = 0;
     }
     if (window && window->width() > 0 && l + r > window->width() * 0.4) {
-        qWarning("insets: 左右边距异常（%.0f+%.0f / 窗口宽 %.0f dp），丢弃安全区",
+        qWarning("insets: 左右边距异常（%.0f+%.0f / 窗口宽 %d dp），丢弃安全区",
                  l, r, window->width());
         l = t = r = b = 0;
     }
