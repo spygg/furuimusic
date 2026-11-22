@@ -136,6 +136,15 @@ inline QByteArray openApiIndexHtml()
   .detailcount{color:var(--sub);font-size:12px;flex:0 0 auto}
 
   /* ---------- 播放页 ---------- */
+  /* 浏览器出声状态条：显示 local <audio> 与 APP 状态是否同步，失败时给重试入口 */
+  .webaudio-bar{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--sub);
+                margin:-6px 0 14px;padding:7px 11px;background:var(--card);border:1px solid var(--line);
+                border-radius:10px}
+  .wa-dot{width:7px;height:7px;border-radius:99px;background:var(--sub);flex:0 0 auto}
+  .wa-dot.on{background:var(--accent);box-shadow:0 0 0 3px var(--soft)}
+  .wa-dot.err{background:#ef4444}
+  .webaudio-bar button{margin-left:auto;border:1px solid var(--line);border-radius:8px;
+                       padding:3px 10px;color:var(--accent-d)}
   .player{display:grid;gap:18px;grid-template-columns:minmax(280px,380px) minmax(0,1fr)}
   /* 网格子项默认 min-width:auto，会被内部 nowrap 文本撑到比容器还宽（窄屏就横向溢出）*/
   .player>*{min-width:0}
@@ -294,6 +303,14 @@ inline QByteArray openApiIndexHtml()
     <section class="page" id="page-player">
       <h2 class="pagetitle">正在播放</h2>
       <div class="pagesub" id="playSub">与设备端实时同步</div>
+      <!-- 浏览器直接出声：src 指向 APP 的 /stream 音频代理（带防盗链头拉流）。
+           本机静音、声音从这台浏览器设备出来，实现跨设备远程收听。 -->
+      <audio id="webAudio" preload="none" style="display:none"></audio>
+      <div class="webaudio-bar" id="webAudioBar">
+        <span class="wa-dot" id="waDot"></span>
+        <span id="waText">浏览器播放：准备中</span>
+        <button id="waRetry" class="hide">重新连接</button>
+      </div>
       <div class="player">
         <div>
           <div class="pcard">
@@ -403,6 +420,11 @@ inline QByteArray openApiIndexHtml()
     st:{}, settings:null, detailTitle:'', detailFrom:'playlists',
     playlists:[], discovery:[], queue:[], results:[], favs:[], hist:[],
     lyrics:[], lyricIdx:-1, timed:false, logShown:false,
+    // 浏览器本地 <audio> 状态（跨设备远程收听：声音从本浏览器出）
+    audioUid:'',          // 当前 audio 绑定的曲目 uid，变了就换流
+    audioWantPlay:false,  // 期望播放（跟随 APP playing 状态）
+    audioLastPlaying:false,
+    audioFailure:false,
     // 详情曲目还在从设备端拉取：此时曲目数为 0 不代表「没有歌」，
     // 直接显示「0 首」会让人以为榜单是空的
     detailLoading:false
@@ -664,6 +686,92 @@ inline QByteArray openApiIndexHtml()
     $('#pcur').textContent = fmt(pos); $('#pdur').textContent = fmt(dur);
     $('#pbcur').textContent = fmt(pos); $('#pbdur').textContent = fmt(dur);
   }
+
+  /* ================= 浏览器本地出声（跨设备远程收听） =================
+     APP 端保持播放作为真相源，本机可静音；本浏览器用 <audio src="/stream">
+     独立拉一份带防盗链头的流出来听。进度/歌词走本地 audio 时钟，避免 SSE 1 秒
+     抖动导致声画不同步；控制命令仍下发 APP，由 SSE 回状态校正期望态。 */
+  function waStatus(text, kind){
+    $('#waText').textContent = text;
+    var dot = $('#waDot');
+    dot.className = 'wa-dot' + (kind ? ' ' + kind : '');
+    $('#waRetry').classList.toggle('hide', kind !== 'err');
+  }
+  function audio(){
+    return $('#webAudio');
+  }
+  // SSE 状态变化：切歌 / 期望播放态 / 音量 同步到本地 audio
+  function syncAudioFromStatus(st){
+    var a = audio();
+    if(!a) return;
+    var uid = st.uid || st.name || '';
+    var hasSong = !!(st.name && st.name.length);
+    S.audioWantPlay = hasSong && st.status === 'playing';
+
+    // 暂停态恢复时 uid/name 可能已有值，但 APP 还没真正取链（/stream 会 503）。
+    // 于是「暂停 → 开始播放」且当前流失败/未就绪时，强制重连一次拿新流。
+    var nowPlaying = S.audioWantPlay;
+    var needReload = nowPlaying && !S.audioLastPlaying && (S.audioFailure || !a.src);
+    S.audioLastPlaying = nowPlaying;
+
+    // 切歌：换 src（带 uid + 时间戳破缓存）。空 uid 的源用歌名兜底，避免每帧重连。
+    if((uid && uid !== S.audioUid) || needReload){
+      S.audioUid = uid;
+      S.audioFailure = false;
+      a.src = '/stream?uid=' + encodeURIComponent(uid || st.name || '') + '&t=' + Date.now();
+      a.load();
+      waStatus(hasSong ? '浏览器播放：连接音源…' : '浏览器播放：待机', '');
+    }
+
+    if(typeof st.volume === 'number') a.volume = Math.max(0, Math.min(1, st.volume / 100));
+
+    if(S.audioWantPlay && !S.audioFailure){
+      var p = a.play();
+      if(p && typeof p.catch === 'function'){
+        p.catch(function(err){
+          // 浏览器自动播放策略：未交互前 play() 会被拒。保留 expect 态，
+          // 等用户点一次播放/页面即会重试（见 applyAudioWant）。
+          waStatus('浏览器播放：点播放键开始', '');
+        });
+      }
+    } else {
+      a.pause();
+    }
+  }
+  // 用户点击播放键后调用：此时已有用户手势，可绕过自动播放限制
+  function applyAudioWant(){
+    var a = audio();
+    if(!a) return;
+    if(S.audioWantPlay && !S.audioFailure){
+      S.audioFailure = false;
+      var p = a.play();
+      if(p && typeof p.catch === 'function') p.catch(function(){});
+    } else {
+      a.pause();
+    }
+  }
+  // 本地 audio 时钟驱动进度与歌词：流畅、与听到的声音严格对齐
+  function paintLocalPlayback(){
+    var a = audio();
+    if(!a || !a.src) return;
+    var dur = a.duration, pos = a.currentTime;
+    if(isFinite(dur) && dur > 0){
+      var pct = Math.min(100, pos / dur * 100);
+      $('#pfill').style.width = pct.toFixed(2) + '%';
+      $('#pbfill').style.width = pct.toFixed(2) + '%';
+      $('#pcur').textContent = fmt(pos * 1000); $('#pdur').textContent = fmt(dur * 1000);
+      $('#pbcur').textContent = fmt(pos * 1000); $('#pbdur').textContent = fmt(dur * 1000);
+      // 时间轴歌词：按本地播放秒数找当前行
+      if(S.timed && S.lyrics.length){
+        var ms = pos * 1000, idx = -1;
+        for(var i = 0; i < S.lyrics.length; i++){
+          if((S.lyrics[i].t || 0) <= ms) idx = i; else break;
+        }
+        if(idx >= 0) markLyric(idx);
+      }
+      if(!a.paused) waStatus('浏览器播放：正在收听', 'on');
+    }
+  }
   function paint(st){
     if(!st) return;
     S.st = st;
@@ -700,6 +808,8 @@ inline QByteArray openApiIndexHtml()
     }
     // 换歌就重拉一次歌词：只在进播放页时拉会让「点开时刚好没歌」的页面一直空着
     if(st.name !== S.lastName){ S.lastName = st.name; loadLyrics(); }
+    // 本地 audio 跟随状态：切歌换流、播放/暂停、音量
+    syncAudioFromStatus(st);
     // 队列高亮跟着当前曲目走
     if(S.tab === 'queue' && typeof st.currentIndex === 'number') renderLibrary();
   }
@@ -723,13 +833,27 @@ inline QByteArray openApiIndexHtml()
     function seekAt(clientX){
       var r = bar.getBoundingClientRect();
       var ratio = Math.min(1, Math.max(0, (clientX - r.left) / (r.width || 1)));
+      var a = audio();
+      // 本地先跳：浏览器听到的声音立刻响应，不受 SSE 1 秒延迟影响
+      if(a && isFinite(a.duration) && a.duration > 0){
+        try { a.currentTime = ratio * a.duration; } catch(e){}
+      }
       if((S.st.duration || 0) > 0) api('/seek?time=' + Math.round(ratio * S.st.duration)).then(refreshStatus);
     }
     bar.addEventListener('pointerdown', function(e){ seekAt(e.clientX); });
   }
   bindSeek('#pbar'); bindSeek('#pbbar');
 
-  $('#pplay').onclick = $('#pbplay').onclick = function(){ ctl('/toggle'); };
+  // 控制命令下发 APP（真相源）；随后借本次用户手势让本地 audio 立即起播/暂停，
+  // SSE 回来后 syncAudioFromStatus 再做最终校正。
+  function togglePlay(){
+    var a = audio();
+    if(a && !a.paused){ a.pause(); S.audioWantPlay = false; }
+    else { S.audioWantPlay = true; }
+    ctl('/toggle');
+    applyAudioWant();
+  }
+  $('#pplay').onclick = $('#pbplay').onclick = togglePlay;
   $('#pprev').onclick = $('#pbprev').onclick = function(){ ctl('/skip-prev'); };
   $('#pnext').onclick = $('#pbnext').onclick = function(){ ctl('/skip-next'); };
   // 两个音量条（播放页 / 底栏）共用一份值；--v 用来画填充比例
@@ -900,6 +1024,29 @@ inline QByteArray openApiIndexHtml()
   $('#pprev').innerHTML = icon('prev', 15); $('#pnext').innerHTML = icon('next', 15);
   $('#pbprev').innerHTML = icon('prev', 13); $('#pbnext').innerHTML = icon('next', 13);
   $('#pplay').innerHTML = icon('play', 19); $('#pbplay').innerHTML = icon('play', 16);
+  // ---- 浏览器本地 audio：本地时钟驱动进度/歌词，错误给重试 ----
+  (function bindAudio(){
+    var a = audio();
+    if(!a) return;
+    a.addEventListener('timeupdate', paintLocalPlayback);
+    a.addEventListener('playing', function(){ S.audioFailure = false; waStatus('浏览器播放：正在收听', 'on'); });
+    a.addEventListener('waiting', function(){ waStatus('浏览器播放：缓冲中…', ''); });
+    a.addEventListener('error', function(){
+      // 换 src/load() 会中止上一次加载并触发 MEDIA_ERR_ABORTED(1)，那不是真失败
+      if(a.error && a.error.code === 1) return;
+      S.audioFailure = true;
+      waStatus('浏览器播放：音源加载失败（点重新连接）', 'err');
+    });
+    $('#waRetry').onclick = function(){
+      if(!a.src) return;
+      var sep = a.src.indexOf('?') >= 0 ? '&' : '?';
+      a.src = a.src.split('&t=')[0] + sep + 't=' + Date.now();
+      a.load();
+      S.audioFailure = false;
+      waStatus('浏览器播放：重新连接…', '');
+      applyAudioWant();
+    };
+  })();
   refreshStatus();
   loadPlaylists('playlists');
   loadQueue();

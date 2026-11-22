@@ -100,6 +100,9 @@ public:
     QString currentLyricLine() const;
     int currentLyricIndex() const { return m_lyricIndex; }
     QVariantMap playbackHeaders() const { return m_headers; }
+    // 当前播放直链（http 已升 https）。开放 API /stream 用它做带防盗链头的音频代理，
+    // 让浏览器 <audio> 也能听到本机正在播的歌（浏览器自身无法携带 Referer/Cookie）。
+    QUrl currentUrl() const { return m_currentUrl; }
 
 signals:
     void stateChanged();

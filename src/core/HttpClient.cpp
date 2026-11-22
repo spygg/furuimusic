@@ -272,4 +272,12 @@ void HttpClient::download(const QUrl &url, const QVariantMap &headers,
     });
 }
 
+QNetworkReply *HttpClient::openStream(const QNetworkRequest &req)
+{
+    // 与 request()/download() 共用 m_nam（已按设置配好代理），只裸转发：
+    // 不设 body 缓冲、不挂超时定时器、不碰 cookie jar（防盗链头由 OpenApiServer 预先
+    // 放进 req）。调用方（/stream）全权管理 reply 生命周期与背压。
+    return m_nam.get(req);
+}
+
 } // namespace Furui

@@ -12,6 +12,8 @@
 #include <QVariantMap>
 #include <functional>
 
+class QNetworkReply;
+
 namespace Furui {
 
 class HttpClient : public QObject {
@@ -46,6 +48,10 @@ public:
     void download(const QUrl &url, const QVariantMap &headers, const QString &destPath,
                   const DownloadCallback &cb, int timeoutMs = -1,
                   const DownloadProgressCallback &progress = DownloadProgressCallback());
+    // 流式打开（开放 API /stream 音频代理用）：复用本客户端的代理配置，返回裸 reply，
+    // 由调用方负责读数据、abort 与 deleteLater。不缓存 body、不设超时（长音频流可能
+    // 远超默认 12s；断连由调用方在 socket disconnected 时 abort）。
+    QNetworkReply *openStream(const QNetworkRequest &req);
     void setProxyFromSettings();
     // 与 HttpClient 完全一致的代理判定：设置里为空就 NoProxy。
     // QML 的 Image / MediaPlayer 用自己的 QNetworkAccessManager，只认应用级代理，

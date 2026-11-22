@@ -6,6 +6,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkInterface>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPointer>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
@@ -13,11 +16,14 @@
 #include <QUrlQuery>
 #include <QVector>
 #include <algorithm>
+#include <memory>
 
 #include "AppController.h"
+#include "HttpClient.h"
 #include "Library.h"
 #include "Logger.h"
 #include "OpenApiWeb.h"
+#include "PlayerController.h"
 #include "Settings.h"
 
 namespace Furui {
@@ -248,6 +254,8 @@ void OpenApiServer::stop()
     if (m_pushTimer) m_pushTimer->stop();
     for (QTcpSocket *s : m_subscribers) { s->disconnectFromHost(); s->deleteLater(); }
     m_subscribers.clear();
+    for (QTcpSocket *s : m_streams.keys()) abortStreamsForSocket(s);
+    m_streams.clear();
     m_buffers.clear();
     if (m_server && m_server->isListening()) m_server->close();
     emit stateChanged();
@@ -261,6 +269,7 @@ void OpenApiServer::onNewConnection()
         connect(socket, &QTcpSocket::readyRead, this, &OpenApiServer::onReadyRead);
         connect(socket, &QTcpSocket::disconnected, this, [this, socket]() {
             m_subscribers.remove(socket);
+            abortStreamsForSocket(socket);
             m_buffers.remove(socket);
             m_origins.remove(socket);
             socket->deleteLater();
@@ -290,6 +299,8 @@ QByteArray OpenApiServer::statusJson() const
     AppController *app = AppController::instance();
     QJsonObject o;
     o.insert(QStringLiteral("status"), app->playing() ? QStringLiteral("playing") : QStringLiteral("paused"));
+    // 网页 <audio> 靠 uid 判断是否需要重新加载 /stream（切歌时换流）；无 uid 时前端退回用歌名
+    o.insert(QStringLiteral("uid"), app->currentSongUid());
     o.insert(QStringLiteral("name"), app->currentTitle());
     o.insert(QStringLiteral("singer"), app->currentArtist());
     o.insert(QStringLiteral("albumName"), QString());
@@ -394,6 +405,12 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
     }
     if (path == QLatin1String("/favicon.ico")) {
         respond(socket, 204, QStringLiteral("text/plain"), QByteArray());
+        return;
+    }
+    // 音频流代理：浏览器 <audio src="/stream"> 无法自带防盗链头，由 APP 用当前直链
+    // + playbackHeaders 重新拉流转发。长连接不走 respond() 的一次性写回路径。
+    if (path == QLatin1String("/stream")) {
+        handleStream(socket, request);
         return;
     }
     if (path == QLatin1String("/logs")) {
@@ -516,6 +533,7 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
         QJsonObject h;
         h.insert(QStringLiteral("endpoints"), QJsonArray::fromStringList({
             QStringLiteral("/status"), QStringLiteral("/lyric"), QStringLiteral("/subscribe-player-status"),
+            QStringLiteral("/stream"),   // 音频流（浏览器 <audio src="/stream"> 直接播放）
             QStringLiteral("/play"), QStringLiteral("/pause"), QStringLiteral("/toggle"),
             QStringLiteral("/skip-next"), QStringLiteral("/skip-prev"),
             QStringLiteral("/seek?time=<ms>"), QStringLiteral("/volume?value=<0-100>"),
@@ -621,6 +639,109 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
     result.insert(QStringLiteral("result"), msg);
     respond(socket, 200, QStringLiteral("application/json; charset=utf-8"),
             QJsonDocument(result).toJson(QJsonDocument::Compact));
+}
+
+void OpenApiServer::abortStreamsForSocket(QTcpSocket *socket)
+{
+    auto it = m_streams.find(socket);
+    if (it == m_streams.end()) return;
+    QNetworkReply *reply = it.value();
+    m_streams.erase(it);
+    if (reply) {
+        // 断开 readyRead/finished，abort 触发的 finished 不再回写已断开的 socket
+        reply->disconnect();
+        reply->abort();
+        reply->deleteLater();
+    }
+}
+
+void OpenApiServer::handleStream(QTcpSocket *socket, const QByteArray &request)
+{
+    PlayerController *player = PlayerController::instance();
+    const QUrl url = player->currentUrl();
+    const QVariantMap headers = player->playbackHeaders();
+    if (url.isEmpty() || !url.isValid()) {
+        respond(socket, 503, QStringLiteral("text/plain; charset=utf-8"),
+                "当前没有正在播放的音源");
+        return;
+    }
+
+    // 用与业务请求一致的策略构造上游请求：跟随重定向、手动管理 Cookie（防盗链头
+    // 由 sources.json 声明、存进 playbackHeaders，必须原样带上，否则 CDN 直接 403）。
+    QNetworkRequest req(url);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 9, 0)
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
+#else
+    req.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
+#endif
+    req.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
+    req.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
+    for (auto it = headers.constBegin(); it != headers.constEnd(); ++it) {
+        const QByteArray value = it.value().toString().toUtf8();
+        if (!value.trimmed().isEmpty()) req.setRawHeader(it.key().toUtf8(), value);
+    }
+    // 浏览器 <audio> 拖动进度会发 Range: bytes=N-，透传给上游才能保证 Seek 真正生效
+    const QByteArray range = headerValue(request, "Range");
+    if (!range.isEmpty()) req.setRawHeader("Range", range);
+
+    QNetworkReply *reply = HttpClient::instance()->openStream(req);
+    QPointer<QNetworkReply> guard(reply);
+    QPointer<QTcpSocket> sockGuard(socket);
+    m_streams.insert(socket, reply);
+    auto headersSent = std::make_shared<bool>(false);
+
+    // 背压：socket 待写缓冲超过 1MB 就暂停搬运，等 bytesWritten 再继续，
+    // 避免上游一直 readyRead 把整个内存吃满（歌词/元数据的 QNAM 缓冲有限，但音频是长流）。
+    auto drain = [guard, sockGuard]() {
+        if (!guard || !sockGuard) return;
+        while (sockGuard->bytesToWrite() < (1 << 20) && guard->bytesAvailable() > 0) {
+            const QByteArray chunk = guard->read(64 * 1024);
+            if (chunk.isEmpty()) break;
+            sockGuard->write(chunk);
+        }
+        sockGuard->flush();
+    };
+
+    connect(reply, &QNetworkReply::readyRead, this, [=]() {
+        if (!guard || !sockGuard) return;
+        if (!*headersSent) {
+            *headersSent = true;
+            int status = guard->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (status <= 0) status = 200;
+            // 状态码文本只需放行浏览器recognizes 的 200/206；其余按 200 处理也能播
+            const QByteArray ctype = guard->header(QNetworkRequest::ContentTypeHeader).toByteArray();
+            const QByteArray clen = guard->header(QNetworkRequest::ContentLengthHeader).toByteArray();
+            const QByteArray crange = guard->rawHeader("Content-Range");
+            const char *reason = status == 206 ? "Partial Content"
+                               : status == 200 ? "OK"
+                               : status == 416 ? "Range Not Satisfiable" : "OK";
+            QByteArray h = "HTTP/1.1 " + QByteArray::number(status) + " " + reason + "\r\n";
+            h += "Content-Type: " + (ctype.isEmpty() ? QByteArray("audio/mpeg") : ctype) + "\r\n";
+            if (!clen.isEmpty()) h += "Content-Length: " + clen + "\r\n";
+            if (!crange.isEmpty()) h += "Content-Range: " + crange + "\r\n";
+            h += "Accept-Ranges: bytes\r\n";
+            h += "Cache-Control: no-store\r\n";
+            h += "Connection: close\r\n";
+            // 同源页面直接 <audio src="/stream">，无需 CORS 头；但回显一下便于调试工具读取
+            const QByteArray origin = m_origins.value(sockGuard.data());
+            if (!origin.isEmpty() && isLoopbackOrigin(origin))
+                h += "Access-Control-Allow-Origin: " + origin + "\r\n";
+            h += "\r\n";
+            sockGuard->write(h);
+        }
+        drain();
+    });
+    connect(socket, &QTcpSocket::bytesWritten, this, [=]() { drain(); });
+    connect(reply, &QNetworkReply::finished, this, [=]() {
+        if (!guard) return;
+        if (*headersSent && sockGuard) {
+            sockGuard->flush();
+            sockGuard->disconnectFromHost();
+        }
+        if (guard) guard->deleteLater();
+        m_streams.remove(socket);
+    });
 }
 
 void OpenApiServer::pushSubscribe()

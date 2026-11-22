@@ -9,6 +9,7 @@
 class QTcpServer;
 class QTcpSocket;
 class QTimer;
+class QNetworkReply;
 
 namespace Furui {
 
@@ -40,8 +41,13 @@ private:
                  const QByteArray &extraHeaders = QByteArray());
     QByteArray statusJson() const;
     void pushSubscribe();
+    // 音频流代理：用当前直链 + 防盗链头重新拉流，字节转发给浏览器 <audio>。
+    void handleStream(QTcpSocket *socket, const QByteArray &request);
+    void abortStreamsForSocket(QTcpSocket *socket);
 
     QTcpServer *m_server = nullptr;
+    // 每个 /stream 长连接对应一个上游 reply；socket 断开时 abort 对应请求。
+    QHash<QTcpSocket *, QNetworkReply *> m_streams;
     QTimer *m_pushTimer = nullptr;
     QSet<QTcpSocket *> m_subscribers;
     QHash<QTcpSocket *, QByteArray> m_buffers;
