@@ -273,13 +273,19 @@ static QStringList trackIdsAt(const QJsonValue &root, const QString &path)
     return out;
 }
 
-void MusicSource::fillSongsByIds(const Endpoint &fillEp, const QVariantMap &vars,
-                                 const QStringList &ids, const QVector<Song> &preview,
-                                 SongsCallback cb)
+void MusicSource::fillSongsByIds(const Endpoint &ep, const Endpoint &fillEp,
+                                 const QVariantMap &vars, const QStringList &ids,
+                                 const QVector<Song> &preview, SongsCallback cb)
 {
     if (ids.isEmpty()) { if (cb) cb(preview); return; }
-    // 批量大小受 URL 长度限制（GET 版 ids 在 query 里，一条 id 约 10 字节）
-    const int batch = qBound(1, fillEp.extra.value(QStringLiteral("fillBatch"), 200).toInt(), 500);
+    // fillBatch 声明在歌单详情端点（fullIdsPath/fillEndpoint 旁边），不是填充端点。
+    // 必须从 ep 读，否则配置里的 200 会被忽略；网易云 /api/song/detail 实测 >=202 个 id
+    // 只回 201 首，批量上限收紧到 200，避免每批静默丢歌。
+    const int batch = qBound(1,
+                             ep.extra.value(QStringLiteral("fillBatch"),
+                                            fillEp.extra.value(QStringLiteral("fillBatch"), 200))
+                                 .toInt(),
+                             200);
 
     auto want = std::make_shared<QStringList>(ids);
     auto got = std::make_shared<QHash<QString, Song>>();
@@ -302,7 +308,10 @@ void MusicSource::fillSongsByIds(const Endpoint &fillEp, const QVariantMap &vars
         *next += slice.size();
         QVariantMap v = vars;
         v.insert(QStringLiteral("ids"), slice.join(QLatin1Char(',')));
-        requestSongs(fillEp, v, [got, step, slice](const QVector<Song> &songs) {
+        requestSongs(fillEp, v, [this, got, step, slice](const QVector<Song> &songs) {
+            if (songs.size() < slice.size())
+                qWarning().noquote() << "[source]" << m_desc.id << "songDetail batch short:"
+                                     << songs.size() << "/" << slice.size();
             for (const Song &s : songs) got->insert(s.sourceId, s);
             (*step)();
         });
@@ -346,7 +355,7 @@ void MusicSource::requestDetailSongs(const Endpoint &ep, const QVariantMap &vars
             if (cb) cb(preview);
             return;
         }
-        fillSongsByIds(fillEp, v, ids, preview, cb);
+        fillSongsByIds(ep, fillEp, v, ids, preview, cb);
     });
 }
 

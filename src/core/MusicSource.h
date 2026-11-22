@@ -88,9 +88,10 @@ private:
     // trackIds 里，这里用它 + 批量 song/detail 补齐并还原歌单顺序。
     void requestDetailSongs(const Endpoint &ep, const QVariantMap &vars, int limit, int offset,
                             SongsCallback cb);
-    // 按 id 批量拉详情：分批请求 fillEp，最后按 ids 顺序输出（保持歌单顺序、丢掉下架曲目）
-    void fillSongsByIds(const Endpoint &fillEp, const QVariantMap &vars, const QStringList &ids,
-                        const QVector<Song> &preview, SongsCallback cb);
+    // 按 id 批量拉详情：分批请求 fillEp，最后按 ids 顺序输出（保持歌单顺序、丢掉下架曲目）。
+    // ep 是声明 fullIdsPath/fillEndpoint/fillBatch 的歌单详情端点，批量大小从它读。
+    void fillSongsByIds(const Endpoint &ep, const Endpoint &fillEp, const QVariantMap &vars,
+                        const QStringList &ids, const QVector<Song> &preview, SongsCallback cb);
     void requestPlaylists(const Endpoint &ep, const QVariantMap &vars, const QString &type,
                           PlaylistsCallback cb);
     static bool isVipResponse(const QVariantMap &rule, const QJsonValue &root,

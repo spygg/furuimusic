@@ -134,7 +134,9 @@ Endpoint neteaseContract(const QString &name)
         e.extra = QVariantMap{{QStringLiteral("forwardMethod"), QStringLiteral("POST")},
                               {QStringLiteral("fullIdsPath"), QStringLiteral("playlist.trackIds")},
                               {QStringLiteral("fillEndpoint"), QStringLiteral("songDetail")},
-                              {QStringLiteral("fillBatch"), 400}};
+                              // 网易云 /api/song/detail 实测一次最多回 201 首（>=202 个 id 会被截断），
+                              // 批量必须留在 200 以内，否则每批静默丢歌
+                              {QStringLiteral("fillBatch"), 200}};
         e.fields = QVariantMap{{QStringLiteral("id"), QStringLiteral("id")},
                                {QStringLiteral("title"), QStringLiteral("name")},
                                {QStringLiteral("artist"), QStringLiteral("ar[].name")},
@@ -646,7 +648,17 @@ void UserApi::completePlaylistSongs(const QString &sourceId, const QString &cook
         if (cb) cb(preview);
         return;
     }
-    const int batch = qBound(1, fillEp.extra.value(QStringLiteral("fillBatch"), 400).toInt(), 500);
+    // fillBatch 声明在「歌单详情」端点（fullIdsPath/fillEndpoint 旁边），不在填充端点上。
+    // 之前从 fillEp 读，配置里的 200 永远读不到，退回默认 400 → 网易云每批静默丢 ~200 首。
+    // 上限也收紧到 200：实测 /api/song/detail >=202 个 id 只回 201 首。
+    const int batch = qBound(1,
+                             ep.extra.value(QStringLiteral("fillBatch"),
+                                            fillEp.extra.value(QStringLiteral("fillBatch"), 200))
+                                 .toInt(),
+                             200);
+    if (ids.size() > batch)
+        qInfo().noquote() << "[userapi]" << sourceId << name << "fill batches:" << ids.size()
+                          << "ids /" << batch << "per batch";
     const QVariantMap base = vars(sourceId, cookie);
 
     auto want = std::make_shared<QStringList>(ids);
@@ -675,6 +687,9 @@ void UserApi::completePlaylistSongs(const QString &sourceId, const QString &cook
                  if (songs.isEmpty())
                      qWarning().noquote() << "[userapi]" << sourceId << "songDetail batch empty:"
                                           << fr.error << fr.status;
+                 else if (songs.size() < slice.size())
+                     qWarning().noquote() << "[userapi]" << sourceId << "songDetail batch short:"
+                                          << songs.size() << "/" << slice.size();
                  for (const Song &s : songs) got->insert(s.sourceId, s);
                  (*step)();
              });

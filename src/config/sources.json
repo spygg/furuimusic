@@ -109,7 +109,7 @@
             ],
             "durationScale": 1
           },
-          "_note": "批量歌曲详情：ids 为逗号分隔 id 串，配置里包成 [..] 数组。注意这个端点用 artists/album/duration 这套老字段（不是 v3 的 ar/al/dt）。fillBatch 控制单次批量条数（GET 版受 URL 长度限制）。"
+          "_note": "批量歌曲详情：ids 为逗号分隔 id 串，配置里包成 [..] 数组。注意这个端点用 artists/album/duration 这套老字段（不是 v3 的 ar/al/dt）。批量大小 fillBatch 声明在引用它的歌单详情端点上，不在这里；网易云 /api/song/detail 实测 >=202 个 id 只回 201 首，故必须 <=200，否则会静默丢歌。"
         },
         "url": {
           "method": "GET",
