@@ -1953,16 +1953,44 @@ Item {
                                 cellWidth: root.gridCellWidth
                                 cellHeight: root.gridCellHeight
                                 visible: searchView.songMode && root.gridView && count > 0
-                                delegate: AlbumCard {
+                                // 歌曲卡片同样带收藏红心：列表/卡片墙两种视图都有入口
+                                delegate: Item {
                                     width: searchSongGrid.cellWidth
                                     height: searchSongGrid.cellHeight
-                                    title: model.title
-                                    subtitle: model.artist
-                                              + (model.album.length > 0 ? " · " + model.album : "")
-                                    cover: model.cover
-                                    badge: model.sourceName
-                                    accent: app.sourceColor(model.source)
-                                    onClicked: app.playResult(index)
+                                    AlbumCard {
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        title: model.title
+                                        subtitle: model.artist
+                                                  + (model.album.length > 0 ? " · " + model.album : "")
+                                        cover: model.cover
+                                        badge: model.sourceName
+                                        accent: app.sourceColor(model.source)
+                                        onClicked: app.playResult(index)
+                                    }
+                                    Rectangle {
+                                        width: 34
+                                        height: 34
+                                        radius: 17
+                                        anchors.top: parent.top
+                                        anchors.right: parent.right
+                                        anchors.margins: 6
+                                        color: songHeartMa.containsMouse
+                                               ? Qt.rgba(0, 0, 0, 0.25) : Qt.rgba(0, 0, 0, 0.12)
+                                        GlyphIcon {
+                                            name: model.favorite ? "heartFill" : "heart"
+                                            size: 16
+                                            anchors.centerIn: parent
+                                            color: model.favorite ? "#FB7185" : "#FFFFFF"
+                                        }
+                                        MouseArea {
+                                            id: songHeartMa
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: app.toggleFavoriteResult(index)
+                                        }
+                                    }
                                 }
                             }
 

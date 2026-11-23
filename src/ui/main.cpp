@@ -331,9 +331,31 @@ int main(int argc, char *argv[])
                 if (!wantSearch.isEmpty()) {
                     QObject *a = engine.rootContext()
                             ->contextProperty(QStringLiteral("app")).value<QObject *>();
+                    // FURUI_CAPTURE_SEARCH_TYPE=song|songlist：先切结果类型再搜
+                    // （searchType 持久化在设置里，默认 songlist = 歌单）
+                    const QString wantType = qEnvironmentVariable("FURUI_CAPTURE_SEARCH_TYPE");
+                    if (a && !wantType.isEmpty())
+                        QMetaObject::invokeMethod(a, "setSearchType",
+                                                  Q_ARG(QString, wantType));
                     if (a)
                         QMetaObject::invokeMethod(a, "search",
                                                   Q_ARG(QString, wantSearch), Q_ARG(QString, QString()));
+                    // 只调 app.search() 曲库页不会进搜索视图（searchMode 由根级
+                    // searchKeyword 驱动），要截搜索结果必须把关键词写回页面根项
+                    if (window->contentItem()) {
+                        std::function<bool(QQuickItem *)> seekSearch = [&seekSearch, &wantSearch](QQuickItem *it) -> bool {
+                            if (it->property("searchKeyword").isValid()
+                                && it->property("tabTitles").isValid()) {
+                                it->setProperty("searchKeyword", wantSearch);
+                                return true;
+                            }
+                            for (QQuickItem *c : it->childItems())
+                                if (seekSearch(c)) return true;
+                            return false;
+                        };
+                        for (QQuickItem *child : window->contentItem()->childItems())
+                            if (seekSearch(child)) break;
+                    }
                 }
                 // FURUI_CAPTURE_TAB_EARLY=<n>：在拉数据之前就把音乐库切到目标 Tab。
                 // 抓图那一刻才切 Tab 会让隐藏页面里的 Image 来不及完成异步加载，
