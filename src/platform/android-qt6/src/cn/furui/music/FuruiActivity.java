@@ -12,9 +12,9 @@ public class FuruiActivity extends org.qtproject.qt.android.bindings.QtActivity
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // 车机兼容版挂钩：该变体（applicationId 伪装包名）在 dex 里额外包含
-        // BydVoiceHelper，用于向比亚迪小迪语音登记；主流版不含此类，
-        // Class.forName 落空 → no-op，两个版本共用这份源码。
+        // 车机兼容版挂钩：该变体（包名 com.netease.cloudmusic.iot，车机上须先卸载
+        // 官方网易云）在 dex 里额外包含 BydVoiceHelper，用于向比亚迪小迪语音登记；
+        // 主流版不含此类，Class.forName 落空 → no-op，两个版本共用这份源码。
         try {
             Class<?> helper = Class.forName("cn.furui.music.BydVoiceHelper");
             helper.getMethod("register", android.content.Context.class)

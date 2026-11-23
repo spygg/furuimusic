@@ -220,13 +220,20 @@ if(ANDROID)
     # 这里显式传进去，保证「应用关于页显示的版本 = git tag」。
     math(EXPR FURUI_ANDROID_VERSION_CODE
          "${PROJECT_VERSION_MAJOR} * 10000 + ${PROJECT_VERSION_MINOR} * 100 + ${PROJECT_VERSION_PATCH}")
-    # 车机兼容版（仅测试）：-DFURUI_ANDROID_CAR_COMPAT=ON 出伪装包名的 APK。
-    # 用暂存目录做覆盖：基准包资源目录 + 换 manifest（包名 com.netease.cloudmusic
-    # + BYD 命令入口）+ 追加 Byd*.java。androiddeployqt 按 manifest 的 package
-    # 属性写 gradle 的 androidPackageName（namespace/applicationId），换 manifest
-    # 即完成包名伪装。主流构建（默认 OFF）路径完全不变。
+    # 车机兼容版（仅测试）：-DFURUI_ANDROID_CAR_COMPAT=ON 出网易云车机版包名的 APK。
+    # 用暂存目录做覆盖：基准包资源目录 + 换 manifest（包名
+    # com.netease.cloudmusic.iot + BYD 命令入口）+ 追加 Byd*.java。
+    # androiddeployqt 按 manifest 的 package 属性写 gradle 的 androidPackageName
+    # （namespace/applicationId），换 manifest 即完成包名切换。
+    # 小迪语音助手 MediaUtil.o 只接受白名单五项包名注册默认音乐：
+    # cn.kuwo.kwmusiccar / com.kugou.android.auto / com.ximalaya.ting.android.car /
+    # cmgyunting.vehicleplayer.cnr / com.netease.cloudmusic.iot。
+    # 选 .iot：网易云车机版靠 FUNCTION_UPDATE 进 MUSIC 组，且语音词表把
+    # 「网易云音乐」映射到它；央广云听空位被硬编码进 NEWS/RADIO，进不了默认列表。
+    # 车机上须先卸载官方网易云（同包名无法共存）；应用名保持「福瑞音乐」，
+    # 语音关键词仍是「网易云音乐」。主流构建（默认 OFF）不变。
     option(FURUI_ANDROID_CAR_COMPAT
-           "车机兼容测试版：包名伪装 com.netease.cloudmusic + BYD 小迪语音对接" OFF)
+           "车机兼容测试版：网易云车机版包名 com.netease.cloudmusic.iot + BYD 小迪语音对接" OFF)
     set(FURUI_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6")
     if(FURUI_ANDROID_CAR_COMPAT)
         set(FURUI_STAGED_PACKAGE_DIR "${CMAKE_BINARY_DIR}/android-package-src")
@@ -237,18 +244,18 @@ if(ANDROID)
                     "${FURUI_STAGED_PACKAGE_DIR}/AndroidManifest.xml")
         file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6-carcompat/src/"
              DESTINATION "${FURUI_STAGED_PACKAGE_DIR}/src")
-        # 应用名同步伪装：小迪按「网易云音乐」这个名字路由语音点歌，
-        # 只改包名不改 label 时广播不会发到本应用。
+        # 应用名改为「福瑞音乐」：车机设置里按包标签显示为福瑞音乐、可选为默认，
+        # 与官方版区分；语音按词表映射包名，关键词仍是「网易云音乐」。
         file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6-carcompat/res/"
              DESTINATION "${FURUI_STAGED_PACKAGE_DIR}/res")
         set(FURUI_PACKAGE_SOURCE_DIR "${FURUI_STAGED_PACKAGE_DIR}")
         # 编译期标识：UpdateChecker 用它把在线更新的下载资产切到特供包
-        # （特供版包名是伪装的网易云，收主流版 APK 装不上）。
+        # （特供版包名 com.netease.cloudmusic.iot，收主流版 APK 装不上）。
         # 必须挂在 FuruiCore 上：UpdateChecker.cpp 编进 FuruiCore 静态库，
         # 只加到 FuruiMusic 可执行目标的话，库里的 #ifdef 永远不成立，
         # 特供版仍会下载主流包（装不上）。PUBLIC 同时传播给链接它的 FuruiMusic。
         target_compile_definitions(FuruiCore PUBLIC FURUI_CAR_COMPAT_EDITION=1)
-        message(STATUS "车机兼容测试版：包名 com.netease.cloudmusic，BYD 对接已启用")
+        message(STATUS "车机兼容测试版：包名 com.netease.cloudmusic.iot，BYD 对接已启用")
     endif()
     set_target_properties(FuruiMusic PROPERTIES
         QT_ANDROID_PACKAGE_SOURCE_DIR "${FURUI_PACKAGE_SOURCE_DIR}"

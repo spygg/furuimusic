@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 车机兼容版：比亚迪小迪的语音路由按「默认音乐应用」名称识别，
-         官方只认 网易云 / 搜狗 / 酷我。本包 applicationId 已伪装为
-         com.netease.cloudmusic，应用名也必须同步伪装，否则语音点歌
-         （如「播放周杰伦的晴天」）不会投递到本应用。 -->
-    <string name="app_name">网易云音乐</string>
-    <string name="app_desc">网易云音乐车载版</string>
+    <!-- 车机兼容版: 包名用白名单内的网易云车机版 com.netease.cloudmusic.iot，
+         须先卸载官方网易云（同包名无法共存）。MediaUtil 白名单五项之一，
+         FUNCTION_UPDATE 注册经 o(pkg) 校验；网易云车机版本就靠这个包名 +
+         广播进 MUSIC 组，MediaSearch.m11684c() 又把「网易云音乐」硬编码映射到
+         它，说「打开网易云音乐」「播放晴天」才落到本应用。
+         应用名保持「福瑞音乐」：车机设置里按包标签显示为福瑞音乐、可选为默认。
+         注意语音是按词表映射包名、不是按应用名路由，系统词库不含「福瑞音乐」，
+         所以语音关键词只能是「网易云音乐」；也不要把应用名改成网易云音乐，
+         那样在设置里和官方版完全无法区分。 -->
+    <string name="app_name">福瑞音乐</string>
+    <string name="app_desc">福瑞音乐车机版</string>
 </resources>

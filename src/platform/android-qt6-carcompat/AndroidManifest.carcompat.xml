@@ -1,18 +1,33 @@
 <?xml version="1.0"?>
 <!-- 车机兼容版专用 manifest（仅测试用，不随主流版发布）。
 
-     与 platform/android-qt6/AndroidManifest.xml 的差异只有两处：
-       1) package="com.netease.cloudmusic" —— 伪装成网易云包名。
-          androiddeployqt 按 manifest 的 package 属性写 gradle 的
-          androidPackageName（namespace/applicationId），所以换 manifest 即完成
-          包名伪装，小迪按「发送方真实包名」查白名单就会放行。
-       2) 新增 cn.furui.music.BydControlReceiver —— 网易云车机版同款 34 个
-          com.byd.action.* / byd.intent.action.* 命令入口。
+     与 platform/android-qt6/AndroidManifest.xml 的差异：
+       1) package="com.netease.cloudmusic.iot" —— 小迪语音白名单内的网易云车机版
+          包名（语音助手 MediaUtil.f8201e 五项）：
+            cn.kuwo.kwmusiccar / com.kugou.android.auto /
+            com.ximalaya.ting.android.car / cmgyunting.vehicleplayer.cnr /
+            com.netease.cloudmusic.iot
+          选它要同时满足三道关卡，缺一不可：
+            a) 白名单：FUNCTION_UPDATE 注册经 MusicAppReceiver 的 MediaUtil.o(pkg)
+               校验，只有上表五项能写进默认音乐数据库；
+            b) 分类：网易云车机版本就靠 FUNCTION_UPDATE（EXTRA_APPLICATION_TYPE=MUSIC）
+               把本包名动态登记进 MUSIC 组，是被实车验证过的路径；央广云听空位
+               cmgyunting.vehicleplayer.cnr 却被系统硬编码进 NEWS/RADIO 组，
+               进不了「选择默认使用的音乐」弹窗，点歌始终走默认网易云；
+            c) 语音词：MediaSearch.m11684c() 把「网易云 / 网易云音乐」硬编码映射成
+               com.netease.cloudmusic.iot，说「打开网易云音乐」「播放晴天」才落到本应用。
+          因此车机上必须先卸载官方网易云（同包名无法共存），再由本特供包占据 .iot。
+          应用名保持「福瑞音乐」：车机设置里按包标签显示为福瑞音乐、可选为默认；
+          语音关键词仍是「网易云音乐」——系统词库不含「福瑞音乐」，这一项改不了。
+          曾用真实包名 cn.furui.music.car、伪装 com.netease.cloudmusic、央广云听空位，
+          分别因白名单 / 分类 / 词库不匹配而失败。
+       2) 新增 BydControlReceiver（老协议 34 个 action）与 BydMediaBridge.Receiver
+          （新协议 AUTOVOICE_COMMON_* / AUTOVOICE_MEDIA_REGISTER）两个命令入口。
 
      其余内容（权限/Activity/Service/Provider/背景事件开关）必须与主流版
      manifest 保持一致，发现主流 manifest 有改动时同步过来。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.netease.cloudmusic"
+    package="com.netease.cloudmusic.iot"
     android:installLocation="auto"
     android:versionCode="-- %%INSERT_VERSION_CODE%% --"
     android:versionName="-- %%INSERT_VERSION_NAME%% --">
@@ -130,6 +145,22 @@
                 <action android:name="com.byd.action.AUTOVOICE_QUALITY" />
                 <action android:name="com.byd.action.AUTOVOICE_PLAY_BOOK" />
                 <action android:name="com.byd.action.AUTOVOICE_PLAY_DOWNLOAD" />
+            </intent-filter>
+        </receiver>
+
+        <!-- BYD 新语音协议（汽水车机版同款）：注册广播 + control/operation/query。
+             该协议在部分车机版本不生效（汽水在这些车机上同样不被语音支持），
+             仅作兜底；主力是 BydVoiceHelper 的老协议 FUNCTION_UPDATE 登记。 -->
+        <receiver
+            android:name="cn.furui.music.BydMediaBridge$Receiver"
+            android:enabled="true"
+            android:exported="true"
+            android:priority="2147483646">
+            <intent-filter>
+                <action android:name="com.byd.action.AUTOVOICE_MEDIA_REGISTER" />
+                <action android:name="com.byd.action.AUTOVOICE_COMMON_CONTROL" />
+                <action android:name="com.byd.action.AUTOVOICE_COMMON_OPERATION" />
+                <action android:name="com.byd.action.AUTOVOICE_COMMON_QUERY" />
             </intent-filter>
         </receiver>
 

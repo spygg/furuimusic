@@ -1,16 +1,21 @@
 @echo off
 rem FuruiMusic CAR-COMPAT TEST APK - Qt 6.11.x + CMake (arm64-v8a, NDK 27, JDK 17)
 rem
-rem FOR TESTING ONLY. This variant impersonates com.netease.cloudmusic (BYD voice
-rem whitelist) and contains the Byd* voice integration classes. It must NOT be
-rem mixed with the mainstream release:
+rem FOR TESTING ONLY. This variant uses com.netease.cloudmusic.iot, the NetEase
+rem car app package inside the BYD voice whitelist (kuwo / kugou / ximalaya /
+rem cmgyunting / netease iot). FUNCTION_UPDATE registration is rejected for any
+rem other package, so com.netease.cloudmusic silently fails. Uninstall the official
+rem NetEase app FIRST: the same package name cannot coexist on one head unit.
+rem It contains the Byd* voice integration classes. The app LABEL stays
+rem "Furui Music" so it is distinguishable in car settings; the voice keyword
+rem stays "NetEase Cloud Music" (MediaSearch maps that name to this package).
+rem It must NOT be mixed with the mainstream release:
 rem   - builds in build\android_qt6_carcompat (separate gradle project / caches)
 rem   - signed APK lands in bin_android_carcompat\
 rem   - mainstream build remains src\scripts\build_android_qt6.bat -> bin_android\
 rem
 rem Installing this over the mainstream APK (or vice versa) is impossible by
-rem design: different applicationId. On the car, uninstall the genuine NetEase
-rem app first (same package name, different signature).
+rem design: different applicationId.
 setlocal
 set "ROOT=%~dp0..\.."
 set "SRC=%ROOT%\src"

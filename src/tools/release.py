@@ -34,7 +34,7 @@ DOWNLOAD_TEMPLATES = {
     "linux": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-linux-x86_64.AppImage",
     "macos": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-macos-x86_64.zip",
     "android": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-android-arm64-v8a.apk",
-    # 比亚迪车机特供版（包名伪装 com.netease.cloudmusic）：UpdateChecker 的
+    # 比亚迪车机特供版（伪装网易云车机版包名 com.netease.cloudmusic.iot）：UpdateChecker 的
     # FURUI_CAR_COMPAT_EDITION 构建读这个键；发 CI 双变体矩阵后每版都有此资产
     "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-carcompat-netease-arm64-v8a.apk",
 }

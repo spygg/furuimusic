@@ -261,6 +261,14 @@ public class MediaSessionService extends MediaBrowserService {
     /** MEDIA_BUTTON 广播是全系统广播：别的应用在放歌时不该被我们切歌。 */
     public static boolean hasAudioFocus() { return sFocused; }
 
+    // 当前播放状态快照：车机语音新协议（BydMediaBridge 的 query）用它回执
+    // getPlayStatus/getPlayContent/getPlayTime。主流版没有调用方，但读取静态
+    // 字段无副作用，两个变体共用这份源码。
+    public static boolean isPlaying() { return sPlaying; }
+    public static long currentPosition() { return sPosition; }
+    public static String currentTitle() { return sTitle; }
+    public static String currentArtist() { return sArtist; }
+
     @Override
     public void onCreate() {
         super.onCreate();

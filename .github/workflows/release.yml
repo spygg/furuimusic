@@ -260,8 +260,9 @@ jobs:
   # Qt 6 的 CMake 流程不签名（只交 android-build-release-unsigned.apk），
   # 这里用 CI 现场生成的 debug keystore 做 zipalign + apksigner，并 verify 复检。
   # 矩阵出两个变体：mainstream（cn.furui.music）与 carcompat（比亚迪特供，
-  # 包名伪装 com.netease.cloudmusic + BYD 小迪语音对接；与主流版互不可覆盖
-  # 安装，必须单独安装。详见 src/CMakeLists.txt 的 FURUI_ANDROID_CAR_COMPAT）。
+  # 用网易云车机版包名 com.netease.cloudmusic.iot + BYD 小迪语音对接；应用名仍为
+  # 「福瑞音乐」供车机设置里区分，语音关键词是「网易云音乐」，须先卸载官方网易云）。
+  # 详见 src/CMakeLists.txt 的 FURUI_ANDROID_CAR_COMPAT）。
   # ==========================================================================
   build-android:
     name: ${{ matrix.variant.label }}
@@ -282,7 +283,7 @@ jobs:
             car: '1'
             artifact: FuruiMusic-carcompat-netease-arm64-v8a.apk
             group: android-carcompat-arm64-v8a
-            pkg: com.netease.cloudmusic
+            pkg: com.netease.cloudmusic.iot
     env:
       # Qt 6.8.3 与 macOS job 同版，install-qt-action 可直接安装；本机脚本默认
       # 6.11.1 + NDK 27，CI 通过环境变量覆盖成这一套已发布的兼容组合。

@@ -1,15 +1,22 @@
 // 福瑞音乐 - 车机兼容版专用：比亚迪小迪语音登记 / 状态上报 / 日志桥
 //
-// 本文件只打进车机兼容版 APK（applicationId 伪装为 com.netease.cloudmusic），
+// 本文件只打进车机兼容版 APK（applicationId 用白名单内的网易云车机版包名
+// com.netease.cloudmusic.iot；应用名保持「福瑞音乐」，车机设置里按包标签显示
+// 福瑞音乐、可选为默认），车机上须先卸载官方网易云（同包名无法共存）。
 // 主流版不包含此类；FuruiActivity / MediaSessionService 通过 Class.forName
 // 反射挂钩，类缺失时静默跳过（no-op），两个版本互不影响。
 //
-// 协议来自 reference/netease_car 反编译（网易云车机版）：
+// 协议来自 reference/byd_car_extract 反编译（网易云车机版 + 小迪语音助手）：
 //   登记：向系统属性 persist.sys.autovoice.pkgName 指定的语音助手包发
 //         com.byd.action.FUNCTION_UPDATE，extras 为 EXTRA_PACKAGE_NAME /
 //         EXTRA_APPLICATION_TYPE=MUSIC / ISCONTROL=TRUE / EXTRA_SERVICE_NAME。
-//         车机按「发送方真实包名」查白名单（比亚迪音乐助手占用酷狗/酷我包名
-//         可用即为实证），所以伪装包名后此登记应能被接受。
+//         语音助手 MusicAppReceiver 会先过 MediaUtil.o(pkg)，只接受白名单五项
+//         （cn.kuwo.kwmusiccar / com.kugou.android.auto /
+//         com.ximalaya.ting.android.car / cmgyunting.vehicleplayer.cnr /
+//         com.netease.cloudmusic.iot）；com.netease.cloudmusic 不在表内会被丢弃。
+//         选 .iot 还因为语音词表 MediaSearch.m11684c() 把「网易云音乐」硬编码
+//         映射到这个包名，且网易云车机版正是靠此广播进 MUSIC 组（央广云听空位
+//         被硬编码进 NEWS/RADIO，进不了默认音乐列表）。
 //   上报：com.byd.action.NOTIFY_AUTOVOICE_CURRENT_STATE，extras 为
 //         EXTRA_PLAY_STATE(STATE_PLAY/STATE_PAUSE) / EXTRA_PROGRAM_NAME /
 //         EXTRA_ARTIST_NAME。
@@ -42,20 +49,31 @@ public final class BydVoiceHelper {
             String pkg = app.getPackageName();
             sVoicePkg = readSystemProperty("persist.sys.autovoice.pkgName");
             log("register pkg=" + pkg + " voicePkg=" + sVoicePkg);
+
+            // 老协议 FUNCTION_UPDATE 是网易云车机版实证有效的注册方式，也是
+            // 「加入默认应用列表」的入口（其源码日志原文：apply to join the
+            // default application list）。车机按发送方真实包名登记，必须发。
+            // 注意网易云在系统属性缺失时兜底用 com.byd.autovoice（C9548a.m25578b
+            // 的默认参数），这里保持一致，绝不能因属性为空而跳过注册。
             if (sVoicePkg == null || sVoicePkg.isEmpty()) {
-                log("voicePkg empty, skip FUNCTION_UPDATE");
-                return;
+                sVoicePkg = "com.byd.autovoice";
+                log("voicePkg empty, fallback to com.byd.autovoice");
             }
             Intent intent = new Intent("com.byd.action.FUNCTION_UPDATE");
             intent.setPackage(sVoicePkg);
             intent.putExtra("EXTRA_PACKAGE_NAME", pkg);
             intent.putExtra("EXTRA_APPLICATION_TYPE", "MUSIC");
             intent.putExtra("ISCONTROL", "TRUE");
-            // 网易云填的是其 BydBroadcastService；我们没有对应的前台服务，
+            // 网易云填的是其 BydBroadcastService；我们没有对应的广播服务，
             // 填 MediaSessionService（真实存在的前台服务）让车机记录的组件有效
             intent.putExtra("EXTRA_SERVICE_NAME", "cn.furui.music.MediaSessionService");
             app.sendBroadcast(intent);
-            log("FUNCTION_UPDATE sent");
+            log("FUNCTION_UPDATE sent to " + sVoicePkg);
+
+            // 新协议 AIDL 注册保留作兜底：汽水车机版走这套，但该协议在部分车机
+            // 版本上不生效（汽水在这些车机上同样不被语音支持）。它失败不影响
+            // 上面的老协议注册，故放在其后、异步 bindService。
+            BydMediaBridge.register(app);
         } catch (Throwable t) {
             Log.w(TAG, "register failed", t);
         }
@@ -96,7 +114,7 @@ public final class BydVoiceHelper {
 
     /**
      * 三处日志之一：logcat + 落盘。车机上连不了 adb 时，用户可从
-     * Android/data/com.netease.cloudmusic/files/logs/byd-voice.log 拿到证据。
+     * Android/data/com.netease.cloudmusic.iot/files/logs/byd-voice.log 拿到证据。
      */
     static void log(String msg) {
         Log.w(TAG, msg);

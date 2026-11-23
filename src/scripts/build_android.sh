@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # 福瑞音乐 - Android APK（Qt 6 + CMake，Linux/macOS 主机；Windows 用 build_android_qt6.bat）
-# 车机兼容测试版：FURUI_CAR_COMPAT=1 时构建包名伪装 com.netease.cloudmusic +
-# BYD 小迪语音对接的变体（独立构建目录 build/android_qt6_carcompat，产物与主流版
-# 互不可覆盖安装；详见 src/CMakeLists.txt 的 FURUI_ANDROID_CAR_COMPAT 说明）。
+# 车机兼容测试版：FURUI_CAR_COMPAT=1 时构建网易云车机版包名
+# com.netease.cloudmusic.iot + BYD 小迪语音对接的变体（独立构建目录
+# build/android_qt6_carcompat，产物与主流版互不可覆盖安装）；车机上须先卸载官方
+# 网易云。应用名「福瑞音乐」供设置里区分，语音关键词仍是「网易云音乐」。
+# 详见 src/CMakeLists.txt）。
 set -e
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/src"
@@ -18,7 +20,7 @@ EXTRA=""
 if [ "${FURUI_CAR_COMPAT:-0}" = "1" ]; then
     BUILD_DIR="$ROOT/build/android_qt6_carcompat"
     EXTRA="-DFURUI_ANDROID_CAR_COMPAT=ON"
-    echo "[carcompat] 车机兼容测试版：包名 com.netease.cloudmusic，BYD 对接已启用"
+    echo "[carcompat] 车机兼容测试版：包名 com.netease.cloudmusic.iot，BYD 对接已启用"
 fi
 
 # Qt6AndroidMacros 读的是 CMake 变量 ANDROID_SDK_ROOT（不是环境变量），

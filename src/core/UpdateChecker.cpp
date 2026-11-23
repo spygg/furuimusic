@@ -70,8 +70,8 @@ constexpr int kManifestTimeoutMs = 8000;
 
 // CI（.github/workflows/release.yml）上传到 Release 的产物命名，下载直链按它拼。
 // 车机兼容版（FURUI_CAR_COMPAT_EDITION，CMake 在 FURUI_ANDROID_CAR_COMPAT=ON 时
-// 注入）必须下特供包：包名是伪装的 com.netease.cloudmusic，主流版 APK 装不上
-// （装上也会变成第二个应用），绝不能把主流版推给它。
+// 注入）必须下特供包：包名是网易云车机版 com.netease.cloudmusic.iot，主流版
+// APK 装不上（装上也会变成第二个应用），绝不能把主流版推给它。
 QString androidAssetName()
 {
 #ifdef FURUI_CAR_COMPAT_EDITION
@@ -208,9 +208,9 @@ bool androidInstallApk(const QString &path)
     QJniObject context = QNativeInterface::QAndroidApplication::context();
     if (!context.isValid())
         return false;
-    // manifest 里 authority = ${applicationId}.qtprovider。车机伪装版 applicationId 是
-    // com.netease.cloudmusic，写死 cn.furui.music.qtprovider 会让 getUriForFile 找不到
-    // provider 抛异常 → 更新包装不上。按运行时包名拼，主流/伪装版都正确。
+    // manifest 里 authority = ${applicationId}.qtprovider。车机特供版 applicationId 是
+    // com.netease.cloudmusic.iot，写死 cn.furui.music.qtprovider 会让 getUriForFile
+    // 找不到 provider 抛异常 → 更新包装不上。按运行时包名拼，主流/特供版都正确。
     const QJniObject pkgObj = context.callObjectMethod("getPackageName", "()Ljava/lang/String;");
     const QString pkg = pkgObj.toString();
     const QString authority = (pkg.isEmpty() ? QStringLiteral("cn.furui.music") : pkg)
