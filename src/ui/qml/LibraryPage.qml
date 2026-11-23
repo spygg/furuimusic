@@ -231,6 +231,19 @@ Item {
         root.discoveryTitle = title
     }
 
+    // ---- 搜索结果「加入歌单」选择弹层（lx-music-mobile 式）----
+    // 记录待加入的歌曲行号（app.results 里的下标），弹层里点歌单或新建后调用
+    // app.addResultToPlaylist(index, uid)。
+    property int pickerSongIndex: -1
+    property string pickerSongTitle: ""
+
+    function openPlaylistPicker(index) {
+        root.pickerSongIndex = index
+        root.pickerSongTitle = app.resultTitle(index)
+        pickerNewName.text = ""
+        pickerPopup.open()
+    }
+
     // 兜底：接口彻底没回包（网络挂掉/榜单 id 失效）时别让头部一直停在「载入中…」
     Timer {
         id: detailTimeout
@@ -1000,6 +1013,7 @@ Item {
                                 onPlayRequested: app.playResult(index)
                                 onFavoriteRequested: app.toggleFavoriteResult(index)
                                 onAddRequested: app.addResultToQueue(index)
+                                onAddToPlaylistRequested: root.openPlaylistPicker(index)
                                 onMvRequested: app.playMv(index)
                                 onDownloadRequested: app.downloadResult(index)
                                 showDownload: true
@@ -1551,6 +1565,7 @@ Item {
                                 onPlayRequested: app.playResult(index)
                                 onFavoriteRequested: app.toggleFavoriteResult(index)
                                 onAddRequested: app.addResultToQueue(index)
+                                onAddToPlaylistRequested: root.openPlaylistPicker(index)
                                 onMvRequested: app.playMv(index)
                                 onDownloadRequested: app.downloadResult(index)
                                 showDownload: true
@@ -1922,6 +1937,7 @@ Item {
                                     onPlayRequested: app.playResult(index)
                                     onFavoriteRequested: app.toggleFavoriteResult(index)
                                     onAddRequested: app.addResultToQueue(index)
+                                    onAddToPlaylistRequested: root.openPlaylistPicker(index)
                                     onMvRequested: app.playMv(index)
                                     onDownloadRequested: app.downloadResult(index)
                                 }
@@ -1961,6 +1977,7 @@ Item {
                                 model: app.searchPlaylists
                                 visible: !searchView.songMode && !root.gridView && count > 0
                                 delegate: Rectangle {
+                                    id: plDelegate
                                     width: searchPlaylistList.width
                                     height: Math.max(68, theme.touchMin + 20)
                                     radius: 12
@@ -1978,6 +1995,28 @@ Item {
                                             root.openPlaylistTitle = model.title
                                             root.tabIndex = 0
                                             app.loadPlaylist(model.uid)
+                                        }
+                                    }
+
+                                    // 收藏歌单到「我的歌单」：lx-music-mobile 式，
+                                    // 点按钮不触发整行打开；已收藏的显示实心
+                                    property bool collected: app.playlistsEpoch >= 0
+                                                             && app.isPlaylistCollected(model.uid)
+                                    Item {
+                                        Layout.preferredWidth: theme.touchMin
+                                        Layout.preferredHeight: theme.touchMin
+                                        Layout.alignment: Qt.AlignVCenter
+                                        GlyphIcon {
+                                            name: plDelegate.collected ? "heartFill" : "heart"
+                                            size: 18
+                                            anchors.centerIn: parent
+                                            color: plDelegate.collected ? "#e64c4c" : root.cSub
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: app.collectSearchPlaylist(index)
                                         }
                                     }
 
@@ -2078,4 +2117,137 @@ Item {
             elide: Text.ElideRight
         }
     }       // ColumnLayout
+
+    // ---- 「加入歌单」弹层：列出我的歌单，支持就地新建 ----
+    Popup {
+        id: pickerPopup
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(420, root.width - 48)
+        height: Math.min(500, root.height - 96)
+        modal: true
+        dim: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle {
+            color: theme.card
+            border.color: theme.line
+            border.width: 1
+            radius: theme.radiusLg
+        }
+        contentItem: ColumnLayout {
+            spacing: theme.spaceSm
+
+            Label {
+                text: root.pickerSongTitle.length > 0
+                      ? "把「" + root.pickerSongTitle + "」加入歌单"
+                      : "加入歌单"
+                font.pixelSize: theme.fontLg
+                font.weight: Font.DemiBold
+                color: theme.text
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+            }
+
+            ListView {
+                id: pickerList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: 4
+                model: app.playlists
+                delegate: Rectangle {
+                    width: pickerList.width
+                    height: Math.max(52, theme.touchMin)
+                    radius: 10
+                    color: pickerMa.pressed ? theme.cardHover : "transparent"
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 10
+
+                        Rectangle {
+                            Layout.preferredWidth: 38
+                            Layout.preferredHeight: 38
+                            radius: 9
+                            clip: true
+                            color: Qt.rgba(app.sourceColor(model.source).r,
+                                           app.sourceColor(model.source).g,
+                                           app.sourceColor(model.source).b, 0.12)
+                            Text {
+                                anchors.centerIn: parent
+                                visible: model.cover === ""
+                                text: "♪"
+                                color: app.sourceColor(model.source)
+                                font.pixelSize: 15
+                            }
+                            Image {
+                                anchors.fill: parent
+                                visible: model.cover !== ""
+                                source: model.cover
+                                fillMode: Image.PreserveAspectCrop
+                                asynchronous: true
+                            }
+                        }
+                        Text {
+                            text: model.title
+                            color: theme.text
+                            font.pixelSize: theme.fontMd
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
+                        Text {
+                            text: model.count > 0 ? model.count + " 首" : ""
+                            color: theme.subText
+                            font.pixelSize: theme.fontSm
+                        }
+                    }
+                    MouseArea {
+                        id: pickerMa
+                        anchors.fill: parent
+                        onClicked: {
+                            app.addResultToPlaylist(root.pickerSongIndex, model.uid)
+                            pickerPopup.close()
+                        }
+                    }
+                }
+
+                // 没有任何歌单时的空态
+                Text {
+                    anchors.centerIn: parent
+                    visible: pickerList.count === 0
+                    text: "还没有歌单，在下方新建一个吧"
+                    color: theme.subText
+                    font.pixelSize: theme.fontSm
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: theme.spaceSm
+
+                TextField {
+                    id: pickerNewName
+                    Layout.fillWidth: true
+                    placeholderText: "新建歌单名称…"
+                    font.pixelSize: theme.fontMd
+                    color: theme.text
+                    selectByMouse: true
+                    onAccepted: pickerCreateBtn.clicked()
+                }
+                Button {
+                    id: pickerCreateBtn
+                    text: "新建"
+                    highlighted: true
+                    onClicked: {
+                        const uid = app.createMyPlaylist(pickerNewName.text)
+                        if (uid !== "") {
+                            app.addResultToPlaylist(root.pickerSongIndex, uid)
+                            pickerPopup.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
 }           // root

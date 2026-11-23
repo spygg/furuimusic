@@ -326,6 +326,18 @@ public:
     Q_INVOKABLE void playResult(int index);
     Q_INVOKABLE void playQueue(int index);
     Q_INVOKABLE void addResultToQueue(int index);
+    // 搜索结果加入「我的歌单」：歌曲行尾的加入歌单入口（弹出歌单选择后调用）。
+    // 参见 lx-music-mobile：搜索到的歌单也可以整体收藏成本地歌单。
+    Q_INVOKABLE void addResultToPlaylist(int index, const QString &playlistUid);
+    Q_INVOKABLE void collectSearchPlaylist(int index);
+    Q_INVOKABLE QString createMyPlaylist(const QString &title);
+    Q_INVOKABLE bool isPlaylistCollected(const QString &playlistUid) const;
+    // 搜索结果第 index 首的歌名（「加入歌单」弹层标题用；越界返回空串）
+    Q_INVOKABLE QString resultTitle(int index) const;
+    // 收藏动作后自增，驱动 QML 里 isPlaylistCollected 的绑定重新求值
+    // （Q_INVOKABLE 调用没有内建依赖跟踪，需要显式的可观察信号）
+    Q_PROPERTY(int playlistsEpoch READ playlistsEpoch NOTIFY playlistsLoaded)
+    int playlistsEpoch() const { return m_playlistsEpoch; }
     Q_INVOKABLE void addPlaylistToQueue(const QString &playlistUid);
     Q_INVOKABLE void toggleFavoriteResult(int index);
     Q_INVOKABLE void toggleFavoriteQueue(int index);
@@ -506,6 +518,8 @@ private:
     int m_commentTotal = -1;
     bool m_commentsLoading = false;
     QString m_commentSourceName;
+    // 我的歌单版本号：收藏/新建/加入歌单后自增（见 playlistsEpoch 属性）
+    int m_playlistsEpoch = 0;
     // 评论请求代次：切歌/重开评论时作废旧回包，避免上一首歌的评论写进当前歌
     quint64 m_commentsGen = 0;
     static AppController *s_instance;

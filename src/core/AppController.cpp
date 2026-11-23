@@ -10,6 +10,7 @@
 #include <QPair>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QUuid>
 #include <QSslSocket>
 #include <QSet>
 #include <QTimer>
@@ -1218,6 +1219,12 @@ void AppController::loadPlaylist(const QString &playlistUid)
         for (const Playlist &p : Library::instance()->playlists())
             if (p.uid == playlistUid) { target = p; break; }
     }
+    // 搜索结果里的歌单（如搜歌手名出来的精选歌单）不在「我的歌单/本地库」，
+    // 也必须能点开：从搜索歌单模型里补一次查找，否则永远弹「未找到该歌单」。
+    if (target.uid.isEmpty() && m_searchPlaylists) {
+        for (const Playlist &p : m_searchPlaylists->playlists())
+            if (p.uid == playlistUid) { target = p; break; }
+    }
     if (target.uid.isEmpty()) { emit toast(QStringLiteral("未找到该歌单")); return; }
 
     // 本次歌单打开作废旧请求：用户可能连续点开多个歌单，慢的那个不能覆盖最后点的
@@ -1336,7 +1343,9 @@ void AppController::applyPlaylistFilter()
     if (!d->playlistFilter.isEmpty()) {
         QVector<Playlist> filtered;
         for (const Playlist &p : list)
-            if (p.source == d->playlistFilter) filtered << p;
+            // 用户自建歌单（source=local）不属于任何平台，任何筛选下都保留
+            if (p.source == d->playlistFilter || p.source == QLatin1String("local"))
+                filtered << p;
         list = filtered;
     }
     m_playlists->setPlaylists(list);
@@ -1376,8 +1385,23 @@ void AppController::appendDefaultBoards(const QString &sourceId,
 
 void AppController::refreshPlaylists()
 {
+    ++m_playlistsEpoch;
     applyPlaylistFilter();
     emit playlistsLoaded();
+}
+
+bool AppController::isPlaylistCollected(const QString &playlistUid) const
+{
+    for (const Playlist &p : Library::instance()->playlists())
+        if (p.uid == playlistUid) return true;
+    return false;
+}
+
+QString AppController::resultTitle(int index) const
+{
+    const QVector<Song> &songs = m_results->songs();
+    if (index < 0 || index >= songs.size()) return QString();
+    return songs.at(index).title;
 }
 
 void AppController::refreshAccounts() { syncAccountModel(); }
@@ -1891,6 +1915,87 @@ void AppController::addPlaylistToQueue(const QString &playlistUid)
     if (songs.isEmpty()) { emit toast(QStringLiteral("该歌单暂无本地缓存，请先打开一次")); return; }
     PlayerController::instance()->addQueue(songs);
     emit toast(QStringLiteral("已把歌单加入播放队列"));
+}
+
+// 搜索结果的歌曲加入「我的歌单」（歌单选择弹层选中后调用）。
+// 歌追加到本地缓存歌曲表并更新歌单 count；账号同步的歌单下次同步仍以云端为准。
+void AppController::addResultToPlaylist(int index, const QString &playlistUid)
+{
+    const QVector<Song> &songs = m_results->songs();
+    if (index < 0 || index >= songs.size()) return;
+    const Song s = songs.at(index);
+
+    Playlist target;
+    for (const Playlist &p : m_playlists->playlists())
+        if (p.uid == playlistUid) { target = p; break; }
+    if (target.uid.isEmpty()) {
+        for (const Playlist &p : Library::instance()->playlists())
+            if (p.uid == playlistUid) { target = p; break; }
+    }
+    if (target.uid.isEmpty()) { emit toast(QStringLiteral("未找到该歌单")); return; }
+
+    QVector<Song> cur = Library::instance()->playlistSongs(target.uid);
+    for (const Song &e : cur) {
+        if (!s.uid.isEmpty() && e.uid == s.uid) {
+            emit toast(QStringLiteral("已在歌单「%1」里").arg(target.title));
+            return;
+        }
+    }
+    cur.append(s);
+    Library::instance()->saveSongs(QVector<Song>() << s);
+    Library::instance()->setPlaylistSongs(target.uid, cur);
+    if (target.count < cur.size()) {
+        target.count = cur.size();
+        Library::instance()->savePlaylist(target);
+    }
+    refreshPlaylists();
+    emit toast(QStringLiteral("已加入歌单「%1」").arg(target.title));
+}
+
+// 收藏搜索结果里的歌单到「我的歌单」（lx-music-mobile 式）：歌单元数据立刻落库，
+// 歌曲后台拉取缓存——离线也能打开；拉取失败不打扰，打开时会再走网络补全。
+void AppController::collectSearchPlaylist(int index)
+{
+    if (!m_searchPlaylists) return;
+    const QVector<Playlist> &list = m_searchPlaylists->playlists();
+    if (index < 0 || index >= list.size()) return;
+    Playlist p = list.at(index);
+
+    for (const Playlist &e : Library::instance()->playlists()) {
+        if (e.uid == p.uid) {
+            emit toast(QStringLiteral("歌单「%1」已在「我的歌单」里").arg(p.title));
+            return;
+        }
+    }
+    p.type = QStringLiteral("custom");
+    Library::instance()->savePlaylist(p);
+    refreshPlaylists();
+    emit toast(QStringLiteral("已收藏歌单「%1」").arg(p.title));
+
+    SourceManager::instance()->playlistDetail(p, [this, p](const QVector<Song> &songs) {
+        if (songs.isEmpty()) return;
+        Library::instance()->saveSongs(songs);
+        Library::instance()->setPlaylistSongs(p.uid, songs);
+    });
+}
+
+// 新建空歌单：uid 用 randomUUID 防撞，type=custom 走本地歌单路径。
+QString AppController::createMyPlaylist(const QString &title)
+{
+    const QString t = title.trimmed();
+    if (t.isEmpty()) { emit toast(QStringLiteral("歌单名不能为空")); return QString(); }
+
+    Playlist p;
+    p.uid = QStringLiteral("local:%1")
+                .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    p.source = QStringLiteral("local");
+    p.title = t;
+    p.type = QStringLiteral("custom");
+    p.count = 0;
+    Library::instance()->savePlaylist(p);
+    refreshPlaylists();
+    emit toast(QStringLiteral("已创建歌单「%1」").arg(t));
+    return p.uid;
 }
 
 void AppController::toggleFavoriteResult(int index)

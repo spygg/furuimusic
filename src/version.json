@@ -1,7 +1,11 @@
 {
-  "version": "1.4.44",
-  "desc": "新增\n- 网页端播放页与底部播放条在「下一首」旁新增下载按钮，可直接把正在听的歌另存到本地\n- 桌面端点关闭按钮（✕）时询问「最小化到托盘 / 退出」，可勾选记住选择不再询问；托盘常驻图标可恢复窗口或退出\n\n优化\n- 桌面端默认下载目录改为程序所在目录下的「下载」文件夹，文件管理器里一眼能找到（已自定义过下载目录则不变）\n\n修复\n- 网页端频繁提示「音源加载失败」：音频代理改为按需实时取链 + 短时缓存，直链被防盗链过期拒绝时自动换新链重试，不再复用可能已过期的旧直链\n- Android 断开蓝牙/拔出耳机立即暂停播放（AUDIO_BECOMING_NOISY），避免声音突然切到扬声器外放",
+  "version": "1.4.45",
+  "desc": "新增\n- 搜索结果支持收藏沉淀：歌曲「更多」菜单新增「加入歌单」，可在弹层里选我的歌单或就地新建；搜索出来的歌单行尾新增心形按钮，一键收藏到「我的歌单」（歌曲自动后台缓存，离线也能打开）\n\n修复\n- 状态栏图标颜色偶发不可见（时间/电量/信号消失）：① App 从后台恢复时 Android 会重置窗口图标色标志，回前台自动重新同步；② MV 全屏页恒黑背景但亮色主题下状态栏是深色图标，进 MV 强制浅色图标、退出恢复跟随主题\n- 搜索歌手名出来的歌单点不开/播放不了：搜索结果歌单不在「我的歌单」列表里，打开时永远提示「未找到该歌单」；现改为从搜索歌单模型里一并查找",
   "history": [
+    {
+      "version": "1.4.44",
+      "desc": "新增\n- 网页端播放页与底部播放条在「下一首」旁新增下载按钮，可直接把正在听的歌另存到本地\n- 桌面端点关闭按钮（✕）时询问「最小化到托盘 / 退出」，可勾选记住选择不再询问；托盘常驻图标可恢复窗口或退出\n\n优化\n- 桌面端默认下载目录改为程序所在目录下的「下载」文件夹，文件管理器里一眼能找到（已自定义过下载目录则不变）\n\n修复\n- 网页端频繁提示「音源加载失败」：音频代理改为按需实时取链 + 短时缓存，直链被防盗链过期拒绝时自动换新链重试，不再复用可能已过期的旧直链\n- Android 断开蓝牙/拔出耳机立即暂停播放（AUDIO_BECOMING_NOISY），避免声音突然切到扬声器外放"
+    },
     {
       "version": "1.4.43",
       "desc": "优化\n- 收紧曲库 / 账号 / 设置 / 播放页顶部内边距，页面内容更紧凑；挖孔屏安全区留白保持不变，不受影响\n\n新增\n- 播放页封面下方歌词速览扩为「上一句 / 当前句 / 下一句」三行，当前句加粗高亮、上下句压暗渐隐，无歌词时不占位\n\n修复\n- 曲库搜索框在 ColorOS / MIUI 等国产 ROM 上弹「安全键盘」无法输入中文：去掉被误判成密码框的输入法提示（内置浏览器地址栏同样处理）\n- 播放 MV 时点画面无反应：触屏 / 鼠标单击画面即可暂停或继续播放，双击仍全屏退出\n- 内置浏览器点「打开」完全无反应：BrowserWindow.qml 写了两个同名 onVisibleChanged，Qt 6.11 下整个组件编译失败、覆盖层从未创建；已合并为单个处理器"
@@ -192,10 +196,10 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.44/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.44/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.44/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.44/FuruiMusic-android-arm64-v8a.apk",
-    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.44/FuruiMusic-carcompat-netease-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.45/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.45/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.45/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.45/FuruiMusic-android-arm64-v8a.apk",
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.45/FuruiMusic-carcompat-netease-arm64-v8a.apk"
   }
 }

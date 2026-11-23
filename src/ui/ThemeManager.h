@@ -91,6 +91,13 @@ public:
     bool systemDark() const { return m_systemDark; }
     bool systemThemeSupported() const;
 
+    // 深色页面（MV 全屏）打开时强制状态栏用浅色图标，关闭时恢复跟随主题。
+    // -1 = 跟随主题（默认）；0 = 强制深色图标；1 = 强制浅色图标。
+    Q_PROPERTY(int statusBarOverride READ statusBarOverride WRITE setStatusBarOverride
+               NOTIFY statusBarOverrideChanged)
+    int statusBarOverride() const { return m_statusBarOverride; }
+    void setStatusBarOverride(int override);
+
     // ---- 配色对齐 AlgerMusicPlayer（品牌绿 #22C55E + 白/黑干净的底）----
     QColor bg() const { return isDark() ? QColor("#0E0E10") : QColor("#FFFFFF"); }
     QColor surface() const { return isDark() ? QColor("#17171A") : QColor("#FFFFFF"); }
@@ -155,6 +162,7 @@ signals:
     void modeChanged();
     void paletteChanged();
     void systemDarkChanged();
+    void statusBarOverrideChanged();
     void metricsChanged();
     void lyricFontScaleChanged();
     void coverLyricBackgroundChanged();
@@ -171,6 +179,7 @@ private:
 
     QString m_mode;
     bool m_systemDark = false;
+    int m_statusBarOverride = -1;   // -1 跟随主题；深色页面（MV）打开时置 1
     QTimer m_watch;
     qreal m_uiScale = 1.0;
     int m_lyricFontScale = 100;

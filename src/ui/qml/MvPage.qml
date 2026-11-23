@@ -14,6 +14,11 @@ Rectangle {
     id: root
     color: "#000000"
 
+    // MV 全屏恒黑：亮色主题下状态栏是深色图标，压在黑底上时间/电量全都看不见。
+    // 外壳用 opacity+enabled 控制 MV 显隐（不能动 visible，Android 会销毁 video
+    // sink），所以监听 enabled：进 MV 强制浅色图标，退出恢复跟随主题。
+    onEnabledChanged: theme.statusBarOverride = enabled ? 1 : -1
+
     signal requestClose()
 
     property string mvTitle: ""

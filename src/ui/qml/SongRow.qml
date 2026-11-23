@@ -43,6 +43,7 @@ Rectangle {
         var m = []
         if (showFavorite) m.push("favorite")
         if (showAdd) m.push("add")
+        if (showAdd) m.push("addToPlaylist")
         if (showMv) m.push("mv")
         if (downloadAllowed) m.push("download")
         if (showRemove) m.push("remove")
@@ -52,6 +53,7 @@ Rectangle {
     function triggerAction(kind) {
         if (kind === "favorite") favoriteRequested()
         else if (kind === "add") addRequested()
+        else if (kind === "addToPlaylist") addToPlaylistRequested()
         else if (kind === "mv") mvRequested()
         else if (kind === "download") downloadRequested()
         else if (kind === "remove") removeRequested()
@@ -60,6 +62,7 @@ Rectangle {
     function actionLabel(kind) {
         if (kind === "favorite") return root.favorite ? "取消收藏" : "收藏"
         if (kind === "add") return root.inQueue ? "从播放队列移除" : "加入播放队列"
+        if (kind === "addToPlaylist") return "加入歌单…"
         if (kind === "mv") return "播放 MV"
         if (kind === "download") return "下载到本地"
         return "从播放队列移除"
@@ -68,6 +71,7 @@ Rectangle {
     signal playRequested()
     signal favoriteRequested()
     signal addRequested()
+    signal addToPlaylistRequested()
     signal mvRequested()
     signal downloadRequested()
     signal removeRequested()

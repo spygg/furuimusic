@@ -53,6 +53,25 @@ ThemeManager::ThemeManager(QObject *parent) : QObject(parent)
     updateWatch();
     // 构造时 Activity/Window 可能还没 attach，延迟到窗口就绪后再设一次状态栏图标色。
     QTimer::singleShot(600, this, [this] { syncStatusBarIcons(); });
+#if defined(Q_OS_ANDROID)
+    // App 从后台恢复时 Android 会重置窗口的 system-bars appearance 标志
+    // （切后台→系统深浅色切换→回前台，图标色就错了），回前台必须重设一次。
+    connect(qGuiApp, &QGuiApplication::applicationStateChanged, this,
+            [this](Qt::ApplicationState state) {
+        if (state == Qt::ApplicationActive)
+            syncStatusBarIcons();
+    });
+#endif
+}
+
+void ThemeManager::setStatusBarOverride(int override)
+{
+    const int clamped = (override == 0 || override == 1) ? override : -1;
+    if (clamped == m_statusBarOverride)
+        return;
+    m_statusBarOverride = clamped;
+    emit statusBarOverrideChanged();
+    syncStatusBarIcons();
 }
 
 void ThemeManager::setLyricFontScale(int scale)
@@ -199,7 +218,9 @@ void ThemeManager::syncStatusBarIcons() const
     // 参考 legado 的 setLightStatusBar：浅色主题（背景白）用「深色图标」，
     // 深色主题（背景黑）用「浅色图标」。全面屏让出状态栏后若图标颜色与背景同色，
     // 时间/信号/电量就看不见。必须在 Android 主线程操作 Window/DecorView。
-    const bool lightIcons = !isDark();   // true = 深色图标（LIGHT_STATUS_BAR）
+    // 深色页面（MV 全屏）打开时走 override 强制浅色图标，否则黑底上什么都看不见。
+    const bool lightIcons = m_statusBarOverride >= 0
+                                ? m_statusBarOverride == 1 : !isDark();
     QNativeInterface::QAndroidApplication::runOnAndroidMainThread([lightIcons] {
         const QJniObject activity = QJniObject::callStaticObjectMethod(
             "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
