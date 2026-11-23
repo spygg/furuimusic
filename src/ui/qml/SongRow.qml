@@ -25,6 +25,9 @@ Rectangle {
     property bool showAdd: true
     property bool showFavorite: true
     property bool showDownload: false
+    // 下载入口只保留桌面端与网页端：Android/车机不提供（文件落应用私有目录难取用，
+    // 同类播放器移动端也普遍不带下载；网页端走开放 API /download 代理另存不受影响）
+    readonly property bool downloadAllowed: showDownload && platform.isDesktop
     property bool showRemove: false
     // 该行是否提供「播放 MV」入口（由使用处按平台的 MV 支持情况传入）
     property bool showMv: false
@@ -33,7 +36,7 @@ Rectangle {
     // 触屏设备没有悬停：操作胶囊常驻，行内只留「更多」入口
     // 用 touchPrimary 而不是 isMobile：车机跑桌面外壳时同样是手指操作
     readonly property bool touchMode: platform.touchPrimary
-    readonly property bool hasActions: showFavorite || showAdd || showDownload || showRemove
+    readonly property bool hasActions: showFavorite || showAdd || downloadAllowed || showRemove
 
     // 「更多」菜单的数据源：与上面的 show* 开关保持一致
     readonly property var actionModel: {
@@ -41,7 +44,7 @@ Rectangle {
         if (showFavorite) m.push("favorite")
         if (showAdd) m.push("add")
         if (showMv) m.push("mv")
-        if (showDownload) m.push("download")
+        if (downloadAllowed) m.push("download")
         if (showRemove) m.push("remove")
         return m
     }
@@ -315,10 +318,10 @@ Rectangle {
                     }
                 }
 
-                // 下载
+                // 下载（downloadAllowed 已按平台钳制：Android/车机不显示）
                 Item {
                     width: theme.touchMin; height: theme.touchMin
-                    visible: root.showDownload && !root.touchMode
+                    visible: root.downloadAllowed && !root.touchMode
                     GlyphIcon {
                         anchors.centerIn: parent
                         name: "download"
