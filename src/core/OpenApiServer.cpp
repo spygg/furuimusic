@@ -1,6 +1,7 @@
 #include "core/QtCompat.h"
 #include "OpenApiServer.h"
 
+#include <QFileInfo>
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -9,6 +10,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
@@ -25,6 +27,8 @@
 #include "OpenApiWeb.h"
 #include "PlayerController.h"
 #include "Settings.h"
+#include "SourceManager.h"
+#include "Types.h"
 
 namespace Furui {
 
@@ -104,7 +108,7 @@ bool isControlPath(const QString &path)
         // 网页控制台的曲库操作：点歌、打开歌单/榜单、刷新歌单
         QStringLiteral("/play-result"), QStringLiteral("/open-playlist"),
         QStringLiteral("/open-discovery"), QStringLiteral("/refresh"),
-        QStringLiteral("/refresh-discovery")
+        QStringLiteral("/refresh-discovery"), QStringLiteral("/download")
     };
     return controls.contains(path);
 }
@@ -145,6 +149,61 @@ QJsonArray playlistArray(AppController *app, const QVector<Playlist> &list)
 QByteArray jsonArrayBody(const QJsonArray &arr)
 {
     return QJsonDocument(arr).toJson(QJsonDocument::Compact);
+}
+
+// 与 AppController::downloadResult 一致：文件名必须是「歌手 - 歌名.ext」，
+// 去掉路径/非法字符，扩展名跟真实编码（flac/m4a 不能存成 mp3）。
+QString downloadFileName(const Song &song, const QUrl &url)
+{
+    static const QStringList known = {QStringLiteral("mp3"), QStringLiteral("flac"),
+                                      QStringLiteral("m4a"), QStringLiteral("aac"),
+                                      QStringLiteral("ogg"), QStringLiteral("opus"),
+                                      QStringLiteral("wav"), QStringLiteral("wma")};
+    const QString suffix = QFileInfo(url.path()).suffix().toLower();
+    const QString ext = known.contains(suffix) ? suffix : QStringLiteral("mp3");
+
+    QString name = song.artist.isEmpty() ? song.title
+                                         : song.artist + QStringLiteral(" - ") + song.title;
+    name.remove(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|\\r\\n]")));
+    name = name.trimmed();
+    if (name.isEmpty()) name = QStringLiteral("furui-music");
+    // 浏览器下载文件名长度做上限，避免超长 name 触发部分系统/浏览器的保存失败
+    if (name.size() > 120) name = name.left(120);
+    return name + QLatin1Char('.') + ext;
+}
+
+// 网页控制台下载按钮传来的 list 名 + 下标 → 取出对应 Song 拷贝。
+// 与 /queue /results /favorites /history 四个读接口的数据源一一对应，
+// 保证网页上看到的第 N 行与这里取到的第 N 首是同一首。
+// 返回拷贝而非引用：resolve 是异步回调，不能让数据引用跨越异步边界。
+bool songFromList(const QString &list, int index, AppController *app, Song *out)
+{
+    if (index < 0) return false;
+    if (list == QLatin1String("queue")) {
+        const QVector<Song> &v = app->queue()->songs();
+        if (index >= v.size()) return false;
+        *out = v.at(index);
+        return true;
+    }
+    if (list == QLatin1String("results")) {
+        const QVector<Song> &v = app->results()->songs();
+        if (index >= v.size()) return false;
+        *out = v.at(index);
+        return true;
+    }
+    if (list == QLatin1String("favorites")) {
+        const QVector<Song> v = Library::instance()->favorites();
+        if (index >= v.size()) return false;
+        *out = v.at(index);
+        return true;
+    }
+    if (list == QLatin1String("history")) {
+        const QVector<Song> v = Library::instance()->history(200);
+        if (index >= v.size()) return false;
+        *out = v.at(index);
+        return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -413,6 +472,11 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
         handleStream(socket, request);
         return;
     }
+    // 歌曲下载：网页控制台点行尾下载按钮，按 list+index 取 Song 取链后流式另存
+    if (path == QLatin1String("/download")) {
+        handleDownload(socket, request);
+        return;
+    }
     if (path == QLatin1String("/logs")) {
         int lines = query.queryItemValue(QStringLiteral("lines")).toInt();
         if (lines <= 0) lines = 400;
@@ -534,6 +598,7 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
         h.insert(QStringLiteral("endpoints"), QJsonArray::fromStringList({
             QStringLiteral("/status"), QStringLiteral("/lyric"), QStringLiteral("/subscribe-player-status"),
             QStringLiteral("/stream"),   // 音频流（浏览器 <audio src="/stream"> 直接播放）
+            QStringLiteral("/download?list=<queue|results|favorites|history>&index=<n>"),
             QStringLiteral("/play"), QStringLiteral("/pause"), QStringLiteral("/toggle"),
             QStringLiteral("/skip-next"), QStringLiteral("/skip-prev"),
             QStringLiteral("/seek?time=<ms>"), QStringLiteral("/volume?value=<0-100>"),
@@ -738,6 +803,120 @@ void OpenApiServer::handleStream(QTcpSocket *socket, const QByteArray &request)
         if (*headersSent && sockGuard) {
             sockGuard->flush();
             sockGuard->disconnectFromHost();
+        }
+        if (guard) guard->deleteLater();
+        m_streams.remove(socket);
+    });
+}
+
+void OpenApiServer::handleDownload(QTcpSocket *socket, const QByteArray &request)
+{
+    const QString firstLine = QString::fromUtf8(request.left(request.indexOf('\r')));
+    const QStringList parts = firstLine.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() < 2) {
+        respond(socket, 400, QStringLiteral("application/json; charset=utf-8"),
+                "{\"error\":\"bad request\"}");
+        return;
+    }
+    const QUrl reqUrl(parts.at(1));
+    const QUrlQuery query(reqUrl);
+    const QString list = query.queryItemValue(QStringLiteral("list"), QUrl::FullyDecoded);
+    bool ok = false;
+    const int index = query.queryItemValue(QStringLiteral("index")).toInt(&ok);
+
+    Song song;
+    if (!ok || !songFromList(list, index, AppController::instance(), &song)) {
+        respond(socket, 400, QStringLiteral("application/json; charset=utf-8"),
+                "{\"error\":\"invalid list or index\"}");
+        return;
+    }
+
+    const QString quality = AppController::instance()->quality();
+    QPointer<QTcpSocket> sockGuard(socket);
+    SourceManager::instance()->resolve(song, quality, [this, sockGuard, song](const Playable &p) {
+        if (!sockGuard) return;  // 取链期间浏览器已断开
+        if (!p.ok || p.url.isEmpty() || !p.url.isValid()) {
+            respond(sockGuard, 503, QStringLiteral("text/plain; charset=utf-8"),
+                    QStringLiteral("无可下载音源：%1").arg(p.message).toUtf8());
+            return;
+        }
+        // 扩展名按解析出的真实直链定（flac/m4a 不能存成 mp3），与 App 内下载一致
+        const QString fileName = downloadFileName(song, p.url);
+        QNetworkRequest req(p.url);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 9, 0)
+        req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+#else
+        req.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
+#endif
+        req.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
+        req.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
+        for (auto it = p.headers.constBegin(); it != p.headers.constEnd(); ++it) {
+            const QByteArray value = it.value().toString().toUtf8();
+            if (!value.trimmed().isEmpty()) req.setRawHeader(it.key().toUtf8(), value);
+        }
+        streamWithAttachment(sockGuard.data(), req, fileName);
+    });
+}
+
+// 与 handleStream 同构的字节转发，但响应头带 Content-Disposition: attachment，
+// 浏览器收到后另存为文件而不是用 <audio> 播放。同样带 1MB 背压，避免整首 FLAC 驻留内存。
+void OpenApiServer::streamWithAttachment(QTcpSocket *socket, const QNetworkRequest &req,
+                                          const QString &fileName)
+{
+    QNetworkReply *reply = HttpClient::instance()->openStream(req);
+    QPointer<QNetworkReply> guard(reply);
+    QPointer<QTcpSocket> sockGuard(socket);
+    m_streams.insert(socket, reply);
+    auto headersSent = std::make_shared<bool>(false);
+
+    auto drain = [guard, sockGuard]() {
+        if (!guard || !sockGuard) return;
+        while (sockGuard->bytesToWrite() < (1 << 20) && guard->bytesAvailable() > 0) {
+            const QByteArray chunk = guard->read(64 * 1024);
+            if (chunk.isEmpty()) break;
+            sockGuard->write(chunk);
+        }
+        sockGuard->flush();
+    };
+
+    connect(reply, &QNetworkReply::readyRead, this, [=]() {
+        if (!guard || !sockGuard) return;
+        if (!*headersSent) {
+            *headersSent = true;
+            int status = guard->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (status <= 0) status = 200;
+            const QByteArray ctype = guard->header(QNetworkRequest::ContentTypeHeader).toByteArray();
+            const QByteArray clen = guard->header(QNetworkRequest::ContentLengthHeader).toByteArray();
+            const char *reason = status == 200 ? "OK" : status == 206 ? "Partial Content" : "OK";
+            QByteArray h = "HTTP/1.1 " + QByteArray::number(status) + " " + reason + "\r\n";
+            h += "Content-Type: " + (ctype.isEmpty() ? QByteArray("application/octet-stream") : ctype) + "\r\n";
+            if (!clen.isEmpty()) h += "Content-Length: " + clen + "\r\n";
+            // RFC 5987：filename*=UTF-8''<percent-encoded> 支持中文名；同时给 ASCII 兜底
+            const QByteArray asciiName = QFileInfo(fileName).fileName().toUtf8();
+            const QByteArray encoded = QUrl::toPercentEncoding(fileName);
+            h += "Content-Disposition: attachment; filename=\"" + asciiName
+                 + "\"; filename*=UTF-8''" + encoded + "\r\n";
+            h += "Accept-Ranges: bytes\r\n";
+            h += "Cache-Control: no-store\r\n";
+            h += "Connection: close\r\n\r\n";
+            sockGuard->write(h);
+        }
+        drain();
+    });
+    connect(socket, &QTcpSocket::bytesWritten, this, [=]() { drain(); });
+    connect(reply, &QNetworkReply::finished, this, [=]() {
+        if (!guard) return;
+        if (sockGuard) {
+            if (!*headersSent) {
+                // 上游在首块数据前就失败（直链过期/防盗链 403 等）：回一个明确错误，
+                // 否则隐藏 iframe 的 onload 一直不触发，下载按钮转圈到 15s 超时。
+                respond(sockGuard, 502, QStringLiteral("text/plain; charset=utf-8"),
+                        QStringLiteral("下载失败：上游未返回数据").toUtf8());
+            } else {
+                sockGuard->flush();
+                sockGuard->disconnectFromHost();
+            }
         }
         if (guard) guard->deleteLater();
         m_streams.remove(socket);

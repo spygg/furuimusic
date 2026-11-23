@@ -127,6 +127,9 @@ inline QByteArray openApiIndexHtml()
   .row .d{color:var(--sub);font-size:11.5px;font-variant-numeric:tabular-nums;flex:0 0 auto}
   .row.playing .n{color:var(--accent-d)}
   .row .pill{font-size:10px;color:var(--accent-d);background:var(--soft);border-radius:999px;padding:1px 7px;flex:0 0 auto}
+  .row .dl{width:30px;height:30px;display:grid;place-items:center;flex:0 0 auto;border-radius:8px;
+           color:var(--sub);cursor:pointer;position:relative;z-index:2}
+  .row .dl:hover{color:var(--accent-d);background:var(--soft)}
   .empty{color:var(--sub);font-size:13px;padding:46px 18px;text-align:center;line-height:2}
   .empty b{display:block;color:var(--text);font-size:14px;margin-bottom:2px}
   .backbar{display:flex;align-items:center;gap:12px;margin-bottom:12px}
@@ -406,7 +409,8 @@ inline QByteArray openApiIndexHtml()
     play:'<path d="M8.6 5.8v12.4L18.6 12z" fill="currentColor" stroke="none"/>',
     pause:'<rect x="7" y="5.4" width="3.5" height="13.2" rx="1.2" fill="currentColor" stroke="none"/><rect x="13.5" y="5.4" width="3.5" height="13.2" rx="1.2" fill="currentColor" stroke="none"/>',
     grid:'<rect x="3.4" y="3.4" width="7.2" height="7.2" rx="2" fill="currentColor" stroke="none"/><rect x="13.4" y="3.4" width="7.2" height="7.2" rx="2" fill="currentColor" stroke="none"/><rect x="3.4" y="13.4" width="7.2" height="7.2" rx="2" fill="currentColor" stroke="none"/><rect x="13.4" y="13.4" width="7.2" height="7.2" rx="2" fill="currentColor" stroke="none"/>',
-    list:'<rect x="3.6" y="5" width="16.8" height="2.6" rx="1.3" fill="currentColor" stroke="none"/><rect x="3.6" y="10.7" width="16.8" height="2.6" rx="1.3" fill="currentColor" stroke="none"/><rect x="3.6" y="16.4" width="16.8" height="2.6" rx="1.3" fill="currentColor" stroke="none"/>'
+    list:'<rect x="3.6" y="5" width="16.8" height="2.6" rx="1.3" fill="currentColor" stroke="none"/><rect x="3.6" y="10.7" width="16.8" height="2.6" rx="1.3" fill="currentColor" stroke="none"/><rect x="3.6" y="16.4" width="16.8" height="2.6" rx="1.3" fill="currentColor" stroke="none"/>',
+    download:'<path d="M12 3.6v11.2M7.8 10.8 12 15l4.2-4.2"/><path d="M4.8 17.4v1.8c0 .7.5 1.2 1.2 1.2h12c.7 0 1.2-.5 1.2-1.2v-1.8"/>'
   };
   function icon(name, size){
     var s = size || 18;
@@ -572,22 +576,28 @@ inline QByteArray openApiIndexHtml()
     });
   }
 
-  function songRow(s, i, playPath, playing){
+  function songRow(s, i, playPath, playing, listKind){
     var sub = [s.singer, s.sourceName || s.source].filter(Boolean).join(' · ');
     var art = s.cover ? '<img src="' + esc(s.cover) + '" alt="" loading="lazy" onerror="this.remove()">' : '♪';
+    // 下载地址按「列表种类 + 行下标」定位到设备端对应的 Song（与 /queue /results
+    // /favorites /history 四个读接口一一对应），不用可信来自网页的文件名。
+    var dl = listKind
+      ? '<span class="dl" title="下载这首歌" data-dl-list="' + esc(listKind) + '" data-dl-index="' + i + '">' + icon('download', 17) + '</span>'
+      : '';
     return '<div class="row' + (playing ? ' playing' : '') + '" data-play="' + i + '" data-path="' + playPath + '">'
       + '<span class="idx">' + (playing ? '▶' : (i + 1)) + '</span>'
       + '<span class="art">' + art + '</span>'
       + '<span class="meta"><span class="n">' + esc(s.name || '(未知曲目)') + '</span>'
       + '<span class="a">' + esc(sub) + '</span></span>'
       + (s.vip ? '<span class="pill">VIP</span>' : '')
-      + '<span class="d">' + fmt(s.duration) + '</span></div>';
+      + '<span class="d">' + fmt(s.duration) + '</span>'
+      + dl + '</div>';
   }
-  function songList(arr, playPath, currentIndex){
+  function songList(arr, playPath, currentIndex, listKind){
     if(!arr || !arr.length) return '';
     var h = '<div class="list">';
     arr.forEach(function(s, i){
-      h += songRow(s, i, playPath, typeof currentIndex === 'number' && i === currentIndex);
+      h += songRow(s, i, playPath, typeof currentIndex === 'number' && i === currentIndex, listKind);
     });
     return h + '</div>';
   }
@@ -636,7 +646,7 @@ inline QByteArray openApiIndexHtml()
       body += '<div class="backbar"><button class="back" id="btnBack">← 返回</button>'
             + '<span class="detailtitle">' + esc(S.detailTitle) + '</span>'
             + '<span class="detailcount">' + dcount + '</span></div>';
-      body += S.results.length ? songList(S.results, '/play-result')
+      body += S.results.length ? songList(S.results, '/play-result', -1, 'results')
              : (S.detailLoading ? emptyBox('正在加载曲目…', '歌单曲目由设备端拉取，稍等片刻')
                                 : emptyBox('没有读到曲目', '该平台接口这次没返回歌，稍后再试或换一个歌单'));
     } else if(S.tab === 'playlists' || S.tab === 'discovery'){
@@ -649,12 +659,12 @@ inline QByteArray openApiIndexHtml()
         body = S.view === 'grid' ? cardGrid(arr, kind) : cardList(arr, kind);
       }
     } else if(S.tab === 'queue'){
-      body = S.queue.length ? songList(S.queue, '/play-index', S.st.currentIndex)
+      body = S.queue.length ? songList(S.queue, '/play-index', S.st.currentIndex, 'queue')
                             : emptyBox('播放队列是空的', '在曲库里点歌加入队列');
     } else if(S.tab === 'favorites'){
-      body = S.favs.length ? songList(S.favs, '', -1) : emptyBox('还没有收藏', '在设备端点歌曲行尾的心形按钮');
+      body = S.favs.length ? songList(S.favs, '', -1, 'favorites') : emptyBox('还没有收藏', '在设备端点歌曲行尾的心形按钮');
     } else if(S.tab === 'history'){
-      body = S.hist.length ? songList(S.hist, '', -1) : emptyBox('还没有播放记录', '播放过的歌曲会出现在这里');
+      body = S.hist.length ? songList(S.hist, '', -1, 'history') : emptyBox('还没有播放记录', '播放过的歌曲会出现在这里');
     }
     box.innerHTML = body;
     if(detailOpen){
@@ -674,6 +684,26 @@ inline QByteArray openApiIndexHtml()
     });
     $$('#libBody [data-kind]').forEach(function(el){
       el.onclick = function(){ openPlaylist(el.dataset.id, el.dataset.title, el.dataset.kind); };
+    });
+    $$('#libBody [data-dl-list]').forEach(function(el){
+      el.onclick = function(e){
+        e.stopPropagation();   // 别让整行的点歌 onclick 也触发
+        if(el.dataset.busy === '1') return;
+        el.dataset.busy = '1';
+        var old = el.innerHTML;
+        el.innerHTML = icon('music', 17);
+        flash('正在准备下载…');
+        var url = '/download?list=' + encodeURIComponent(el.dataset.dlList)
+                + '&index=' + encodeURIComponent(el.dataset.dlIndex);
+        // 隐藏 iframe 拉取：服务端回 Content-Disposition: attachment，浏览器另存为，
+        // 且不离开/刷新当前控制台页面。下载结束（或失败）后恢复图标。
+        var f = document.createElement('iframe');
+        f.style.display = 'none';
+        f.onload = function(){ el.innerHTML = old; el.dataset.busy = '0'; if(f.parentNode) f.parentNode.removeChild(f); };
+        f.src = url;
+        document.body.appendChild(f);
+        setTimeout(function(){ el.innerHTML = old; el.dataset.busy = '0'; }, 15000);
+      };
     });
   }
 
@@ -959,7 +989,7 @@ inline QByteArray openApiIndexHtml()
       $('#setAbout').innerHTML = kv({ '应用': o.appName || '福瑞音乐', '版本': o.version || '', '音源': o.sources || '' });
       var eps = ['/status','/lyrics','/queue','/playlists','/discovery','/results','/accounts','/settings',
                  '/toggle','/skip-next','/skip-prev','/seek?time=ms','/volume?value=0-100',
-                 '/play-index?index=n','/search?keyword=','/refresh','/logs','/help'];
+                 '/play-index?index=n','/download?list=queue&index=n','/search?keyword=','/refresh','/logs','/help'];
       $('#endpoints').innerHTML = eps.map(function(e){ return '<span class="tag">' + esc(e) + '</span>'; }).join('');
     }).catch(function(){});
   }
