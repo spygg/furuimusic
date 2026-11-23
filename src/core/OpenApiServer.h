@@ -6,6 +6,8 @@
 #include <QSet>
 #include <QString>
 
+#include "Types.h"
+
 class QTcpServer;
 class QTcpSocket;
 class QTimer;
@@ -42,8 +44,15 @@ private:
                  const QByteArray &extraHeaders = QByteArray());
     QByteArray statusJson() const;
     void pushSubscribe();
-    // 音频流代理：用当前直链 + 防盗链头重新拉流，字节转发给浏览器 <audio>。
+    // 音频流代理：按 uid 找到歌曲后实时取新鲜直链再拉流，字节转发给浏览器 <audio>。
+    // 不再复用 App 当前播放的直链——那会随 CDN 防盗链过期/切歌空窗而频繁 403/503。
     void handleStream(QTcpSocket *socket, const QByteArray &request);
+    // /stream 内部：异步取链（resolve）→ 成功后进入 startStreamFromPlayable
+    void resolveStream(QTcpSocket *socket, const QByteArray &request, const Song &song);
+    // /stream 内部：用取到的直链 + 防盗链头拉上游并转发；fromCache=true 时
+    // 上游 >=400 视为缓存直链失效，清缓存自动重取一次
+    void startStreamFromPlayable(QTcpSocket *socket, const QByteArray &request,
+                                 const Song &song, const Playable &p, bool fromCache);
     // 歌曲下载：网页控制台点歌曲行尾的下载按钮，按 列表+下标 取 Song → resolve 取链
     // → 流式转发给浏览器并带 Content-Disposition: attachment（大文件不落内存）。
     void handleDownload(QTcpSocket *socket, const QByteArray &request);
@@ -55,6 +64,10 @@ private:
     QTcpServer *m_server = nullptr;
     // 每个 /stream 长连接对应一个上游 reply；socket 断开时 abort 对应请求。
     QHash<QTcpSocket *, QNetworkReply *> m_streams;
+    // 直链缓存：uid → resolve 结果 + 过期时间戳。浏览器拖进度/重连不再反复取链，
+    // TTL 10 分钟（CDN 防盗链直链一般 20~30 分钟有效，留足余量）。
+    struct CachedPlayable { Playable p; qint64 expiresAt = 0; };
+    QHash<QString, CachedPlayable> m_streamCache;
     QTimer *m_pushTimer = nullptr;
     QSet<QTcpSocket *> m_subscribers;
     QHash<QTcpSocket *, QByteArray> m_buffers;

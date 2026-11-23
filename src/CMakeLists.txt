@@ -61,6 +61,10 @@ if(MSVC)
 endif()
 
 set(QT_COMPONENTS Core Gui Network Sql Multimedia Qml Quick QuickControls2)
+# 桌面端托盘（QSystemTrayIcon）需要 Widgets：最小化到托盘 / 关闭时询问退出或托盘
+if(NOT ANDROID)
+    list(APPEND QT_COMPONENTS Widgets)
+endif()
 if(FURUI_BUILD_LEGACY_WIDGETS AND NOT ANDROID)
     list(APPEND QT_COMPONENTS Widgets)
 endif()
@@ -281,7 +285,10 @@ if(ANDROID)
     qt_finalize_executable(FuruiMusic)
 else()
     add_executable(FuruiMusic WIN32 MACOSX_BUNDLE ${UI_FILES})
-    target_link_libraries(FuruiMusic PRIVATE FuruiCore ${QT}::Qml ${QT}::Quick ${QT}::QuickControls2)
+    # 桌面专用源文件：系统托盘（Android 没有 Widgets，不参与那边编译）
+    target_sources(FuruiMusic PRIVATE ui/TrayController.h ui/TrayController.cpp)
+    target_link_libraries(FuruiMusic PRIVATE FuruiCore ${QT}::Qml ${QT}::Quick ${QT}::QuickControls2
+                                             ${QT}::Widgets)
     set_target_properties(FuruiMusic PROPERTIES OUTPUT_NAME "FuruiMusic")
 
     if(APPLE)

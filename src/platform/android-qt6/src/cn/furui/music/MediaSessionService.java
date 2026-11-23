@@ -5,9 +5,11 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.media.AudioAttributes;
@@ -103,6 +105,8 @@ public class MediaSessionService extends MediaBrowserService {
 
     private MediaSession mSession;
     private NotificationManager mNotificationManager;
+    // 断开耳机/蓝牙（ACTION_AUDIO_BECOMING_NOISY）时立即暂停，避免外放突然大声
+    private BroadcastReceiver mNoisyReceiver;
 
     /** 启动（或复用）前台服务；重复调用无副作用。 */
     public static void start(Context ctx) {
@@ -359,6 +363,18 @@ public class MediaSessionService extends MediaBrowserService {
             mSession.setMediaButtonReceiver(PendingIntent.getBroadcast(this, 0, mbrIntent, flags));
         }
         mSession.setActive(true);
+
+        // 拔出有线耳机 / 断开蓝牙耳机：系统发 ACTION_AUDIO_BECOMING_NOISY，
+        // 立即暂停，避免声音突然切到扬声器外放。服务存活期常驻监听。
+        mNoisyReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                Log.w(TAG, "audio becoming noisy -> pause");
+                sendCommand(CMD_PAUSE, 0);
+            }
+        };
+        registerReceiver(mNoisyReceiver,
+                new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
 
         pushSessionState();
         // Android 14 起 startForeground 必须在 onCreate 后 5 秒内完成
@@ -649,6 +665,10 @@ public class MediaSessionService extends MediaBrowserService {
     private void shutdown() {
         // 服务退出（主动停止或系统回收）时不再占着音频焦点
         abandonFocusInternal();
+        if (mNoisyReceiver != null) {
+            try { unregisterReceiver(mNoisyReceiver); } catch (Throwable ignored) { }
+            mNoisyReceiver = null;
+        }
         if (mSession != null) {
             mSession.setActive(false);
             mSession.release();

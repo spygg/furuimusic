@@ -31,6 +31,10 @@
 #include "AndroidMediaSession.h"
 #include "PlatformAdapter.h"
 #include "ThemeManager.h"
+#if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
+#include "TrayController.h"
+#include <QApplication>
+#endif
 #ifdef FURUI_HAVE_WEBVIEW
 #include <QtWebView/qtwebviewfunctions.h>
 #endif
@@ -49,7 +53,12 @@ int main(int argc, char *argv[])
     QGuiApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
 #endif
 
+#if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
     QGuiApplication app(argc, argv);
+#else
+    // 桌面端用 QApplication：系统托盘（QSystemTrayIcon / QMenu）依赖 Widgets
+    QApplication app(argc, argv);
+#endif
     QGuiApplication::setApplicationName(QStringLiteral("福瑞音乐"));
     QGuiApplication::setOrganizationName(QStringLiteral("Furui"));
 
@@ -128,6 +137,11 @@ int main(int argc, char *argv[])
     // 内置浏览器：QML 侧统一的 WebView 外壳 + 平台原生 Cookie 读取
     engine.rootContext()->setContextProperty(QStringLiteral("browser"),
                                              Furui::BrowserController::instance());
+#if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
+    // 桌面端系统托盘：点 ✕ 可选择最小化到托盘 / 退出（可记住），托盘菜单可恢复窗口
+    engine.rootContext()->setContextProperty(QStringLiteral("tray"),
+                                             Furui::TrayController::instance());
+#endif
     // 在线检测更新：设置页检查/下载/安装，QML 经 updater 属性访问
     engine.rootContext()->setContextProperty(QStringLiteral("updater"),
                                              Furui::UpdateChecker::instance());

@@ -327,6 +327,7 @@ inline QByteArray openApiIndexHtml()
               <button id="pprev" title="上一首"></button>
               <button class="primary" id="pplay" title="播放 / 暂停"></button>
               <button id="pnext" title="下一首"></button>
+              <button id="pdl" title="下载当前歌曲"></button>
               <span class="pmode" id="pmode"></span>
             </div>
             <div class="vol"><span>音量</span><input type="range" id="pvol" min="0" max="100" value="100"></div>
@@ -381,6 +382,7 @@ inline QByteArray openApiIndexHtml()
     <button class="pbbtn" id="pbprev" title="上一首"></button>
     <button class="pbbtn primary" id="pbplay" title="播放 / 暂停"></button>
     <button class="pbbtn" id="pbnext" title="下一首"></button>
+    <button class="pbbtn" id="pbdl" title="下载当前歌曲"></button>
     <div class="pbprog">
       <span id="pbcur">0:00</span>
       <div class="bar" id="pbbar"><i id="pbfill"></i></div>
@@ -886,6 +888,21 @@ inline QByteArray openApiIndexHtml()
   $('#pplay').onclick = $('#pbplay').onclick = togglePlay;
   $('#pprev').onclick = $('#pbprev').onclick = function(){ ctl('/skip-prev'); };
   $('#pnext').onclick = $('#pbnext').onclick = function(){ ctl('/skip-next'); };
+  // 下载当前正在播放的歌：按 /status 里的 currentIndex 直接从队列取链。
+  // 隐藏 iframe 拉取，服务端回 Content-Disposition: attachment 另存为，不离开页面。
+  function downloadCurrent(){
+    var idx = S.st.currentIndex;
+    if(typeof idx !== 'number' || idx < 0){ flash('没有正在播放的歌曲'); return; }
+    flash('正在准备下载…');
+    var f = document.createElement('iframe');
+    f.style.display = 'none';
+    f.onload = function(){ if(f.parentNode) f.parentNode.removeChild(f); };
+    f.onerror = f.onload;
+    f.src = '/download?list=queue&index=' + encodeURIComponent(idx);
+    document.body.appendChild(f);
+    setTimeout(function(){ if(f.parentNode) f.parentNode.removeChild(f); }, 20000);
+  }
+  $('#pdl').onclick = $('#pbdl').onclick = downloadCurrent;
   // 两个音量条（播放页 / 底栏）共用一份值；--v 用来画填充比例
   function syncVolume(v){
     [$('#pvol'), $('#pbvol')].forEach(function(el){
@@ -1054,6 +1071,7 @@ inline QByteArray openApiIndexHtml()
   $('#pprev').innerHTML = icon('prev', 15); $('#pnext').innerHTML = icon('next', 15);
   $('#pbprev').innerHTML = icon('prev', 13); $('#pbnext').innerHTML = icon('next', 13);
   $('#pplay').innerHTML = icon('play', 19); $('#pbplay').innerHTML = icon('play', 16);
+  $('#pdl').innerHTML = icon('download', 16); $('#pbdl').innerHTML = icon('download', 13);
   // ---- 浏览器本地 audio：本地时钟驱动进度/歌词，错误给重试 ----
   (function bindAudio(){
     var a = audio();

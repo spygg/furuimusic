@@ -29,11 +29,24 @@ ApplicationWindow {
     // 直接 SIGABRT（表现为「从 MV 返回整个 App 闪退」）。
     // onClosing 不依赖焦点链，是 Android 返回键唯一可靠的拦截点：
     // 一律不关闭窗口，逐级回退交给 handleBack；没有层级可退则退到后台。
+    // 桌面端（托盘可用时）也拦：按记住的 closeAction 决定最小化到托盘 / 直接退出，
+    // 没记住过就弹询问框，让用户选并可选「记住我的选择」。
     onClosing: function(close) {
-        // 只有 Android 才拦关闭事件（返回键当逐级回退/退到后台用）。
-        // 这里必须在平台判断之后再拒绝：否则桌面 Alt+F4 / 任务栏关闭 /
-        // 自绘标题栏的 ✕（最终也会走到 QQuickWindow::close()）全部失效。
-        if (Qt.platform.os !== "android") return   // 桌面保持默认关闭行为
+        if (Qt.platform.os !== "android") {
+            if (platform.isDesktop && typeof tray !== "undefined" && tray.available) {
+                const action = app.setting("closeAction", "ask")
+                if (action === "tray") {
+                    close.accepted = false
+                    tray.hideWindow()
+                    return
+                }
+                if (action === "exit") return   // 记住了退出：走系统默认关闭流程
+                close.accepted = false
+                closeAsk.openCloseDialog()
+                return
+            }
+            return   // 无托盘平台保持默认关闭行为
+        }
         close.accepted = false
         if (win.handleBrowserBack()) return
         const item = shell.item
@@ -270,6 +283,10 @@ ApplicationWindow {
             win.lastContentPage = 0
             win.syncShellState()
         }
+        // 桌面端托盘：把窗口交给托盘控制器（托盘菜单「显示主界面」、点 ✕ 隐藏用）
+        if (Qt.platform.os !== "android" && Qt.platform.os !== "ios"
+                && typeof tray !== "undefined")
+            tray.attach(win)
     }
 
     // 边缘拉伸热区：仅桌面端、非最大化时启用
@@ -397,6 +414,76 @@ ApplicationWindow {
         anchors.bottom: parent.bottom
         anchors.bottomMargin: Math.round(theme.spaceLg * 5)
         z: 10000
+    }
+
+    // ---- 点 ✕ 时的行为询问（托盘可用且没记住过选择时才弹）----
+    // 「最小化到托盘」= 隐藏窗口、音乐继续、托盘点开恢复；「退出」= 真正结束进程。
+    // 勾选「记住我的选择」后写 settings.ini 的 closeAction 键，onClosing 直接走记住的行为。
+    Popup {
+        id: closeAsk
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(420, win.width - 48)
+        modal: true
+        dim: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle {
+            color: theme.card
+            border.color: theme.line
+            border.width: 1
+            radius: theme.radiusLg
+        }
+        function openCloseDialog() { rememberClose.checked = false; open() }
+        contentItem: ColumnLayout {
+            spacing: theme.spaceSm
+            Label {
+                text: "关闭福瑞音乐"
+                font.pixelSize: theme.fontLg
+                font.weight: Font.DemiBold
+                color: theme.text
+            }
+            Label {
+                text: "点关闭按钮时想执行什么？勾选后下次将不再询问。"
+                wrapMode: Text.WordWrap
+                color: theme.subText
+                font.pixelSize: theme.fontSm
+            }
+            CheckBox {
+                id: rememberClose
+                text: "记住我的选择"
+                font.pixelSize: theme.fontSm
+                contentItem: Label {
+                    text: rememberClose.text
+                    font: rememberClose.font
+                    color: theme.text
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: rememberClose.indicator ? rememberClose.indicator.width + rememberClose.spacing : 0
+                }
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                spacing: theme.spaceSm
+                Button {
+                    text: "最小化到托盘"
+                    onClicked: {
+                        if (rememberClose.checked)
+                            app.setSetting("closeAction", "tray")
+                        tray.hideWindow()
+                        closeAsk.close()
+                    }
+                }
+                Button {
+                    text: "退出"
+                    highlighted: true
+                    onClicked: {
+                        if (rememberClose.checked)
+                            app.setSetting("closeAction", "exit")
+                        closeAsk.close()
+                        tray.quitApp()
+                    }
+                }
+            }
+        }
     }
 
     Connections {
