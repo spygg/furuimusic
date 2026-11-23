@@ -2002,23 +2002,6 @@ Item {
                                     // 点按钮不触发整行打开；已收藏的显示实心
                                     property bool collected: app.playlistsEpoch >= 0
                                                              && app.isPlaylistCollected(model.uid)
-                                    Item {
-                                        Layout.preferredWidth: theme.touchMin
-                                        Layout.preferredHeight: theme.touchMin
-                                        Layout.alignment: Qt.AlignVCenter
-                                        GlyphIcon {
-                                            name: plDelegate.collected ? "heartFill" : "heart"
-                                            size: 18
-                                            anchors.centerIn: parent
-                                            color: plDelegate.collected ? "#e64c4c" : root.cSub
-                                        }
-                                        MouseArea {
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: app.collectSearchPlaylist(index)
-                                        }
-                                    }
 
                                     RowLayout {
                                         anchors.fill: parent
@@ -2059,6 +2042,25 @@ Item {
                                                 elide: Text.ElideRight
                                             }
                                         }
+                                        // 行尾收藏按钮：必须放在 RowLayout 里
+                                        // （Layout 附加属性只在 Layout 内生效，放顶层会堆到左上角）
+                                        Item {
+                                            Layout.preferredWidth: theme.touchMin
+                                            Layout.preferredHeight: theme.touchMin
+                                            Layout.alignment: Qt.AlignVCenter
+                                            GlyphIcon {
+                                                name: plDelegate.collected ? "heartFill" : "heart"
+                                                size: 18
+                                                anchors.centerIn: parent
+                                                color: plDelegate.collected ? "#e64c4c" : root.cSub
+                                            }
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: app.collectSearchPlaylist(index)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -2073,21 +2075,52 @@ Item {
                                 cellWidth: root.gridCellWidth
                                 cellHeight: root.gridCellHeight
                                 visible: !searchView.songMode && root.gridView && count > 0
-                                delegate: AlbumCard {
+                                // 包一层 Item 挂收藏角标：AlbumCard 只有 clicked 信号，
+                                // 右上角心形不挡卡片点击（MouseArea 在卡片上层，只占角上 34dp）
+                                delegate: Item {
                                     width: searchPlaylistGrid.cellWidth
                                     height: searchPlaylistGrid.cellHeight
-                                    title: model.title
-                                    subtitle: (model.count > 0 ? model.count + " 首 · " : "")
-                                              + model.sourceName
-                                              + (model.owner.length > 0 ? " · " + model.owner : "")
-                                    cover: model.cover
-                                    badge: model.sourceName
-                                    accent: app.sourceColor(model.source)
-                                    onClicked: {
-                                        root.exitSearch()
-                                        root.openPlaylistTitle = model.title
-                                        root.tabIndex = 0
-                                        app.loadPlaylist(model.uid)
+                                    property bool collected: app.playlistsEpoch >= 0
+                                                             && app.isPlaylistCollected(model.uid)
+                                    AlbumCard {
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        title: model.title
+                                        subtitle: (model.count > 0 ? model.count + " 首 · " : "")
+                                                  + model.sourceName
+                                                  + (model.owner.length > 0 ? " · " + model.owner : "")
+                                        cover: model.cover
+                                        badge: model.sourceName
+                                        accent: app.sourceColor(model.source)
+                                        onClicked: {
+                                            root.exitSearch()
+                                            root.openPlaylistTitle = model.title
+                                            root.tabIndex = 0
+                                            app.loadPlaylist(model.uid)
+                                        }
+                                    }
+                                    Rectangle {
+                                        width: 34
+                                        height: 34
+                                        radius: 17
+                                        anchors.top: parent.top
+                                        anchors.right: parent.right
+                                        anchors.margins: 6
+                                        color: heartMa.containsMouse
+                                               ? Qt.rgba(0, 0, 0, 0.25) : Qt.rgba(0, 0, 0, 0.12)
+                                        GlyphIcon {
+                                            name: parent.parent.collected ? "heartFill" : "heart"
+                                            size: 16
+                                            anchors.centerIn: parent
+                                            color: parent.parent.collected ? "#FB7185" : "#FFFFFF"
+                                        }
+                                        MouseArea {
+                                            id: heartMa
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: app.collectSearchPlaylist(index)
+                                        }
                                     }
                                 }
                             }
