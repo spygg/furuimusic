@@ -262,7 +262,9 @@ Item {
             width: Math.min(parent.width - (root.narrow ? 28 : 56), 880)
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
-            anchors.topMargin: root.narrow ? 18 : 26
+            // 安全区（状态栏/挖孔）已由外壳 platform.insetTop 统一内缩，
+            // 这里只留少量呼吸空间，不再叠加一层导致标题离顶部偏远（旧值 18/26）。
+            anchors.topMargin: root.narrow ? 5 : 10
             // 不写 height: implicitHeight —— 那是对自身 implicitHeight 的自绑定，
             // 内容一换行就会和子项一起被判成绑定循环；ColumnLayout 默认就按 implicitHeight 定高
             spacing: 16

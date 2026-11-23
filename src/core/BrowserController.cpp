@@ -423,6 +423,8 @@ void BrowserController::open(const QString &url, const QString &mode)
     m_url = normalizeUrl(url);
     m_mode = mode.isEmpty() ? QStringLiteral("browse") : mode;
     m_opened = true;
+    if (trace())
+        qInfo().noquote() << "[browser] open ->" << m_url << "available=" << available();
     emit urlChanged();
     emit openedChanged();
 #if defined(Q_OS_ANDROID) && defined(FURUI_HAVE_WEBVIEW) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)

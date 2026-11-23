@@ -224,7 +224,9 @@ Item {
             z: 30
             anchors.left: parent.left
             anchors.top: parent.top
-            anchors.margins: 22
+            // 只收顶部：安全区已由外壳内缩，22dp 的顶部下移让浅色背景下顶部显空（旧值 22）
+            anchors.leftMargin: 22
+            anchors.topMargin: 10
             width: theme.touchMin
             height: theme.touchMin
 
@@ -253,7 +255,8 @@ Item {
             z: 30
             anchors.right: parent.right
             anchors.top: parent.top
-            anchors.margins: 22
+            anchors.rightMargin: 22
+            anchors.topMargin: 10
             spacing: 8
 
             // 队列 / MV / 设置：与参考项目右上角一样是小的半透明方按钮
@@ -420,10 +423,12 @@ Item {
             id: compactPane
             anchors.fill: parent
             anchors.margins: root.ultraTiny ? 10 : (root.compactTiny ? 12 : 18)
-            // 72/74 不是随手取的：顶部按钮是 margins 22 + 48 触控高 = 到 70dp，
-            // 元信息必须整体落在它下面，否则标题会贴到「队列 / 视频 / 音效」上。
-            // 矮窗（竖屏分屏、手机横屏单栏）用 72 省那 2dp，宽裕的竖屏给 74。
-            anchors.topMargin: (root.ultraTiny || root.compactTiny) ? 72 : 74
+            // 顶部留白：标题（元信息）落在工具条按钮下方一点即可。
+            // 工具条 button topMargin 10 + 48 触控高 = 底部约 58dp，标题 62dp 留 4dp 间隙。
+            // 旧值 72/74 是按工具条 margins 22 算的，工具条收上去后这里会空出一大块白
+            // （浅色背景尤其明显）；现在同步收下来，标题仍不与「队列/视频/音效」重叠。
+            // 矮窗（竖屏分屏、手机横屏单栏）再省 2dp。
+            anchors.topMargin: (root.ultraTiny || root.compactTiny) ? 60 : 62
             visible: !root.wide
 
             ColumnLayout {
@@ -462,8 +467,10 @@ Item {
                     Item {
                         id: compactCoverPage
                         // 封面边长：不超过页宽 92%、页高扣除歌词行，封顶 300，保持正方形。
-                        // 分屏单栏没有下方歌词 peek，把那 64dp 还给封面。
-                        readonly property real peekH: root.splitSingle ? 0 : 64
+                        // 分屏单栏没有下方歌词 peek，把预留高度还给封面。
+                        // 竖屏封面下方显示「上一句/当前句/下一句」三行歌词，预留 106dp
+                        //（旧版单行只留 64dp，封面下方大片空白浪费了）。
+                        readonly property real peekH: root.splitSingle ? 0 : 106
                         readonly property real coverSide: Math.min(parent.width * 0.92,
                                                                    parent.height - peekH, 300)
                         Item {
@@ -478,28 +485,71 @@ Item {
                             height: compactCoverPage.coverSide
                             Loader { anchors.fill: parent; sourceComponent: coverComp }
                         }
-                        // 当前歌词：跟随播放进度，最多两行，居中渐隐色；无歌词时留白不占位
+                        // 封面下方歌词速览：跟随播放进度显示「上一句 / 当前句 / 下一句」三行。
+                        // 数据直接取 app.lyricLines + app.currentLyricIndex（QML 侧索引），
+                        // 当前行加粗高亮、上下行压暗渐隐；无歌词时留白不占位。
+                        // 分屏单栏时封面页不再附歌词行，与歌词页真正「二选一」。
                         Item {
                             id: lyricPeek
                             anchors.horizontalCenter: parent.horizontalCenter
                             anchors.top: compactCoverSlot.bottom
-                            anchors.topMargin: 8
+                            anchors.topMargin: 6
                             width: parent.width * 0.88
-                            height: 48
-                            // 分屏单栏时封面页不再附歌词行，与歌词页真正「二选一」
-                            visible: !root.splitSingle && (app.lyricsTimed || app.lyricsText.length > 0)
-                            Text {
-                                anchors.fill: parent
-                                text: app.currentLyricLine.length > 0
-                                      ? app.currentLyricLine : "♪"
-                                color: root.inkSub
-                                font.pixelSize: Math.round(14 * theme.lyricFontScale / 100)
-                                font.bold: true
-                                wrapMode: Text.Wrap
-                                maximumLineCount: 2
-                                elide: Text.ElideRight
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignTop
+                            height: 96
+                            visible: !root.splitSingle
+                                     && (app.lyricsTimed || app.lyricsText.length > 0)
+
+                            // 当前行索引，未定位（-1）时上/下行留空、只显示一行
+                            readonly property int idx: app.currentLyricIndex
+                            function peekLine(i) {
+                                return (i >= 0 && i < app.lyricLines.length)
+                                       ? app.lyricLines[i] : ""
+                            }
+                            Column {
+                                anchors.top: parent.top
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                spacing: 6
+
+                                // 上一句：压暗小字，单行省略
+                                Text {
+                                    width: parent.width
+                                    visible: text.length > 0
+                                    text: lyricPeek.idx > 0
+                                          ? lyricPeek.peekLine(lyricPeek.idx - 1) : ""
+                                    color: root.inkSub
+                                    opacity: 0.55
+                                    font.pixelSize: Math.round(13 * theme.lyricFontScale / 100)
+                                    wrapMode: Text.NoWrap
+                                    elide: Text.ElideRight
+                                    horizontalAlignment: root.lyricHAlign
+                                }
+                                // 当前句：加粗高亮，最多两行
+                                Text {
+                                    width: parent.width
+                                    text: app.currentLyricLine.length > 0
+                                          ? app.currentLyricLine : "♪"
+                                    color: theme.lyricHighlight
+                                    font.pixelSize: Math.round(16 * theme.lyricFontScale / 100)
+                                    font.bold: true
+                                    wrapMode: Text.Wrap
+                                    maximumLineCount: 2
+                                    elide: Text.ElideRight
+                                    horizontalAlignment: root.lyricHAlign
+                                }
+                                // 下一句：压暗小字，单行省略
+                                Text {
+                                    width: parent.width
+                                    visible: text.length > 0
+                                    text: lyricPeek.idx >= 0
+                                          ? lyricPeek.peekLine(lyricPeek.idx + 1) : ""
+                                    color: root.inkSub
+                                    opacity: 0.55
+                                    font.pixelSize: Math.round(13 * theme.lyricFontScale / 100)
+                                    wrapMode: Text.NoWrap
+                                    elide: Text.ElideRight
+                                    horizontalAlignment: root.lyricHAlign
+                                }
                             }
                         }
                     }

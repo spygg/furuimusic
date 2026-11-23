@@ -176,7 +176,11 @@ Rectangle {
             root.wake()
             // 双击的第二次 click 不能又触发一次播放/暂停
             if (Date.now() - root.lastDoubleTap < 350) return
-            if (!root.compact && !root.touchLike) singleTap.restart()
+            // 单击画面切换播放/暂停：桌面鼠标、触屏点按都走这条。
+            // 延时 230ms 由 singleTap 等双击；真双击时 onDoubleClicked 会 stop 掉它。
+            // 旧版只给「桌面宽屏鼠标」开了这条，触屏点画面毫无反应（只有暂停时的
+            // 中央大播放按钮能点），移动端补上。
+            singleTap.restart()
         }
         onDoubleClicked: {
             root.lastDoubleTap = Date.now()

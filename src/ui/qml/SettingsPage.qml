@@ -26,7 +26,8 @@ Item {
     // 大屏（平板横屏/车机）反而要宽一点，免得 900dp 宽度只用到中间一条。
     readonly property real formMaxWidth: root.width >= 1000 ? 900
                                         : (root.width > root.height * 1.12 ? 680 : 820)
-    readonly property real pageTopMargin: root.height < 480 ? 12 : (root.width < 700 ? 16 : 28)
+    // 安全区（状态栏/挖孔）已由外壳统一内缩，这里只留少量呼吸空间（旧值 12/16/28 偏大）
+    readonly property real pageTopMargin: root.height < 480 ? 6 : (root.width < 700 ? 5 : 10)
     // 在线音源（LX 脚本）列表默认收起：脚本可能有十几个，每项又有能力说明、状态和时间，
     // 全展开会把设置页撑得很长；点标题即可展开/收起。
     property bool sourcesExpanded: false

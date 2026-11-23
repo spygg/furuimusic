@@ -30,7 +30,6 @@ Item {
     // 本次登录是否已抓到 Cookie：驱动登录轮询 Timer 的 running（见文件末尾）。
     // 每次浏览器打开时复位，保证同一平台二次登录、换平台登录都能重新启动轮询。
     property bool loginCaptured: false
-    onVisibleChanged: { if (visible) loginCaptured = false }
 
     // 地址栏回车/跳转的唯一入口。
     // 不依赖 `url: browser.url` 绑定：站点内部跳转后 browser.url 是旧的，
@@ -43,7 +42,14 @@ Item {
     // 用户一开始手动改地址就置位：网页后台继续加载/跳转时，任何自动同步
     // 都不能再写 address.text，否则退格/删除会像「删不掉、还剩字母」
     property bool addressEditing: false
-    onVisibleChanged: { if (!visible) root.addressEditing = false }
+    // 两个复位逻辑必须合并到同一个 onVisibleChanged：Qt 6.11 下同一对象
+    // 写两个同名信号 handler 会报 "Property value set multiple times"，
+    // 整个组件编译失败、Loader status=Error → 点「打开」只置位 opened，
+    // 覆盖层从未创建，表现就是内置浏览器完全打不开。
+    onVisibleChanged: {
+        if (visible) loginCaptured = false
+        else root.addressEditing = false
+    }
     function loadUrl(raw) {
         const text = (raw || "").replace(/^\s+|\s+$/g, "")
         if (text.length === 0) return
@@ -200,11 +206,11 @@ Item {
             font.pixelSize: 12
             leftPadding: 12
             // 地址栏是网址输入：关掉预测/联想和自动大写，否则候选词（com/co 之类）
-            // 会被塞进输入框，退格时看起来像删不掉、还有残余字母
+            // 会被塞进输入框，退格时看起来像删不掉、还有残余字母。
+            // 切勿加 ImhSensitiveData —— 国产 ROM 会当成密码框弹「安全键盘」，无法输入中文。
             inputMethodHints: Qt.ImhUrlCharactersOnly
                               | Qt.ImhNoPredictiveText
                               | Qt.ImhNoAutoUppercase
-                              | Qt.ImhSensitiveData
             // 不用 text: browser.url 绑定：用户一输入就会打断绑定，之后再打开
             // 浏览器地址栏还停在上一次的旧内容上。改为在下面显式同步。
             background: Rectangle {

@@ -11,10 +11,10 @@ Item {
     // 这里压缩页头间距、给结果区保底高度，并给每个结果视图挂可见滚动条；
     // 不套整页 Flickable，避免与 ListView/GridView 形成同向嵌套滚动互抢手势。
     readonly property bool shortViewport: root.height < 620
-    // 页头留白：竖屏手机给 14（状态栏下方刚好透气），横屏矮窗压到 8。
-    // 之前横竖屏都按 16/28 走，安全区一扣完顶部就只剩一条缝，列表看起来被推下去了。
-    readonly property real pageTop: shortViewport ? (root.height < 420 ? 8 : 12)
-                                                  : (root.width < 700 ? 14 : 24)
+    // 页头留白：安全区（状态栏/挖孔）已由外壳 platform.insetTop 统一内缩，
+    // 这里只留少量呼吸空间，避免与 insetTop 叠加后顶部空白偏大（旧值 14/24/8/12）。
+    readonly property real pageTop: shortViewport ? (root.height < 420 ? 4 : 6)
+                                                  : (root.width < 700 ? 5 : 10)
     readonly property real pageGap: shortViewport ? 8 : 12
     readonly property real pageBottom: shortViewport ? 8 : 12
     // 页头两行（搜索行 + 我的歌单/刷新歌单 胶囊行）默认各 48dp，合计近百：
@@ -500,11 +500,12 @@ Item {
                     font.pixelSize: 13
                     background: null
                     selectByMouse: true
-                    // 输入法修复（同浏览器地址栏）：关预测/联想和自动大写，否则候选词
-                    // （拼音 co/com、英文自动大写）会被塞进输入框，退格时像「删不掉」
+                    // 输入法修复：关预测/联想和自动大写，否则候选词（拼音 co/com、
+                    // 英文自动大写）会被塞进输入框，退格时像「删不掉」。
+                    // 切勿加 ImhSensitiveData —— 国产 ROM（ColorOS/MIUI 等）会把它
+                    // 当成密码/敏感输入框，强制弹「安全键盘」，无法输入中文。
                     inputMethodHints: Qt.ImhNoPredictiveText
                                       | Qt.ImhNoAutoUppercase
-                                      | Qt.ImhSensitiveData
                     // 不用 text: root.searchKeyword 绑定：用户一输入就打断绑定，
                     // 后台重求值会把旧词写回、打断拼音组合输入。改为下面的显式同步。
                     Component.onCompleted: text = root.searchKeyword

@@ -1,7 +1,11 @@
 {
-  "version": "1.4.42",
-  "desc": "新增\n- 车机语音控制彻底修复：特供版改用网易云车机版包名 com.netease.cloudmusic.iot（在小迪语音白名单内），语音「播放晴天」「打开网易云音乐」不再落到官方版\n\n修复\n- 此前伪装央广云听空位包名 cmgyunting.vehicleplayer.cnr，被车机系统硬编码归类到「在线节目/新闻」而非「音乐」，默认音乐列表看不到本 App、点歌始终走官方网易云；改用 .iot 包名后经 FUNCTION_UPDATE 广播登记进 MUSIC 组，且语音词表把「网易云音乐」直接映射到该包名，实车验证「播放晴天」可正常点歌\n- 安装车机特供版前需先卸载官方网易云（同包名无法共存）；应用名仍为「福瑞音乐」，在车机「选择默认使用的音乐」里选中它即可",
+  "version": "1.4.43",
+  "desc": "优化\n- 收紧曲库 / 账号 / 设置 / 播放页顶部内边距，页面内容更紧凑；挖孔屏安全区留白保持不变，不受影响\n\n新增\n- 播放页封面下方歌词速览扩为「上一句 / 当前句 / 下一句」三行，当前句加粗高亮、上下句压暗渐隐，无歌词时不占位\n\n修复\n- 曲库搜索框在 ColorOS / MIUI 等国产 ROM 上弹「安全键盘」无法输入中文：去掉被误判成密码框的输入法提示（内置浏览器地址栏同样处理）\n- 播放 MV 时点画面无反应：触屏 / 鼠标单击画面即可暂停或继续播放，双击仍全屏退出\n- 内置浏览器点「打开」完全无反应：BrowserWindow.qml 写了两个同名 onVisibleChanged，Qt 6.11 下整个组件编译失败、覆盖层从未创建；已合并为单个处理器",
   "history": [
+    {
+      "version": "1.4.42",
+      "desc": "新增\n- 车机语音控制彻底修复：特供版改用网易云车机版包名 com.netease.cloudmusic.iot（在小迪语音白名单内），语音「播放晴天」「打开网易云音乐」不再落到官方版\n\n修复\n- 此前伪装央广云听空位包名 cmgyunting.vehicleplayer.cnr，被车机系统硬编码归类到「在线节目/新闻」而非「音乐」，默认音乐列表看不到本 App、点歌始终走官方网易云；改用 .iot 包名后经 FUNCTION_UPDATE 广播登记进 MUSIC 组，且语音词表把「网易云音乐」直接映射到该包名，实车验证「播放晴天」可正常点歌\n- 安装车机特供版前需先卸载官方网易云（同包名无法共存）；应用名仍为「福瑞音乐」，在车机「选择默认使用的音乐」里选中它即可"
+    },
     {
       "version": "1.4.41",
       "desc": "新增\n- 开放 API 网页播放页可直接听歌：APP 侧提供带鉴权的音频代理 /stream（支持 Range/206 断点续传、网页断连自动中止上游请求），网页用 <audio> 播放，切歌/播放暂停/进度/音量与 APP 实时同步；暂停恢复或切歌时强制重载流\n\n移除\n- 设置里的「歌词进度线（拖动定位）」开关及播放器内对应组件\n\n修复\n- 网易云大歌单只同步一部分（583 首仅 384 首）：/api/song/detail 单次传 ≥202 个 id 服务端只回 201 首，而 fillBatch 从填充端点读取缺失退回默认 400，第一批静默丢 199 首；改为从声明端点读取并钳到 200，真机复核 583 首完整落库\n- 音源列表音源名乱码：脚本 @name 用花体/形近字拼写（如 𝖧౿ᥣᥣ𝗈 Ԝ𝗈𝗋ᥣᑯ）在车机字体下显示成方框，加载时做 Unicode NFKC 归一化与常见形近字映射，URL 兜底名做百分号解码，历史数据启动时规整回写\n- 上游已下架的恶意「独家音源」(lx/latest.js)：加入 URL 黑名单，启动时清除历史安装、README 解析跳过、手动导入直接拒绝；内置 QuickJS 沙箱仅暴露 console/定时器/lx.request 等能力，不含 Node/process/fs/shutdown，其强制关机逻辑无法执行\n- 在线音源说明补充沙箱与黑名单提示"
@@ -184,10 +188,10 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.42/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.42/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.42/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.42/FuruiMusic-android-arm64-v8a.apk",
-    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.42/FuruiMusic-carcompat-netease-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.43/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.43/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.43/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.43/FuruiMusic-android-arm64-v8a.apk",
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.43/FuruiMusic-carcompat-netease-arm64-v8a.apk"
   }
 }
