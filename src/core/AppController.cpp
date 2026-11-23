@@ -1966,7 +1966,7 @@ void AppController::downloadResult(int index)
     SourceManager::instance()->resolve(song, d->quality, [this, song](const Playable &p) {
         if (!p.ok) { emit toast(p.message); return; }
         QString dir = Settings::string(QStringLiteral("downloadDir"));
-        if (dir.isEmpty()) dir = Settings::filePath(QStringLiteral("downloads"));
+        if (dir.isEmpty()) dir = Settings::defaultDownloadsDir();
         QDir().mkpath(dir);
         QString name = (song.artist.isEmpty() ? song.title : song.artist + QStringLiteral(" - ") + song.title);
         name.remove(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|]")));

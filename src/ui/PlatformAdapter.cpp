@@ -184,7 +184,7 @@ QString PlatformAdapter::dataDir() const { return Settings::dataDir(); }
 QString PlatformAdapter::downloadsDir() const
 {
     const QString configured = Settings::string(QStringLiteral("downloadDir"));
-    return configured.isEmpty() ? Settings::filePath(QStringLiteral("downloads")) : configured;
+    return configured.isEmpty() ? Settings::defaultDownloadsDir() : configured;
 }
 
 QUrl PlatformAdapter::toFileUrl(const QString &path) const

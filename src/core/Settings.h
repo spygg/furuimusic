@@ -25,6 +25,17 @@ public:
 
     static QString filePath(const QString &name) { return dataDir() + QLatin1Char('/') + name; }
 
+    // 默认下载目录：桌面端在程序 exe 所在目录下建「下载」文件夹，便携式、跟着程序走，
+    // 用户在文件管理器里一眼就能找到；移动端（下载入口已隐藏）回退应用数据目录。
+    static QString defaultDownloadsDir()
+    {
+#if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
+        return filePath(QStringLiteral("downloads"));
+#else
+        return QCoreApplication::applicationDirPath() + QStringLiteral("/下载");
+#endif
+    }
+
     static QVariant get(const QString &key, const QVariant &fallback = QVariant())
     { return store()->settings.value(QStringLiteral("furui/") + key, fallback); }
 
