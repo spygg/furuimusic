@@ -170,6 +170,9 @@ class AppController : public QObject {
     // 冷启动时若有播放历史或续播状态，外壳直接进播放页
     Q_PROPERTY(bool showPlayerOnStart READ showPlayerOnStart CONSTANT)
     Q_PROPERTY(QString searchType READ searchType NOTIFY settingsChanged)
+    // 搜索历史下拉：Q_INVOKABLE 调用本身没有依赖跟踪，用 epoch 驱动 QML 重算
+    Q_PROPERTY(int searchHistoryEpoch READ searchHistoryEpoch NOTIFY searchHistoryChanged)
+    int searchHistoryEpoch() const { return m_searchHistoryEpoch; }
     Q_PROPERTY(bool openApiEnabled READ openApiEnabled NOTIFY settingsChanged)
     Q_PROPERTY(QString openApiAddress READ openApiAddress NOTIFY settingsChanged)
     // 运行日志：默认只进内存缓冲（开放 API 网页可看/拷贝），
@@ -318,6 +321,7 @@ public:
     Q_INVOKABLE void loadHistoryBySource(const QString &sourceId);
     Q_INVOKABLE QString sourceColor(const QString &sourceId) const;
     Q_INVOKABLE QStringList searchHistory() const;
+    Q_INVOKABLE void clearSearchHistory();
     Q_INVOKABLE void refreshPlaylists();
     Q_INVOKABLE void refreshAccounts();
     // Android 全面屏手势/返回键在首页时把任务置于后台（而不是 finish 退出）
@@ -330,6 +334,10 @@ public:
     // 参见 lx-music-mobile：搜索到的歌单也可以整体收藏成本地歌单。
     Q_INVOKABLE void addResultToPlaylist(int index, const QString &playlistUid);
     Q_INVOKABLE void collectSearchPlaylist(int index);
+    // 按 uid 收藏歌单（封面长按菜单用，来源可以是搜索结果/榜单/我的歌单）
+    Q_INVOKABLE void collectPlaylistByUid(const QString &playlistUid);
+    // 取消收藏歌单：从「我的歌单」移除（本地自建歌单不受影响）
+    Q_INVOKABLE void uncollectPlaylist(const QString &playlistUid);
     Q_INVOKABLE QString createMyPlaylist(const QString &title);
     Q_INVOKABLE bool isPlaylistCollected(const QString &playlistUid) const;
     // 搜索结果第 index 首的歌名（「加入歌单」弹层标题用；越界返回空串）
@@ -441,6 +449,7 @@ signals:
     // count < 0 表示这次搜索已被新操作作废，界面只需收起 loading，不要弹完成提示。
     void searchFinished(int count, const QString &kind);
     void playlistsLoaded();
+    void searchHistoryChanged();
     void discoveryChanged();
     // 某个平台的登录后同步结果（歌单/收藏），供登录页显示逐平台状态
     void syncFinished(const QString &sourceId, bool ok, const QString &message);
@@ -487,6 +496,8 @@ private:
     // 平台筛选视图：在用户本地歌单后面追加该平台公开默认榜单（与未登录回退同一数据源），
     // 让登录用户同时看到「我的歌单」与「不登录时显示的默认歌单」。榜单不落库。
     void appendDefaultBoards(const QString &sourceId, const QVector<Playlist> &local);
+    // 收藏歌单的统一落地（搜索结果下标 / uid 两条入口共用）
+    void collectPlaylist(const Playlist &playlist);
     void syncCustomModel();
     // 有新操作接管列表时调用：作废挂起的搜索，并补发终止信号，避免界面卡在「正在搜索…」
     void cancelPendingSearch();
@@ -520,6 +531,7 @@ private:
     QString m_commentSourceName;
     // 我的歌单版本号：收藏/新建/加入歌单后自增（见 playlistsEpoch 属性）
     int m_playlistsEpoch = 0;
+    int m_searchHistoryEpoch = 0;
     // 评论请求代次：切歌/重开评论时作废旧回包，避免上一首歌的评论写进当前歌
     quint64 m_commentsGen = 0;
     static AppController *s_instance;

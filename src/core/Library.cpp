@@ -427,6 +427,12 @@ QStringList Library::searchHistory()
     return out;
 }
 
+void Library::clearSearchHistory()
+{
+    if (!m_ready) return;
+    exec(QStringLiteral("DELETE FROM search_history"));
+}
+
 QVector<Account> Library::accounts()
 {
     QVector<Account> out;

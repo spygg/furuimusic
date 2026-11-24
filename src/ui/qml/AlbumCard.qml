@@ -18,6 +18,8 @@ Item {
     property color lineColor: theme.line
 
     signal clicked()
+    // 封面长按弹菜单（收藏/取消收藏等）；坐标是卡片局部坐标
+    signal longPressed(real posX, real posY)
 
     // 封面宽度 = delegate 宽 - card 的 6*2 margins - ColumnLayout 的 10*2 margins
     readonly property real innerWidth: Math.max(40, width - 32)
@@ -180,7 +182,20 @@ Item {
             id: hover
             anchors.fill: parent
             hoverEnabled: true
-            onClicked: root.clicked()
+            // 长按后松开 Qt 仍会补发 clicked，吞掉这一次，避免菜单刚弹起就打开歌单
+            property bool holdConsumed: false
+            onPressed: holdConsumed = false
+            onPressAndHold: {
+                holdConsumed = true
+                root.longPressed(mouseX, mouseY)
+            }
+            onClicked: {
+                if (holdConsumed) {
+                    holdConsumed = false
+                    return
+                }
+                root.clicked()
+            }
         }
     }
 }

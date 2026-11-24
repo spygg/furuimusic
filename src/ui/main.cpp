@@ -357,6 +357,61 @@ int main(int argc, char *argv[])
                             if (seekSearch(child)) break;
                     }
                 }
+                // FURUI_CAPTURE_HISTORY=1：截「历史搜索」下拉。
+                // 窗口激活会抢走焦点，直接调 QML 探针展开面板，不依赖 TextField 焦点
+                if (qEnvironmentVariableIntValue("FURUI_CAPTURE_HISTORY") > 0
+                    && window->contentItem()) {
+                    // 页面可能还在 Loader 里没实例化，等其它钩子/首次布局都落定再找
+                    QTimer::singleShot(350, &engine, [&engine]() {
+                        auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0));
+                        if (!w || !w->contentItem()) return;
+                        std::function<bool(QQuickItem *)> seekHistory = [&seekHistory](QQuickItem *it) -> bool {
+                            if (it->property("searchKeyword").isValid()
+                                && it->property("tabTitles").isValid()) {
+                                QMetaObject::invokeMethod(it, "probeShowHistory");
+                                return true;
+                            }
+                            for (QQuickItem *c : it->childItems())
+                                if (seekHistory(c)) return true;
+                            return false;
+                        };
+                        for (QQuickItem *child : w->contentItem()->childItems())
+                            if (seekHistory(child)) break;
+                    });
+                }
+                // FURUI_CAPTURE_PLAYLIST_MENU=1：调 QML 探针弹出第一张歌单卡片的
+                // 长按菜单，验证收藏/取消收藏入口（合成鼠标事件到 QML MouseArea 不可靠）
+                if (qEnvironmentVariableIntValue("FURUI_CAPTURE_PLAYLIST_MENU") > 0
+                    && window->contentItem()) {
+                    QTimer::singleShot(350, &engine, [&engine]() {
+                        auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0));
+                        if (!w || !w->contentItem()) return;
+                        // 曲库页在后台时 Popup 会被关掉，先把外壳切到曲库页
+                        std::function<bool(QQuickItem *)> seekShell = [&seekShell](QQuickItem *it) -> bool {
+                            if (it->property("pageIndex").isValid()) {
+                                it->setProperty("pageIndex", 0);
+                                return true;
+                            }
+                            for (QQuickItem *c : it->childItems())
+                                if (seekShell(c)) return true;
+                            return false;
+                        };
+                        for (QQuickItem *child : w->contentItem()->childItems())
+                            if (seekShell(child)) break;
+                        std::function<bool(QQuickItem *)> seekMenu = [&seekMenu](QQuickItem *it) -> bool {
+                            if (it->property("searchKeyword").isValid()
+                                && it->property("tabTitles").isValid()) {
+                                QMetaObject::invokeMethod(it, "probePlaylistMenu");
+                                return true;
+                            }
+                            for (QQuickItem *c : it->childItems())
+                                if (seekMenu(c)) return true;
+                            return false;
+                        };
+                        for (QQuickItem *child : w->contentItem()->childItems())
+                            if (seekMenu(child)) break;
+                    });
+                }
                 // FURUI_CAPTURE_TAB_EARLY=<n>：在拉数据之前就把音乐库切到目标 Tab。
                 // 抓图那一刻才切 Tab 会让隐藏页面里的 Image 来不及完成异步加载，
                 // 用它来区分「网络取不到」和「页面隐藏时没加载」两种情况。

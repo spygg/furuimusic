@@ -37,6 +37,7 @@ public:
     QVector<Song> history(int limit = 200);
     void addSearchHistory(const QString &keyword);
     QStringList searchHistory();
+    void clearSearchHistory();
 
     QVector<Account> accounts();
     void saveAccount(const Account &a);

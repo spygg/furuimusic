@@ -896,6 +896,8 @@ void AppController::search(const QString &keyword, const QString &sourceId)
 {
     if (keyword.trimmed().isEmpty()) return;
     Library::instance()->addSearchHistory(keyword.trimmed());
+    ++m_searchHistoryEpoch;
+    emit searchHistoryChanged();
     emit searchStarted();
     // 任何新搜索都接管搜索状态：上一条（无论歌曲还是歌单）的迟到结果全部作废
     const quint64 req = ++d->searchRequestId;
@@ -1329,6 +1331,14 @@ QString AppController::sourceColor(const QString &sourceId) const
 
 QStringList AppController::searchHistory() const
 { return Library::instance()->searchHistory(); }
+
+void AppController::clearSearchHistory()
+{
+    Library::instance()->clearSearchHistory();
+    ++m_searchHistoryEpoch;
+    emit searchHistoryChanged();
+    emit toast(QStringLiteral("已清空搜索历史"));
+}
 
 void AppController::applyPlaylistFilter()
 {
@@ -1959,14 +1969,18 @@ void AppController::collectSearchPlaylist(int index)
     if (!m_searchPlaylists) return;
     const QVector<Playlist> &list = m_searchPlaylists->playlists();
     if (index < 0 || index >= list.size()) return;
-    Playlist p = list.at(index);
+    collectPlaylist(list.at(index));
+}
 
+void AppController::collectPlaylist(const Playlist &playlist)
+{
     for (const Playlist &e : Library::instance()->playlists()) {
-        if (e.uid == p.uid) {
-            emit toast(QStringLiteral("歌单「%1」已在「我的歌单」里").arg(p.title));
+        if (e.uid == playlist.uid) {
+            emit toast(QStringLiteral("歌单「%1」已在「我的歌单」里").arg(playlist.title));
             return;
         }
     }
+    Playlist p = playlist;
     p.type = QStringLiteral("custom");
     Library::instance()->savePlaylist(p);
     refreshPlaylists();
@@ -1977,6 +1991,44 @@ void AppController::collectSearchPlaylist(int index)
         Library::instance()->saveSongs(songs);
         Library::instance()->setPlaylistSongs(p.uid, songs);
     });
+}
+
+void AppController::collectPlaylistByUid(const QString &uid)
+{
+    if (uid.isEmpty()) return;
+    Playlist found;
+    bool ok = false;
+    const auto findIn = [&uid, &found, &ok](const QVector<Playlist> &list) {
+        for (const Playlist &p : list) {
+            if (p.uid == uid) { found = p; ok = true; return; }
+        }
+    };
+    findIn(m_searchPlaylists->playlists());
+    if (!ok) findIn(m_playlists->playlists());
+    if (!ok) findIn(m_discovery->playlists());
+    if (!ok) {
+        emit toast(QStringLiteral("未找到该歌单"));
+        return;
+    }
+    collectPlaylist(found);
+}
+
+void AppController::uncollectPlaylist(const QString &uid)
+{
+    if (uid.isEmpty()) return;
+    const QVector<Playlist> all = Library::instance()->playlists();
+    for (const Playlist &p : all) {
+        if (p.uid != uid) continue;
+        if (p.source == QLatin1String("local")) {
+            emit toast(QStringLiteral("本地歌单不能取消收藏"));
+            return;
+        }
+        Library::instance()->removePlaylist(uid);
+        refreshPlaylists();
+        emit toast(QStringLiteral("已取消收藏「%1」").arg(p.title));
+        return;
+    }
+    emit toast(QStringLiteral("该歌单未收藏"));
 }
 
 // 新建空歌单：uid 用 randomUUID 防撞，type=custom 走本地歌单路径。

@@ -155,6 +155,131 @@ Item {
         root.reloadSongs()
     }
 
+    // 搜索历史下拉点选：先收起面板再写文本、发搜索（runSearch 以输入框文本为准）
+    function applySearchHistory(kw)
+    {
+        const text = String(kw).trim()
+        if (text.length === 0) return
+        root.historyOpen = false
+        keyword.text = text
+        root.runSearch()
+    }
+
+    // 失焦延时收起：下拉项被点击时输入框会先失焦，立即隐藏会让点击落空
+    property bool historyOpen: false
+    // 无人值守截图用：绕过窗口激活抢焦点，直接展开历史面板
+    function probeShowHistory()
+    {
+        historyHideTimer.stop()
+        root.historyOpen = true
+    }
+    // 无人值守截图用：拿第一张歌单卡片弹出长按菜单，验证收藏/取消收藏入口
+    function probePlaylistMenu()
+    {
+        const item = playlistGrid.itemAtIndex ? playlistGrid.itemAtIndex(0) : null
+        if (item)
+            openPlaylistMenu(item.playlistUid, item.playlistTitle, item, 20, 20, function() {}, true)
+        else
+            openPlaylistMenu("probe:uid", "测试歌单", searchBox, 20, 20, function() {}, true)
+    }
+    Timer {
+        id: historyHideTimer
+        interval: 250
+        onTriggered: root.historyOpen = false
+    }
+
+    // 封面长按菜单：一份共享 Menu 服务所有歌单网格，弹出前写入当前项上下文
+    function openPlaylistMenu(uid, title, item, posX, posY, openCallback, canCollect)
+    {
+        playlistMenu.menuUid = uid
+        playlistMenu.menuCollected = app.playlistsEpoch >= 0 && app.isPlaylistCollected(uid)
+        playlistMenu.canCollect = canCollect
+        playlistMenu.openCallback = openCallback
+        const p = item.mapToItem(Overlay.overlay, posX, posY)
+        playlistMenu.x = p.x
+        playlistMenu.y = p.y
+        playlistMenu.open()
+    }
+
+    // 用 Popup + 按钮列表而不是 Menu：Menu 嵌在 StackLayout 的页面里时
+    // 弹不出来（Qt 6 Quick Controls 2 的父级/关闭策略问题），Popup 同工程已验证
+    Popup {
+        id: playlistMenu
+        parent: Overlay.overlay
+        property string menuUid: ""
+        property bool menuCollected: false
+        property bool canCollect: true
+        property var openCallback: null
+        width: 168
+        height: menuCol.implicitHeight + 12
+        padding: 6
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle {
+            color: theme.card
+            border.color: cLine
+            border.width: 1
+            radius: 14
+        }
+        contentItem: ColumnLayout {
+            id: menuCol
+            spacing: 2
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 36
+                radius: 8
+                color: openMa.containsMouse ? theme.cardHover : "transparent"
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: 10
+                    text: "打开歌单"
+                    color: cText
+                    font.pixelSize: 13
+                }
+                MouseArea {
+                    id: openMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        playlistMenu.close()
+                        if (playlistMenu.openCallback) playlistMenu.openCallback()
+                    }
+                }
+            }
+
+            Rectangle {
+                // 本地自建歌单没有收藏概念，不显示这一项
+                visible: playlistMenu.canCollect
+                Layout.fillWidth: true
+                Layout.preferredHeight: 36
+                radius: 8
+                color: collectMa.containsMouse ? theme.cardHover : "transparent"
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: 10
+                    text: playlistMenu.menuCollected ? "取消收藏" : "添加收藏"
+                    color: cText
+                    font.pixelSize: 13
+                }
+                MouseArea {
+                    id: collectMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        playlistMenu.close()
+                        if (playlistMenu.menuUid.length === 0) return
+                        if (playlistMenu.menuCollected) app.uncollectPlaylist(playlistMenu.menuUid)
+                        else app.collectPlaylistByUid(playlistMenu.menuUid)
+                    }
+                }
+            }
+        }
+    }
+
     readonly property int gridColumns: Math.max(2, Math.min(6,
         Math.floor(Math.max(340, libraryArea.width) / 170)))
     readonly property real gridCellWidth: Math.max(120, libraryArea.width / gridColumns)
@@ -463,6 +588,8 @@ Item {
 
         // 玻璃胶囊搜索框 + 清除键
         Rectangle {
+            id: searchBox
+            z: 2   // 历史下拉盖在曲库内容之上
             Layout.fillWidth: true
             // 只写 fillWidth 会被右侧图标按钮压到 0：RowLayout 按 preferred 分配余量，
             // 而 TextField 空内容时 implicitWidth 约等于 0，手机竖屏就塌成一枚图标。
@@ -531,7 +658,14 @@ Item {
                     // 一聚焦就进入搜索态：此时软键盘刚弹起，先把迷你播放条隐藏，
                     // 避免它和键盘挤压搜索结果（原先要敲出内容才隐藏，聚焦空档播放栏仍占位）
                     onActiveFocusChanged: {
-                        if (activeFocus) root.keywordEditing = true
+                        if (activeFocus) {
+                            root.keywordEditing = true
+                            historyHideTimer.stop()
+                            root.historyOpen = true
+                        } else {
+                            // 点历史项时先失焦，延时收起让 onClicked 先落地
+                            historyHideTimer.start()
+                        }
                         app.searchActive = activeFocus || root.searchMode
                     }
                     onAccepted: root.runSearch()
@@ -559,6 +693,89 @@ Item {
                         onClicked: {
                             keyword.text = ""
                             root.clearSearch()
+                        }
+                    }
+                }
+            }
+
+            // 聚焦搜索框弹出历史搜索：后端已有 search_history 表，这里只做展示和点选重搜
+            // 挂在 Overlay 层：下拉会跨过下一排胶囊，普通父子层级会被兄弟控件压住
+            Rectangle {
+                parent: Overlay.overlay
+                readonly property point anchor: searchBox.mapToItem(Overlay.overlay, 0, searchBox.height + 6)
+                x: anchor.x
+                y: anchor.y
+                width: searchBox.width
+                z: 100
+                height: Math.min(320, 38 + searchHistoryList.contentHeight)
+                visible: root.historyOpen && searchHistoryList.count > 0
+                radius: theme.radiusMd
+                color: theme.card
+                border.color: cLine
+                border.width: 1
+                clip: true
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 0
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 38
+                        spacing: 8
+                        Text {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 12
+                            text: "历史搜索"
+                            color: cSub
+                            font.pixelSize: theme.fontSm
+                        }
+                        Text {
+                            text: "清空"
+                            color: cPrimary
+                            font.pixelSize: theme.fontSm
+                            rightPadding: 12
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    app.clearSearchHistory()
+                                    root.historyOpen = false
+                                }
+                            }
+                        }
+                    }
+
+                    ListView {
+                        id: searchHistoryList
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        spacing: 2
+                        // 显式引用 epoch：Q_INVOKABLE 调用不会自己建立依赖
+                        model: app.searchHistoryEpoch >= 0 ? app.searchHistory() : []
+                        delegate: Rectangle {
+                            width: searchHistoryList.width
+                            height: 38
+                            color: histMa.containsMouse ? theme.cardHover : "transparent"
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.left: parent.left
+                                anchors.leftMargin: 12
+                                anchors.right: parent.right
+                                anchors.rightMargin: 12
+                                text: modelData
+                                color: cText
+                                font.pixelSize: 13
+                                elide: Text.ElideRight
+                            }
+                            MouseArea {
+                                id: histMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.applySearchHistory(modelData)
+                            }
                         }
                     }
                 }
@@ -902,6 +1119,31 @@ Item {
                                         onClicked: app.addPlaylistToQueue(model.uid)
                                     }
                                 }
+
+                                // 收藏歌单点心形取消收藏，取消后直接从「我的歌单」移除；
+                                // 本地自建歌单没有收藏概念，不给这个按钮
+                                Item {
+                                    Layout.preferredWidth: theme.touchMin
+                                    Layout.preferredHeight: theme.touchMin
+                                    Layout.alignment: Qt.AlignVCenter
+                                    visible: model.source !== "local"
+                                    property bool collected: app.playlistsEpoch >= 0
+                                                             && app.isPlaylistCollected(model.uid)
+                                    GlyphIcon {
+                                        name: parent.collected ? "heartFill" : "heart"
+                                        size: 18
+                                        anchors.centerIn: parent
+                                        color: parent.collected ? "#e64c4c" : cSub
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: parent.collected
+                                                   ? app.uncollectPlaylist(model.uid)
+                                                   : app.collectPlaylistByUid(model.uid)
+                                    }
+                                }
                             }
                         }
                     }
@@ -917,17 +1159,55 @@ Item {
                         cellHeight: root.gridCellHeight
                         visible: root.gridView && root.openPlaylistTitle === ""
 
-                        delegate: AlbumCard {
+                        delegate: Item {
+                            id: myPlCard
                             width: playlistGrid.cellWidth
                             height: playlistGrid.cellHeight
-                            title: model.title
-                            subtitle: (model.count > 0 ? model.count + " 首 · " : "")
-                                      + model.sourceName
-                                      + (model.owner.length > 0 ? " · " + model.owner : "")
-                            cover: model.cover
-                            badge: model.sourceName
-                            accent: app.sourceColor(model.source)
-                            onClicked: root.openPlaylist(model.title, model.uid)
+                            property string playlistUid: model.uid
+                            property string playlistTitle: model.title
+                            property bool collected: app.playlistsEpoch >= 0
+                                                     && app.isPlaylistCollected(model.uid)
+                            AlbumCard {
+                                anchors.fill: parent
+                                anchors.margins: 1
+                                title: model.title
+                                subtitle: (model.count > 0 ? model.count + " 首 · " : "")
+                                          + model.sourceName
+                                          + (model.owner.length > 0 ? " · " + model.owner : "")
+                                cover: model.cover
+                                badge: model.sourceName
+                                accent: app.sourceColor(model.source)
+                                onClicked: root.openPlaylist(model.title, model.uid)
+                                onLongPressed: root.openPlaylistMenu(
+                                    model.uid, model.title, myPlCard, posX, posY,
+                                    function() { root.openPlaylist(model.title, model.uid) },
+                                    model.source !== "local")
+                            }
+                            // 已收藏的外部歌单：点右上角红心直接取消收藏
+                            Rectangle {
+                                width: 34
+                                height: 34
+                                radius: 17
+                                anchors.top: parent.top
+                                anchors.right: parent.right
+                                anchors.margins: 6
+                                visible: model.source !== "local" && myPlCard.collected
+                                color: myPlHeartMa.containsMouse
+                                       ? Qt.rgba(0, 0, 0, 0.25) : Qt.rgba(0, 0, 0, 0.12)
+                                GlyphIcon {
+                                    name: "heartFill"
+                                    size: 16
+                                    anchors.centerIn: parent
+                                    color: "#FB7185"
+                                }
+                                MouseArea {
+                                    id: myPlHeartMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: app.uncollectPlaylist(model.uid)
+                                }
+                            }
                         }
                     }
 
@@ -1353,6 +1633,7 @@ Item {
                         visible: root.gridView && root.discoveryTitle === "" && !qishuiPanel.visible
 
                         delegate: AlbumCard {
+                            id: discCard
                             width: discoveryGrid.cellWidth
                             height: discoveryGrid.cellHeight
                             title: model.title
@@ -1362,6 +1643,10 @@ Item {
                             badge: model.sourceName
                             accent: app.sourceColor(model.source)
                             onClicked: root.openDiscovery(model.title, model.uid)
+                            // 长按榜单封面：收藏到「我的歌单」/ 已收藏时取消
+                            onLongPressed: root.openPlaylistMenu(
+                                model.uid, model.title, discCard, posX, posY,
+                                function() { root.openDiscovery(model.title, model.uid) }, true)
                         }
                     }
 
@@ -2106,6 +2391,7 @@ Item {
                                 // 包一层 Item 挂收藏角标：AlbumCard 只有 clicked 信号，
                                 // 右上角心形不挡卡片点击（MouseArea 在卡片上层，只占角上 34dp）
                                 delegate: Item {
+                                    id: searchPlCard
                                     width: searchPlaylistGrid.cellWidth
                                     height: searchPlaylistGrid.cellHeight
                                     property bool collected: app.playlistsEpoch >= 0
@@ -2126,6 +2412,14 @@ Item {
                                             root.tabIndex = 0
                                             app.loadPlaylist(model.uid)
                                         }
+                                        onLongPressed: root.openPlaylistMenu(
+                                            model.uid, model.title, searchPlCard, posX, posY,
+                                            function() {
+                                                root.exitSearch()
+                                                root.openPlaylistTitle = model.title
+                                                root.tabIndex = 0
+                                                app.loadPlaylist(model.uid)
+                                            }, true)
                                     }
                                     Rectangle {
                                         width: 34
