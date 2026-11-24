@@ -178,6 +178,9 @@ Rectangle {
         cursorShape: root.controlsVisible ? Qt.ArrowCursor : Qt.BlankCursor
         onPositionChanged: if (!root.touchLike) root.wake()
         onClicked: {
+            // 工具条隐藏时，第一次点击只负责把它唤出来，不改变播放状态；
+            // 工具条已显示时再点才是播放/暂停。
+            if (!root.controlsVisible) { root.wake(); return }
             root.wake()
             // 双击的第二次 click 不能又触发一次播放/暂停
             if (Date.now() - root.lastDoubleTap < 350) return

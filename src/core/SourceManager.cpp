@@ -167,13 +167,25 @@ void SourceManager::searchPlaylists(const QString &keyword, const QString &sourc
     else if (MusicSource *s = source(sourceId)) targets << s;
     if (targets.isEmpty()) { if (cb) cb(QVector<Playlist>()); return; }
 
+    // 与 rank 一样按平台轮转交错：直接按完成顺序拼接时，先回来的平台会把整屏占满，
+    // 看起来像「只有某个平台能搜到歌单」。变量名不能叫 slots（Qt 关键字宏）。
+    auto perSource = std::make_shared<QVector<QVector<Playlist>>>(targets.size());
     auto remaining = std::make_shared<int>(targets.size());
-    auto collected = std::make_shared<QVector<Playlist>>();
-    for (MusicSource *s : targets) {
+    for (int i = 0; i < targets.size(); ++i) {
+        MusicSource *s = targets.at(i);
         s->searchPlaylist(keyword, limit, 0,
-            [collected, remaining, cb](const QVector<Playlist> &list) {
-                collected->append(list);
-                if (--(*remaining) == 0 && cb) cb(*collected);
+            [perSource, remaining, cb, i](const QVector<Playlist> &list) {
+                (*perSource)[i] = list;
+                if (--(*remaining) == 0 && cb) {
+                    int rows = 0;
+                    for (const QVector<Playlist> &v : *perSource) rows = qMax(rows, int(v.size()));
+                    QVector<Playlist> out;
+                    out.reserve(rows * int(perSource->size()));
+                    for (int row = 0; row < rows; ++row)
+                        for (const QVector<Playlist> &v : *perSource)
+                            if (row < v.size()) out << v.at(row);
+                    cb(out);
+                }
             });
     }
 }
@@ -743,42 +755,65 @@ void SourceManager::mv(const Song &song, MvCallback cb)
 
 void SourceManager::mvCrossSource(const Song &song, MvCallback cb)
 {
-    MusicSource *netease = source(QStringLiteral("netease"));
-    if (!netease) {
-        if (cb) cb(false, QUrl(), QStringLiteral("没有可用的 MV 匹配源"));
+    const QString keyword = (song.title + QLatin1Char(' ') + song.artist).trimmed();
+    // 本平台优先（QQ 歌命中 QQ MV），其次 QQ、最后网易云：
+    // 华语 MV 库里 QQ 版权最全，网易云常有同名翻唱（会放成别人的 MV）
+    QStringList order{song.source};
+    for (const QString &id : {QStringLiteral("qq"), QStringLiteral("netease")}) {
+        if (!order.contains(id)) order << id;
+    }
+    const auto done = std::make_shared<bool>(false);
+    mvSearchNext(song, keyword, order, done, cb);
+    // 兜底收尾：所有平台都没匹配（或个别平台被限流）时回调失败，避免 MV 按钮一直转圈
+    QTimer::singleShot(8500, this, [song, cb, done]() {
+        if (*done) return;
+        *done = true;
+        qInfo().noquote() << QStringLiteral("[MV] 跨源搜索「%1 %2」无匹配")
+                                 .arg(song.title, song.artist);
+        if (cb) cb(false, QUrl(), QStringLiteral("没有找到匹配的 MV"));
+    });
+}
+
+void SourceManager::mvSearchNext(const Song &song, const QString &keyword,
+                                 QStringList candidates, const std::shared_ptr<bool> &done,
+                                 MvCallback cb)
+{
+    if (*done) return;
+    if (candidates.isEmpty()) {
+        *done = true;
+        qInfo().noquote() << QStringLiteral("[MV] 跨源搜索「%1 %2」无匹配")
+                                 .arg(song.title, song.artist);
+        if (cb) cb(false, QUrl(), QStringLiteral("没有找到匹配的 MV"));
         return;
     }
-    const QString keyword = (song.title + QLatin1Char(' ') + song.artist).trimmed();
-    const auto started = std::make_shared<bool>(false);
-    search(keyword, QStringLiteral("netease"), 20,
-           [this, song, netease, cb, started](const QVector<Song> &list) {
-        if (*started) return;
+    const QString id = candidates.takeFirst();
+    MusicSource *src = source(id);
+    if (!src) { mvSearchNext(song, keyword, candidates, done, cb); return; }
+    src->mvSearch(keyword, 10, [this, song, src, id, keyword, candidates, done, cb]
+                                 (const QVector<Song> &list) {
+        if (*done) return;
         qreal best = 0.6;
-        QString mvid;
         Song matched;
         for (const Song &c : list) {
-            // 网易云搜索把原始 JSON 存进了 extra，mvid 不在字段映射里，直接读原值
-            const QString id = c.extra.value(QStringLiteral("mvid")).toString();
-            if (id.isEmpty() || id == QLatin1String("0")) continue;
+            // MV 比换源苛刻：歌名相同、歌手完全不同的翻唱 MV 太多（实测「晴天」曾命中
+            // 邓天晴的翻唱），歌手相似度过低直接丢弃，宁可提示没有 MV
+            if (similarity(song.artist, c.artist) < 0.5) continue;
             const qreal sc = candidateScore(song, c);
-            if (sc > best) { best = sc; mvid = id; matched = c; }
+            if (sc > best) { best = sc; matched = c; }
         }
-        if (mvid.isEmpty() || matched.title.isEmpty()) return;
-        *started = true;
-        qInfo().noquote() << QStringLiteral("[MV] 跨源命中「%1 - %2」→ 网易云 MV %3（%4）")
-                                 .arg(song.title, song.artist, mvid).arg(best, 0, 'f', 2);
+        if (matched.title.isEmpty()) {
+            mvSearchNext(song, keyword, candidates, done, cb);
+            return;
+        }
+        *done = true;
+        qInfo().noquote() << QStringLiteral("[MV] 跨源命中「%1 - %2」→ %3 MV %4（%5）")
+                                 .arg(song.title, song.artist,
+                                      SourceConfig::instance()->nameOf(id), matched.sourceId)
+                                 .arg(best, 0, 'f', 2);
         Song target = matched;
-        target.source = QStringLiteral("netease");
-        target.extra.insert(QStringLiteral("mvid"), mvid);
-        netease->mv(target, cb);
-    });
-    // search 的多次软刷新回调都没有匹配时兜底收尾，避免 MV 按钮一直转圈
-    QTimer::singleShot(8500, this, [song, cb, started]() {
-        if (!*started && cb) {
-            qInfo().noquote() << QStringLiteral("[MV] 跨源搜索「%1 %2」无匹配")
-                                     .arg(song.title, song.artist);
-            cb(false, QUrl(), QStringLiteral("没有找到匹配的 MV"));
-        }
+        target.source = id;
+        target.extra.insert(QStringLiteral("mvid"), target.sourceId);
+        src->mv(target, cb);
     });
 }
 

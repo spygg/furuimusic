@@ -89,7 +89,7 @@ Rectangle {
     // 车机和手机没有 hover：按下必须有反馈，否则点一下像没反应。按下时叠一层主色底并
     // 轻微内收，松手由 Behavior 回弹。
     color: hover.pressed ? Qt.rgba(accent.r, accent.g, accent.b, 0.16)
-                         : (hover.hovered ? cHover : "transparent")
+                         : (hover.containsMouse ? cHover : "transparent")
     Behavior on color { ColorAnimation { duration: 140 } }
     scale: hover.pressed ? 0.985 : 1.0
     Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
@@ -239,7 +239,7 @@ Rectangle {
                     }
                 }
                 Text {
-                    visible: root.duration > 0 && !hover.hovered
+                    visible: root.duration > 0 && !hover.containsMouse
                     text: root.mmss(root.duration)
                     color: cSub
                     font.pixelSize: theme.fontSm
@@ -260,7 +260,7 @@ Rectangle {
             border.color: root.playing ? Qt.rgba(accent.r, accent.g, accent.b, 0.4) : cLine
             border.width: 1
             // 触屏没有 hover 事件：胶囊必须常驻，否则整行所有操作都点不到
-            opacity: root.touchMode || hover.hovered || root.playing ? 1 : 0
+            opacity: root.touchMode || hover.containsMouse || root.playing ? 1 : 0
             // 隐藏时不能再吃掉点击：否则整行右侧有一块看不见但仍可点的热区
             enabled: opacity > 0.01
             Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }

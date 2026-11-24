@@ -1,7 +1,11 @@
 {
-  "version": "1.4.48",
-  "desc": "修复\n- 在线更新下载后提示「版本相同，无需重复安装」：v1.4.46 / v1.4.47 的发布包内部版本号误停在 1.4.45，下载的 APK versionCode 与已装版本相同被安装预检拦截；现同步为 1.4.48，可正常覆盖安装。\n- CI 增加 tag / Version.h / 版本清单三处版本一致性校验，防止发版漏改版本号再次发生。",
+  "version": "1.4.49",
+  "desc": "新增\n- 歌词跨源兜底：当前平台没有歌词（如酷狗部分歌曲）时直接走酷狗歌词库两段式取词，先按歌名搜索、无结果再用「歌名 歌手」二次搜索，按歌曲时长挑最佳候选并过滤翻唱推广行；晴天 / 青花瓷 / 夜曲 / 稻香等已实测有词\n- 歌单搜索跨平台：QQ、网易云、酷狗等平台的歌单搜索结果全部接入，并按平台轮转交错展示，不再被先返回的平台占满（此前只显示网易云歌单）\n- MV 跨源匹配升级：本平台没有 MV 时直接搜各平台 MV 库（网易云 type=1004、QQ search_type=4），按歌名 / 歌手 / 时长打分，并拒绝歌手明显不符的翻唱 MV，命中率明显提升\n\n修复\n- 酷狗歌名「歌手 - 曲名」前缀未剥离：列表里歌手显示两遍，歌词 / MV 关键词变成「歌手 - 曲名 歌手」搜不到，跨源取词整体失效\n- 搜索回包里的 <em> 高亮标签直接显示在歌名 / 歌单标题上；咪咕、酷我封面为相对路径时显示为空图\n- MV 全屏页点击画面直接播放 / 暂停：改为第一次点击先显示工具条，工具条已显示时再点才切换播放 / 暂停\n- 搜索历史点击搜索框以外位置不会收起、软键盘也不收：现在立即关闭下拉并取消焦点\n- 播放页（宽屏）返回按钮与歌曲封面重叠：内容区下移留出间距\n- 曲库 / 发现列表行悬停高亮无效（MouseArea 没有 hovered 属性）\n\n优化\n- 下载目录跨平台：macOS（.app bundle 只读）与 Linux AppImage（只读挂载点）改用系统「下载」目录下的 FuruiMusic，Windows 仍为 exe 同级的「下载」\n- 在线更新：Linux AppImage 下载后自动补执行位并直接启动；镜像测速同时识别 zip（PK）与 ELF，镜像加速对 Linux 生效；macOS 平台识别补齐旧宏\n- 车机特供版在线更新的安装预检按运行时包名（com.netease.cloudmusic.iot）取包信息，不再恒报「无法判断」\n- 移动端曲库页在封面氛围底上改用玻璃胶囊底，Tab / 图标不再被封面文字淹没；账号、设置页不再铺封面氛围底\n- MV 加载 / 缓冲改用专用的 LoadingMedia / BufferingMedia 图标\n- 构建脚本优先探测本机已安装的 Qt 6",
   "history": [
+    {
+      "version": "1.4.48",
+      "desc": "修复\n- 在线更新下载后提示「版本相同，无需重复安装」：v1.4.46 / v1.4.47 的发布包内部版本号误停在 1.4.45，下载的 APK versionCode 与已装版本相同被安装预检拦截；现同步为 1.4.48，可正常覆盖安装。\n- CI 增加 tag / Version.h / 版本清单三处版本一致性校验，防止发版漏改版本号再次发生。"
+    },
     {
       "version": "1.4.47",
       "desc": "新增\n- 搜索历史：点击搜索框弹出「历史搜索」下拉，展示最近 20 条关键词，点任意一条即可再次搜索，支持一键清空\n- 歌单收藏管理：「我的歌单」中收藏的外部歌单可一键取消收藏（列表行尾/封面右上角红心），取消后立即从我的歌单移除；封面长按弹出菜单「打开歌单 / 添加收藏 · 取消收藏」，我的歌单、发现榜单、搜索歌单均支持\n"
@@ -208,10 +212,10 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.48/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.48/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.48/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.48/FuruiMusic-android-arm64-v8a.apk",
-    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.48/FuruiMusic-carcompat-netease-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.49/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.49/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.49/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.49/FuruiMusic-android-arm64-v8a.apk",
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.49/FuruiMusic-carcompat-netease-arm64-v8a.apk"
   }
 }

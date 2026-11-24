@@ -220,6 +220,25 @@
             "duration": "duration"
           },
           "_note": "官方 /api/mv/all 返回 {count,hasMore,data:[{id,cover,name,playCount,artistName,duration}]}；area 取值 全部/内地/港台/欧美/日本/韩国。与 AlgerMusicPlayer 的 /mv/all 契约一致。"
+        },
+        "mvSearch": {
+          "method": "GET",
+          "path": "/api/search/get",
+          "params": {
+            "s": "{keyword}",
+            "type": "1004",
+            "offset": "0",
+            "limit": "{limit}"
+          },
+          "root": "result.mvs",
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "artist": "artistName",
+            "cover": "cover",
+            "duration": "duration"
+          },
+          "_note": "MV 搜索（type=1004）：歌曲搜索回包里每首歌的 mvid 常为 0（版权缺失的曲目甚至搜不到歌），只有这个接口能按 MV 名称+歌手直接命中。duration 已是毫秒。"
         }
       },
       "login": {
@@ -393,29 +412,97 @@
       },
       "endpoints": {
         "search": {
-          "method": "GET",
-          "path": "/soso/fcgi-bin/client_search_cp",
-          "params": {
-            "w": "{keyword}",
-            "p": "{page}",
-            "n": "{limit}",
-            "format": "json",
-            "t": "0"
+          "method": "POST",
+          "path": "https://u.y.qq.com/cgi-bin/musicu.fcg",
+          "contentType": "json",
+          "_note": "老的 client_search_cp 已整体 500（nginx 空回包）；改走 musicu Mobile：歌曲 search_type=0 + grp=0，结果在 req.data.body.item_song。interval 是秒。",
+          "jsonBody": {
+            "comm": {
+              "ct": "11",
+              "cv": "1003006",
+              "v": "1003006",
+              "uin": "0",
+              "format": "json"
+            },
+            "req": {
+              "module": "music.search.SearchCgiService",
+              "method": "DoSearchForQQMusicMobile",
+              "param": {
+                "query": "{keyword}",
+                "num_per_page": "{limit:int}",
+                "page_num": "{page:int}",
+                "search_type": 0,
+                "grp": 0
+              }
+            }
           },
-          "root": "data.song.list",
+          "root": "req.data.body.item_song",
           "fields": {
-            "id": "songmid",
-            "title": "songname",
+            "id": "mid",
+            "title": "name",
             "artist": "singer[].name",
-            "album": "albumname",
-            "albumId": "albummid",
+            "album": "album.name",
+            "albumId": "album.mid",
             "coverTemplate": "https://y.gtimg.cn/music/photo_new/T002R300x300M000{albumId}.jpg",
             "duration": "interval",
             "durationScale": 1000,
             "vip": "pay.pay_play",
             "vipValues": [
               "1"
-            ]
+            ],
+            "mvId": "mv.vid",
+            "_note": "mv.vid 是腾讯视频 id，命中后可直接跳 MV 播放，不必再搜一次"
+          }
+        },
+        "mvSearch": {
+          "method": "POST",
+          "path": "https://u.y.qq.com/cgi-bin/musicu.fcg",
+          "contentType": "json",
+          "_note": "MV 搜索：search_type 与 grp 都取 4，结果在 req.data.body.item_mv；id 用 vid（腾讯视频 id），mvname/singername 带 <em> 需要 stripHtml。duration 为秒。",
+          "jsonBody": {
+            "comm": {
+              "ct": "11",
+              "cv": "1003006",
+              "v": "1003006",
+              "uin": "0",
+              "format": "json"
+            },
+            "req": {
+              "module": "music.search.SearchCgiService",
+              "method": "DoSearchForQQMusicMobile",
+              "param": {
+                "query": "{keyword}",
+                "num_per_page": "{limit:int}",
+                "page_num": "{page:int}",
+                "search_type": 4,
+                "grp": 4
+              }
+            }
+          },
+          "root": "req.data.body.item_mv",
+          "fields": {
+            "id": "vid",
+            "title": "mvname",
+            "artist": "singername",
+            "cover": "pic",
+            "duration": "duration",
+            "durationScale": 1000,
+            "stripHtml": true
+          }
+        },
+        "mvUrl": {
+          "method": "GET",
+          "path": "https://vv.video.qq.com/getinfo",
+          "params": {
+            "vids": "{mvId}",
+            "platform": "101001",
+            "charge": "0",
+            "otype": "json",
+            "defn": "{mvR}"
+          },
+          "extra": {
+            "mode": "tencentVideo",
+            "_note": "QQ 音乐 MV 由腾讯视频托管：响应是 QZOutputJson={...};（非纯 JSON），播放地址 = vl.vi[0].ul.ui[0].url + fn + ?vkey=fvkey，由 MusicSource 专用解析；defn 由 MusicSource 映射成 fhd/hd。"
           }
         },
         "rank": {
@@ -849,6 +936,25 @@
             "backup_url[0]"
           ],
           "_note": "play/getdata 已失效（返回 data:[]/err_code 20010），改用移动端 getSongInfo.php?cmd=playInfo，直接返回 url / backup_url[0] 可播 MP3 直链（已实测 200 audio/mpeg）。"
+        },
+        "lyric": {
+          "method": "GET",
+          "_note": "酷狗没有单步歌词接口，必须两步：① krcs.kugou.com/search 按「仅歌名 + 时长」搜候选（实测关键词带歌手返回 0 条，只能传歌名），② lyrics.kugou.com/download 用 id/accesskey 取 base64 LRC。两步都由 MusicSource::lyric 的 kugouLyric 模式实现，download 模板放 extra。",
+          "path": "https://krcs.kugou.com/search",
+          "params": {
+            "ver": "1",
+            "man": "yes",
+            "client": "mobi",
+            "keyword": "{name}",
+            "duration": "{duration}"
+          },
+          "headers": {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 11_0 like Mac OS X)"
+          },
+          "extra": {
+            "mode": "kugouLyric",
+            "download": "https://lyrics.kugou.com/download?ver=1&client=pc&id={lyricId}&accesskey={accesskey}&fmt=lrc&charset=utf8"
+          }
         }
       },
       "login": {
@@ -1088,27 +1194,28 @@
       "endpoints": {
         "search": {
           "method": "GET",
-          "path": "/api/www/search/searchMusicBykeyWord",
+          "path": "https://search.kuwo.cn/r.s",
+          "_note": "www.kuwo.cn/api/www 的检索对匿名指纹一律回 The request is illegal；改用老版 r.s。pn 从 0 开始用 pageIndex；封面是相对路径，补 img1 前缀。",
           "params": {
-            "key": "{keyword}",
-            "pn": "{page}",
+            "all": "{keyword}",
+            "ft": "music",
+            "pn": "{pageIndex}",
             "rn": "{limit}",
-            "httpsStatus": "1"
+            "vipver": "1",
+            "encoding": "utf8",
+            "rformat": "json",
+            "mobi": "1"
           },
-          "root": "data.list",
+          "root": "abslist",
           "fields": {
-            "id": "rid",
-            "title": "name",
-            "artist": "artist",
-            "album": "album",
-            "cover": "pic",
-            "duration": "duration",
-            "durationScale": 1000,
-            "vip": "isVIP",
-            "vipValues": [
-              "1",
-              "true"
-            ]
+            "id": "MUSICRID",
+            "title": "NAME",
+            "artist": "ARTIST",
+            "album": "ALBUM",
+            "cover": "web_albumpic_short",
+            "coverPrefix": "https://img1.kuwo.cn/star/albumcover/",
+            "duration": "DURATION",
+            "durationScale": 1000
           }
         },
         "rank": {
@@ -1126,6 +1233,33 @@
           }
         },
         "playlistDetail": {
+          "method": "GET",
+          "path": "http://nplserver.kuwo.cn/pl.svc",
+          "_note": "歌单搜索给的是用户歌单 playlistid，必须走 pl.svc；keyset=pl2012 少一个就回 PARAM_ERROR。pn 从 0 开始，所以用 pageIndex。",
+          "params": {
+            "op": "getlistinfo",
+            "pid": "{id}",
+            "pn": "{pageIndex}",
+            "rn": "{limit}",
+            "encode": "utf8",
+            "keyset": "pl2012",
+            "identity": "kuwo",
+            "pcmp4": "1",
+            "vipver": "MUSIC_9.0.5.0_W1",
+            "newver": "1"
+          },
+          "root": "musiclist",
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "artist": "artist",
+            "album": "album",
+            "cover": "albumpic",
+            "duration": "duration",
+            "durationScale": 1000
+          }
+        },
+        "rankDetail": {
           "method": "GET",
           "path": "https://wapi.kuwo.cn/api/www/bang/bang/musicList",
           "params": {
@@ -1294,43 +1428,41 @@
       "endpoints": {
         "search": {
           "method": "GET",
-          "path": "/migu/remoting/scr_search_tag",
+          "path": "https://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/search_all.do",
+          "_note": "老 scr_search_tag 已反爬。search_all.do 的歌曲在 songResultData.result；注意回包不带时长，列表会显示 00:00（播流端点仍按 copyrightId 正常工作）。",
           "params": {
-            "keyword": "{keyword}",
-            "pgc": "{page}",
-            "rows": "{limit}",
-            "type": "2"
+            "text": "{keyword}",
+            "pageNo": "{page}",
+            "pageSize": "{limit}",
+            "isCorrect": "1",
+            "searchSwitch": "{\"song\":1}"
           },
-          "root": "musics",
+          "root": "songResultData.result",
           "fields": {
             "id": "copyrightId",
-            "title": "songName",
-            "artist": "singerName",
-            "album": "albumName",
-            "cover": "cover",
-            "duration": "duration",
-            "durationScale": 1000,
-            "vip": "vip",
-            "vipValues": [
-              "1",
-              "true"
-            ]
+            "title": "name",
+            "artist": "singers[].name",
+            "album": "albums[].name",
+            "cover": "imgItems[0].img"
           }
         },
         "playlistDetail": {
           "method": "GET",
-          "path": "/migu/remoting/playlist_detail",
+          "path": "https://app.c.nf.migu.cn/MIGUM3.0/resource/playlist/song/v2.0",
+          "_note": "老的 /migu/remoting/playlist_detail 已变回 SPA HTML（反爬）。MIGUM3.0 返回 data.songList：id 用 copyrightId（与 url 端点一致）、时长是秒、封面 img3 是相对路径需要补 CDN 前缀。",
           "params": {
-            "id": "{id}",
-            "rows": "{limit}",
-            "pgc": "{page}"
+            "playlistId": "{id}",
+            "pageNo": "{page}",
+            "pageSize": "{limit}"
           },
-          "root": "musics",
+          "root": "data.songList",
           "fields": {
             "id": "copyrightId",
             "title": "songName",
-            "artist": "singerName",
-            "album": "albumName",
+            "artist": "singerList[].name",
+            "album": "album",
+            "cover": "img3",
+            "coverPrefix": "https://d.musicapp.migu.cn",
             "duration": "duration",
             "durationScale": 1000
           }
@@ -1816,31 +1948,50 @@
       }
     },
     "qq": {
-      "method": "GET",
-      "path": "/soso/fcgi-bin/client_search_cp",
-      "params": {
-        "w": "{keyword}",
-        "p": "{page}",
-        "n": "{limit}",
-        "t": "2",
-        "format": "json"
+      "method": "POST",
+      "path": "https://u.y.qq.com/cgi-bin/musicu.fcg",
+      "contentType": "json",
+      "_note": "老的 client_search_cp 已整体 500（nginx 空回包）。改用 musicu 的 Mobile 检索（Desktop 会回 code 2001 要求登录）：search_type=3 为歌单，结果在 req.data.body.item_songlist；dissname 带 <em> 高亮，靠 fields.stripHtml 去掉。",
+      "jsonBody": {
+        "comm": {
+          "ct": "11",
+          "cv": "1003006",
+          "v": "1003006",
+          "uin": "0",
+          "format": "json"
+        },
+        "req": {
+          "module": "music.search.SearchCgiService",
+          "method": "DoSearchForQQMusicMobile",
+          "param": {
+            "query": "{keyword}",
+            "num_per_page": "{limit:int}",
+            "page_num": "{page:int}",
+            "search_type": 3,
+            "grp": 1
+          }
+        }
       },
-      "root": "data.list",
+      "root": "req.data.body.item_songlist",
       "fields": {
         "id": "dissid",
         "title": "dissname",
-        "cover": "imgurl",
-        "count": "song_count",
-        "owner": "creator.name"
+        "cover": "logo",
+        "count": "songnum",
+        "owner": "nickname",
+        "stripHtml": true
       }
     },
     "kugou": {
       "method": "GET",
-      "path": "https://www.kugou.com/yy/special/index/{page}.html",
+      "path": "https://mobiles.kugou.com/api/v3/search/special",
       "params": {
-        "keyword": "{keyword}"
+        "keyword": "{keyword}",
+        "page": "{page}",
+        "pagesize": "{limit}",
+        "showtype": "1"
       },
-      "root": "data.list",
+      "root": "data.info",
       "fields": {
         "id": "specialid",
         "title": "specialname",
@@ -1851,38 +2002,44 @@
     },
     "kuwo": {
       "method": "GET",
-      "path": "/api/www/search/searchPlayListBykeyWord",
+      "path": "https://search.kuwo.cn/r.s",
+      "_note": "旧的 /api/www/search/searchPlayListBykeyWord 需要 csrf/kw_token，匿名请求回 The request is illegal。改用老版 r.s 检索，pn 是偏移量（不是页码），结果根数组为 abslist。",
       "params": {
-        "key": "{keyword}",
-        "pn": "{page}",
+        "all": "{keyword}",
+        "ft": "playlist",
+        "pn": "{offset}",
         "rn": "{limit}",
-        "httpsStatus": "1"
+        "vipver": "1",
+        "encoding": "utf8",
+        "rformat": "json",
+        "mobi": "1"
       },
-      "root": "data.list",
+      "root": "abslist",
       "fields": {
-        "id": "id",
+        "id": "playlistid",
         "title": "name",
-        "cover": "img",
-        "count": "total",
-        "owner": "uname"
+        "cover": "hts_pic",
+        "count": "songnum",
+        "owner": "nickname"
       }
     },
     "migu": {
       "method": "GET",
-      "path": "/migu/remoting/scr_search_tag",
+      "path": "https://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/search_all.do",
+      "_note": "老的 /migu/remoting/scr_search_tag 已返回反爬页面。search_all.do 的关键帧参数名是 text（不是 keyword），歌单结果在 songListResultData.result。",
       "params": {
-        "keyword": "{keyword}",
-        "pgc": "{page}",
-        "rows": "{limit}",
-        "type": "6"
+        "text": "{keyword}",
+        "pageNo": "{page}",
+        "pageSize": "{limit}",
+        "isCorrect": "1",
+        "searchSwitch": "{\"songlist\":1}"
       },
-      "root": "songLists",
+      "root": "songListResultData.result",
       "fields": {
         "id": "id",
         "title": "name",
-        "cover": "pic",
-        "count": "musicNum",
-        "owner": "createName"
+        "cover": "musicListPicUrl",
+        "count": "musicNum"
       }
     },
     "qishui": {

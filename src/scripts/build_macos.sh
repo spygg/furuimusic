@@ -3,6 +3,13 @@
 set -e
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/src"
+# 优先使用已安装的 Qt 6（主构建链，README 推荐 6.8.3 clang_64），
+# 显式指定 QT_DIR 时以用户为准，没有 Qt 6 再退回 Qt 5.15。
+if [ -z "${QT_DIR:-}" ]; then
+    for d in "$HOME"/Qt/6.*/clang_64; do
+        [ -d "$d" ] && QT_DIR="$d"
+    done
+fi
 QT_DIR="${QT_DIR:-$HOME/Qt/5.15.2/clang_64}"
 export PATH="$QT_DIR/bin:$PATH"
 

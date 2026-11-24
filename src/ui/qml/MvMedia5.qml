@@ -11,8 +11,10 @@ Item {
     property real volume: 1.0
     property bool muted: false
     readonly property bool playing: mp.playbackState === MediaPlayer.PlayingState
-    readonly property bool busy: mp.mediaStatus === MediaPlayer.Loading
-                                 || mp.mediaStatus === MediaPlayer.Buffering
+    // 用 MediaStatus 的真实枚举名：Loading/Buffering 是 Qt5 `status` 枚举的旧值，
+    // 在 mediaStatus 上不存在（Buffering 在 Qt5/Qt6 都没有），比较结果恒为 false。
+    readonly property bool busy: mp.mediaStatus === MediaPlayer.LoadingMedia
+                                 || mp.mediaStatus === MediaPlayer.BufferingMedia
     readonly property bool ended: mp.mediaStatus === MediaPlayer.EndOfMedia
     readonly property int position: mp.position
     readonly property int duration: mp.duration

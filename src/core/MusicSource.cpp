@@ -6,6 +6,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPair>
+#include <QStringList>
 #include "core/QtCompat.h"
 #include <QUrlQuery>
 
@@ -57,6 +59,8 @@ QVariantMap MusicSource::baseVars() const
     v.insert(QStringLiteral("timestamp"), QString::number(QDateTime::currentMSecsSinceEpoch()));
     v.insert(QStringLiteral("guid"), QString::number(QRandomGenerator::global()->bounded(100000000, 999999999)));
     v.insert(QStringLiteral("page"), QStringLiteral("1"));
+    // 部分平台页码从 0 开始（酷我 pl.svc 的 pn）
+    v.insert(QStringLiteral("pageIndex"), QStringLiteral("0"));
     v.insert(QStringLiteral("offset"), QStringLiteral("0"));
     v.insert(QStringLiteral("limit"), QString::number(Settings::integer(QStringLiteral("pageSize"), 30)));
     v.insert(QStringLiteral("quality"), QStringLiteral("standard"));
@@ -92,6 +96,8 @@ QVariantMap MusicSource::songVars(const Song &song, const QString &quality) cons
     v.insert(QStringLiteral("artist"), song.artist);
     v.insert(QStringLiteral("album"), song.album);
     v.insert(QStringLiteral("albumId"), song.albumId);
+    // 酷狗歌词搜索按「歌名 + 时长」挑候选，时长缺失时同名歌曲容易取错
+    v.insert(QStringLiteral("duration"), song.duration);
     v.insert(QStringLiteral("quality"), quality);
     QString br = QStringLiteral("320000");
     if (quality == QLatin1String("standard")) br = QStringLiteral("128000");
@@ -243,6 +249,7 @@ void MusicSource::requestSongsPaged(const Endpoint &ep, const QVariantMap &vars,
         v.insert(QStringLiteral("limit"), QString::number(take));
         v.insert(QStringLiteral("offset"), QString::number(offset + done));
         v.insert(QStringLiteral("page"), QString::number((offset + done) / qMax(1, take) + 1));
+        v.insert(QStringLiteral("pageIndex"), QString::number((offset + done) / qMax(1, take)));
         requestSongs(ep, v, [take, acc, stepPtr, cb](const QVector<Song> &songs) {
             *acc += songs;
             // 短页说明该平台已到底，不用再翻
@@ -594,6 +601,87 @@ void MusicSource::lyric(const Song &song, LyricCallback cb)
 {
     const Endpoint ep = m_desc.endpoints.value(QStringLiteral("lyric"));
     if (!ep.valid()) { if (cb) cb(QString(), QString()); return; }
+
+    // 酷狗：没有单步歌词接口。先搜候选拿 id/accesskey，再下载 base64 编码的 LRC。
+    if (ep.extra.value(QStringLiteral("mode")).toString() == QLatin1String("kugouLyric")) {
+        const QString tpl = ep.extra.value(QStringLiteral("download")).toString();
+        auto download = [this, song, tpl, cb](const QString &id, const QString &key) {
+            if (id.isEmpty() || key.isEmpty() || tpl.isEmpty()) {
+                if (cb) cb(QString(), QString());
+                return;
+            }
+            QVariantMap dv;
+            dv.insert(QStringLiteral("lyricId"), id);
+            dv.insert(QStringLiteral("accesskey"), key);
+            QVariantMap headers = Json::renderMap(m_desc.headers, songVars(song, QStringLiteral("standard")));
+            for (auto it = headers.begin(); it != headers.end();) {
+                if (it.value().toString().trimmed().isEmpty()) it = headers.erase(it);
+                else ++it;
+            }
+            HttpClient::instance()->request(
+                QStringLiteral("GET"), QUrl(Json::render(tpl, dv)), headers, QByteArray(),
+                [cb](const HttpClient::Reply &rr) {
+                    QString out;
+                    if (rr.ok) {
+                        const QString b64 = Json::stringAt(Json::rootOf(rr.json),
+                                                          QStringLiteral("content"));
+                        if (!b64.isEmpty())
+                            out = QString::fromUtf8(QByteArray::fromBase64(b64.toLatin1()));
+                    }
+                    // 酷狗部分歌词（如稻香）首行是平台塞的翻唱推广，直接丢掉
+                    if (out.contains(QStringLiteral("翻唱由"))) {
+                        QStringList kept;
+                        for (const QString &line : out.split(QLatin1Char('\n')))
+                            if (!line.contains(QStringLiteral("翻唱由"))
+                                && !line.contains(QStringLiteral("一键翻唱")))
+                                kept << line;
+                        out = kept.join(QLatin1Char('\n'));
+                    }
+                    if (!isLyricsUsable(out)) out.clear();
+                    if (cb) cb(out, QString());
+                });
+        };
+        // 候选挑选：同名歌曲多，优先时长最接近的；duration 字段不可靠时退回第一个候选
+        auto pick = [song](const HttpClient::Reply &r) -> QPair<QString, QString> {
+            if (!r.ok) return qMakePair(QString(), QString());
+            const QJsonArray list = r.json.object().value(QStringLiteral("candidates")).toArray();
+            QString firstId, firstKey, bestId, bestKey;
+            qint64 bestDelta = -1;
+            for (const QJsonValue &v : list) {
+                const QJsonObject c = v.toObject();
+                const QString id = c.value(QStringLiteral("id")).toVariant().toString();
+                const QString key = c.value(QStringLiteral("accesskey")).toString();
+                if (id.isEmpty() || key.isEmpty()) continue;
+                if (firstId.isEmpty()) { firstId = id; firstKey = key; }
+                const qint64 dur = c.value(QStringLiteral("duration")).toVariant().toLongLong();
+                if (song.duration <= 0 || dur <= 0) continue;
+                const qint64 delta = qAbs(dur - song.duration);
+                if (bestDelta < 0 || delta < bestDelta) {
+                    bestDelta = delta;
+                    bestId = id;
+                    bestKey = key;
+                }
+            }
+            if (!bestId.isEmpty()) return qMakePair(bestId, bestKey);
+            return qMakePair(firstId, firstKey);
+        };
+        const QVariantMap vars = songVars(song, QStringLiteral("standard"));
+        call(ep, vars, [this, ep, song, vars, download, pick](const HttpClient::Reply &r1) {
+            const QPair<QString, QString> hit = pick(r1);
+            if (!hit.first.isEmpty()) { download(hit.first, hit.second); return; }
+            // krcs 对关键词很挑：有的歌只能「歌名」搜到（如晴天），有的必须带歌手
+            // （如反方向的钟）。第一次为空就用「歌名 歌手」再搜一次。
+            QVariantMap v2 = vars;
+            v2.insert(QStringLiteral("name"),
+                      (song.title + QLatin1Char(' ') + song.artist).trimmed());
+            call(ep, v2, [download, pick](const HttpClient::Reply &r2) {
+                const QPair<QString, QString> hit2 = pick(r2);
+                download(hit2.first, hit2.second);
+            });
+        });
+        return;
+    }
+
     call(ep, songVars(song, QStringLiteral("standard")), [this, ep, cb](const HttpClient::Reply &r) {
         QString out;
         // 只认从 JSON 结构里解析出的歌词字段。此前这里有一段
@@ -979,26 +1067,48 @@ void MusicSource::mv(const Song &song, MvCallback cb)
         if (cb) cb(false, QUrl(), QStringLiteral("该平台暂未配置 MV"));
         return;
     }
-    auto deliverUrl = [this, mvEp, song, cb](const QString &mvId) {
+    // 腾讯视频（QQ 音乐 MV 的实际托管方）回包是 QZOutputJson={...};，不是纯 JSON，
+    // 播放地址还得把 ul.ui[0].url + fn + ?vkey=fvkey 拼起来
+    const bool tencent = mvEp.extra.value(QStringLiteral("mode")).toString()
+                         == QLatin1String("tencentVideo");
+    auto urlOf = [mvEp, tencent](const HttpClient::Reply &r) -> QString {
+        if (!r.ok) return QString();
+        if (!tencent)
+            return Json::firstString(Json::rootOf(r.json), mvEp.resultPaths);
+        QByteArray raw = r.body.trimmed();
+        const int eq = raw.indexOf('=');
+        if (eq >= 0) raw = raw.mid(eq + 1);
+        if (raw.endsWith(';')) raw.chop(1);
+        const QJsonValue root = QJsonDocument::fromJson(raw).object();
+        const QJsonValue vi = Json::valueAt(root, QStringLiteral("vl.vi[0]"));
+        const QString base = Json::stringAt(vi, QStringLiteral("ul.ui[0].url"));
+        const QString fn = Json::stringAt(vi, QStringLiteral("fn"));
+        const QString key = Json::stringAt(vi, QStringLiteral("fvkey"));
+        if (base.isEmpty() || fn.isEmpty() || key.isEmpty()) return QString();
+        return base + fn + QStringLiteral("?vkey=") + key;
+    };
+    auto deliverUrl = [this, mvEp, song, cb, tencent, urlOf](const QString &mvId) {
         if (mvId.isEmpty() || mvId == QLatin1String("0")) {
             if (cb) cb(false, QUrl(), QStringLiteral("该歌曲没有 MV"));
             return;
         }
-        auto attempt = [this, mvEp, song](const QString &id, const QString &r) {
+        auto attempt = [this, song, tencent](const QString &id, const QString &r) {
             QVariantMap v = songVars(song, QStringLiteral("standard"));
             v.insert(QStringLiteral("mvId"), id);
-            v.insert(QStringLiteral("mvR"), r);
+            // 腾讯视频用 fhd/shd/hd/sd 描述清晰度，其它平台直接吃 1080/480
+            v.insert(QStringLiteral("mvR"),
+                     tencent ? (r == QLatin1String("1080") ? QStringLiteral("fhd")
+                                                           : QStringLiteral("hd"))
+                             : r);
             return v;
         };
         call(mvEp, attempt(mvId, QStringLiteral("1080")),
-             [this, mvEp, song, mvId, cb, attempt](const HttpClient::Reply &r1) {
-            const QString url = r1.ok
-                ? Json::firstString(Json::rootOf(r1.json), mvEp.resultPaths) : QString();
+             [this, mvEp, song, mvId, cb, attempt, urlOf](const HttpClient::Reply &r1) {
+            const QString url = urlOf(r1);
             if (!url.isEmpty()) { if (cb) cb(true, QUrl(url), QString()); return; }
             // 高清源缺失（老 MV 只有 480p）退一档再试一次
-            call(mvEp, attempt(mvId, QStringLiteral("480")), [mvEp, cb](const HttpClient::Reply &r2) {
-                const QString url2 = r2.ok
-                    ? Json::firstString(Json::rootOf(r2.json), mvEp.resultPaths) : QString();
+            call(mvEp, attempt(mvId, QStringLiteral("480")), [mvEp, cb, urlOf](const HttpClient::Reply &r2) {
+                const QString url2 = urlOf(r2);
                 if (!url2.isEmpty()) { if (cb) cb(true, QUrl(url2), QString()); return; }
                 if (cb) cb(false, QUrl(), QStringLiteral("未取到 MV 播放地址"));
             });
@@ -1020,6 +1130,33 @@ void MusicSource::mv(const Song &song, MvCallback cb)
         const QString id2 = r.ok
             ? Json::firstString(Json::rootOf(r.json), infoEp.resultPaths) : QString();
         deliverUrl(id2);
+    });
+}
+
+void MusicSource::mvSearch(const QString &keyword, int limit, SongsCallback cb)
+{
+    const Endpoint ep = m_desc.endpoints.value(QStringLiteral("mvSearch"));
+    if (!ep.valid()) {
+        if (cb) cb(QVector<Song>());
+        return;
+    }
+    QVariantMap v = baseVars();
+    v.insert(QStringLiteral("keyword"), keyword);
+    v.insert(QStringLiteral("limit"), QString::number(limit));
+    v.insert(QStringLiteral("offset"), QStringLiteral("0"));
+    call(ep, v, [this, ep, cb](const HttpClient::Reply &r) {
+        QVector<Song> out;
+        if (r.ok) {
+            const QJsonArray arr = Json::arrayAt(Json::rootOf(r.json), ep.root);
+            for (const QJsonValue &val : arr) {
+                Song s = Json::mapSong(val, ep.fields, m_desc.id);
+                if (!s.title.isEmpty()) out << s;
+            }
+        } else {
+            qWarning().noquote() << "[source]" << m_desc.id << "mv search failed:"
+                                 << r.error << "status=" << r.status;
+        }
+        if (cb) cb(out);
     });
 }
 

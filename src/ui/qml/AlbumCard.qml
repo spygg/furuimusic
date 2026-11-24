@@ -32,10 +32,11 @@ Item {
         anchors.fill: parent
         anchors.margins: 6
         radius: theme.radiusMd
-        color: hover.hovered ? root.hoverColor : root.cardColor
+        // MouseArea 没有 hovered 属性（那是 HoverHandler 的），悬停态要读 containsMouse
+        color: hover.containsMouse ? root.hoverColor : root.cardColor
         border.color: root.lineColor
         border.width: 1
-        scale: hover.pressed ? 0.97 : (hover.hovered ? 1.02 : 1.0)
+        scale: hover.pressed ? 0.97 : (hover.containsMouse ? 1.02 : 1.0)
         Behavior on scale { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
         Behavior on color { ColorAnimation { duration: 160 } }
 
@@ -146,7 +147,7 @@ Item {
                     anchors.bottom: parent.bottom
                     anchors.margins: 8
                     color: root.accent
-                    opacity: (hover.hovered || platform.isMobile) ? 1 : 0
+                    opacity: (hover.containsMouse || platform.isMobile) ? 1 : 0
                     Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
                     Text {
                         anchors.centerIn: parent

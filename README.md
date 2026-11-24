@@ -359,7 +359,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 - **兼容副本**：`src/publish/version.json` 只服务于已经发出去、还硬编码旧路径的老客户端，不是发版时该改的文件；`.github/workflows/release.yml` 的 `manifest` job 用 `cmp` 校验两份清单逐字节一致，不一致直接卡住 Release。
 - **离线兜底**：`src/core/config.qrc` 把 `src/version.json` 编译进 `:/config/version.json`；8 个远端地址全失败时用本地清单如实回「已是最新版本」，而不是把断网误报成「无法获取更新信息」。
 - **清单字段**：`version`（最新版本号，与 `src/core/Version.h` 的 `FURUI_APP_VERSION` 及 `src/CMakeLists.txt` 的 `project(... VERSION ...)` 三处同步）、`desc`（本次更新说明）、`history`（历史版本列表，弹层一并展示）、`downloads`（各平台下载直链，可选；缺省时按 CI 产物命名拼 `https://github.com/spygg/furuimusic/releases/download/v<version>/<产物名>`）。
-- **下载与安装**：用户在弹层点「下载更新」后，`HttpClient::download` 流式写入本地并上报进度（0-100）；Android 存到 AppData（`files-path` 已被 Qt 的 FileProvider 覆盖），完成后经 `androidx FileProvider` + `ACTION_VIEW` 拉起系统安装器（AndroidManifest 已声明 `REQUEST_INSTALL_PACKAGES`）；桌面端下载到用户下载目录，完成后打开安装包所在文件夹（Windows 产物是 zip，解压覆盖安装）。
+- **下载与安装**：用户在弹层点「下载更新」后，`HttpClient::download` 流式写入本地并上报进度（0-100）；Android 存到 AppData（`files-path` 已被 Qt 的 FileProvider 覆盖），完成后经 `androidx FileProvider` + `ACTION_VIEW` 拉起系统安装器（AndroidManifest 已声明 `REQUEST_INSTALL_PACKAGES`）；Windows 下载到 exe 同级的「下载」目录（便携式），macOS/Linux 下载到系统「下载」目录下的 `FuruiMusic`（.app bundle 与 AppImage 挂载点均只读）；完成后 Windows 打开安装包所在文件夹，Linux 的 AppImage 补执行位后直接启动，macOS 的 zip 打开所在文件夹由用户解压替换。
 - **发版流程**：改 `Version.h` + CMake `project(VERSION)` + `src/version.json`（同步 `src/publish/version.json`）→ 推 tag（`v*`）→ CI 校验清单 → 自动构建并发布 Release → 老版本应用即可收到更新提示。
 
 ## 许可证

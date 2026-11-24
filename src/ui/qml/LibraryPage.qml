@@ -30,10 +30,20 @@ Item {
     readonly property color cPrimary: theme.accent
     readonly property color cLine: theme.line
     readonly property color cSoft: theme.accentSoft
-    readonly property color cChip: theme.dark ? Qt.rgba(1, 1, 1, 0.06)
-                                              : Qt.rgba(0, 0, 0, 0.05)
-    readonly property color cChipHover: theme.dark ? Qt.rgba(1, 1, 1, 0.12)
-                                                   : Qt.rgba(0, 0, 0, 0.09)
+    // 移动端外壳会在整页背后铺封面氛围底（见 Backdrop）。此时 5% 黑色胶囊
+    // 几乎完全透明，未选中的 Tab / 头部图标会被封面大字淹没；由外壳把这个
+    // 属性置真后改用带白纱的玻璃底，桌面（纯色底）仍保持原来的轻量色块。
+    property bool onArtBackdrop: false
+    readonly property color cChip: root.onArtBackdrop
+                                   ? (theme.dark ? Qt.rgba(1, 1, 1, 0.18)
+                                                 : Qt.rgba(1, 1, 1, 0.80))
+                                   : (theme.dark ? Qt.rgba(1, 1, 1, 0.06)
+                                                 : Qt.rgba(0, 0, 0, 0.05))
+    readonly property color cChipHover: root.onArtBackdrop
+                                   ? (theme.dark ? Qt.rgba(1, 1, 1, 0.26)
+                                                 : Qt.rgba(1, 1, 1, 0.92))
+                                   : (theme.dark ? Qt.rgba(1, 1, 1, 0.12)
+                                                 : Qt.rgba(0, 0, 0, 0.09))
 
     property string hint: ""
     property int tabIndex: 0
@@ -698,25 +708,29 @@ Item {
                 }
             }
 
-            // 聚焦搜索框弹出历史搜索：后端已有 search_history 表，这里只做展示和点选重搜
-            // 挂在 Overlay 层：下拉会跨过下一排胶囊，普通父子层级会被兄弟控件压住
-            Rectangle {
-                parent: Overlay.overlay
-                readonly property point anchor: searchBox.mapToItem(Overlay.overlay, 0, searchBox.height + 6)
-                x: anchor.x
-                y: anchor.y
-                width: searchBox.width
-                z: 100
+            // 聚焦搜索框弹出历史搜索：后端已有 search_history 表，这里只做展示和点选重搜。
+            // 用 Popup 而不是 Rectangle + mapToItem：Popup 挂在窗口 overlay 上，天然盖过下一排
+            // 胶囊；坐标相对 parent 计算，布局变化会自动跟随。手写 mapToItem 不会建立绑定
+            // 依赖（布局稳定前的值会被永久缓存），手机上曾出现贴屏幕最左、偏下。
+            Popup {
+                id: histPopup
+                parent: searchBox
+                x: 14                    // 放大镜距胶囊左边 14dp，下拉左缘与它对齐
+                y: searchBox.height + 2  // 贴着搜索框下边缘
+                width: searchBox.width - 14
                 height: Math.min(320, 38 + searchHistoryList.contentHeight)
                 visible: root.historyOpen && searchHistoryList.count > 0
-                radius: theme.radiusMd
-                color: theme.card
-                border.color: cLine
-                border.width: 1
-                clip: true
-
-                ColumnLayout {
-                    anchors.fill: parent
+                padding: 0
+                margins: 0
+                focus: false
+                closePolicy: Popup.NoAutoClose
+                background: Rectangle {
+                    radius: theme.radiusMd
+                    color: theme.card
+                    border.color: cLine
+                    border.width: 1
+                }
+                contentItem: ColumnLayout {
                     spacing: 0
 
                     RowLayout {
@@ -1051,7 +1065,7 @@ Item {
                             // 行内右侧胶囊是触控尺寸，行高 = 胶囊 + 上下各 10 的留白
                             height: Math.max(68, theme.touchMin + 20)
                             radius: 12
-                            color: delegateHover.hovered ? theme.cardHover : cCard
+                            color: delegateHover.containsMouse ? theme.cardHover : cCard
                             border.color: cLine
 
                             property color accent: app.sourceColor(model.source)
@@ -1664,7 +1678,7 @@ Item {
                             width: discoveryList.width
                             height: Math.max(68, theme.touchMin + 20)
                             radius: 12
-                            color: discoveryRowHover.hovered ? theme.cardHover : cCard
+                            color: discoveryRowHover.containsMouse ? theme.cardHover : cCard
                             border.color: cLine
 
                             property color accent: app.sourceColor(model.source)
@@ -2603,6 +2617,26 @@ Item {
                     }
                 }
             }
+        }
+    }
+
+    // 点击搜索框以外的任何位置：立即收起历史下拉并让输入框失焦（软键盘同步收起）。
+    // QML 里点到非输入类区域不会自动转移焦点，光靠 onActiveFocusChanged 收不起来；
+    // 用 TapHandler 又会被子项 MouseArea 的独占 grab 取消（实测点歌曲行收不起来），
+    // 所以历史展开时铺一层透明遮罩：点在搜索框内保持原样，点别处收起并吞掉这次点击。
+    MouseArea {
+        anchors.fill: parent
+        z: 1000
+        visible: root.historyOpen
+        enabled: root.historyOpen
+        preventStealing: true
+        onClicked: {
+            const p = searchBox.mapToItem(root, 0, 0)
+            if (mouse.x >= p.x && mouse.x <= p.x + searchBox.width
+                    && mouse.y >= p.y && mouse.y <= p.y + searchBox.height)
+                return
+            root.historyOpen = false
+            keyword.focus = false
         }
     }
 }           // root

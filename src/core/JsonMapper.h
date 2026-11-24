@@ -251,10 +251,28 @@ inline Song mapSong(const QJsonValue &v, const QVariantMap &fields, const QStrin
     s.title    = stringAt(v, fields.value(QStringLiteral("title")).toString());
     s.artist   = stringAt(v, fields.value(QStringLiteral("artist")).toString());
     s.album    = stringAt(v, fields.value(QStringLiteral("album")).toString());
+    // 搜索/MV 回包里的命中词会被包成 <em>…</em>（QQ 的 mvname/singername 即是），
+    // 配置声明 stripHtml 后就地剥掉标签，避免歌名里出现 HTML
+    if (fields.value(QStringLiteral("stripHtml")).toBool()) {
+        const QRegularExpression tag(QStringLiteral("<[^<>]*>"));
+        s.title.remove(tag);
+        s.artist.remove(tag);
+        s.album.remove(tag);
+    }
+    // 酷狗歌单回包的曲名是「歌手 - 曲名」（name 字段实为文件名），与 artist 重复。
+    // 不剥掉会同时撑坏列表显示（歌手出现两遍）和跨源取词/找 MV 的关键词
+    // （「周杰伦 - 晴天 周杰伦」搜不到原曲，歌词兜底整体失效）。
+    if (!s.artist.isEmpty() && s.title.startsWith(s.artist + QStringLiteral(" - ")))
+        s.title = s.title.mid(s.artist.size() + 3).trimmed();
     // 没配 cover 字段时不能拿空路径去取值：stringAt 对空路径会 str(整个对象)，
     // 返回的其实是 name/title（歌名），封面就变成了一串中文，UI 只能当坏图丢掉。
     const QString coverPath = fields.value(QStringLiteral("cover")).toString();
     s.cover    = coverUrlOf(v, coverPath);
+    // 咪咕等接口的封面是相对路径（/data/oss/resource/...），必须补 CDN 前缀
+    const QString coverPrefix = fields.value(QStringLiteral("coverPrefix")).toString();
+    if (!coverPrefix.isEmpty() && !s.cover.isEmpty()
+        && !s.cover.startsWith(QLatin1String("http"), Qt::CaseInsensitive))
+        s.cover = coverPrefix + s.cover;
     s.albumId  = stringAt(v, fields.value(QStringLiteral("albumId")).toString());
     // 有些平台（QQ 搜索/榜单）响应里根本不给封面字段，只给专辑 mid，
     // 不给 coverTemplate 时网格里全是占位图。模板里的 {albumId} 用官方 CDN 实测可取到图。
@@ -284,6 +302,14 @@ inline Song mapSong(const QJsonValue &v, const QVariantMap &fields, const QStrin
         s.sourceId = QString::number(qHash(s.normalizedKey()), 16);
     s.uid = source + QLatin1Char(':') + s.sourceId;
     if (v.isObject()) s.extra = v.toObject().toVariantMap();
+    // mvId 把原始回包里的 MV 标识（QQ 的 mv.vid / 网易云的 mvid）提前挑出来塞进 extra，
+    // MusicSource::mv 优先读它，能省掉一次歌曲详情请求
+    const QString mvIdPath = fields.value(QStringLiteral("mvId")).toString();
+    if (!mvIdPath.isEmpty()) {
+        const QString mvId = stringAt(v, mvIdPath);
+        if (!mvId.isEmpty() && mvId != QLatin1String("0"))
+            s.extra.insert(QStringLiteral("mvid"), mvId);
+    }
     return s;
 }
 
@@ -295,6 +321,10 @@ inline Playlist mapPlaylist(const QJsonValue &v, const QVariantMap &fields, cons
     p.type = type;
     p.sourceId = stringAt(v, fields.value(QStringLiteral("id")).toString());
     p.title    = stringAt(v, fields.value(QStringLiteral("title")).toString());
+    // QQ 等平台的搜索接口会把命中词包成 <em>…</em> 回传（dissname），
+    // 配置里声明 stripHtml 后就地剥掉标签，避免列表标题里出现 HTML。
+    if (fields.value(QStringLiteral("stripHtml")).toBool())
+        p.title.remove(QRegularExpression(QStringLiteral("<[^<>]*>")));
     const QString coverPath = fields.value(QStringLiteral("cover")).toString();
     p.cover    = coverUrlOf(v, coverPath);
     p.owner    = stringAt(v, fields.value(QStringLiteral("owner")).toString());

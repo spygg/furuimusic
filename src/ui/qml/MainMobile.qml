@@ -119,8 +119,11 @@ Item {
     // （这正是以前看着像没铺到屏幕左边缘的原因）。页面只负责内容，不再各自画背景。
     Backdrop {
         anchors.fill: parent
-        // 设置页关掉「封面作为歌词背景」后整窗退回纯主题底色
-        visible: theme.coverLyricBackground
+        // 设置页关掉「封面作为歌词背景」后整窗退回纯主题底色。
+        // 账号 / 设置页以裸文字、分组标题和表单为主，封面氛围底即使压到 0.9 的纱，
+        // 浅色主题下的灰色说明文字仍会被封面大字穿透；这两页直接用纯主题底，
+        // 曲库（卡片承载内容）和播放页保留氛围。
+        visible: theme.coverLyricBackground && root.pageIndex !== 2 && root.pageIndex !== 3
         source: app.currentCover.length > 0 ? app.currentCover
                                             : "qrc:/qml/art/default_cover.jpg"
         dark: theme.dark
@@ -157,7 +160,7 @@ Item {
                 playerPageMobile.playEntrance()
         }
 
-        LibraryPage { }
+        LibraryPage { onArtBackdrop: theme.coverLyricBackground }
         // 移动端迷你条只有一条进度线，播放页承担完整的进度/音量/切歌控件
         PlayerPage {
             id: playerPageMobile

@@ -59,6 +59,9 @@ public:
     // 解析歌曲的 MV 播放地址：mvid 优先取搜索结果透传的原始字段（Song.extra），
     // 没有再用 mvInfo 端点查歌曲详情；取址失败退低一档清晰度再试一次。
     void mv(const Song &song, MvCallback cb);
+    // MV 搜索：按「歌名 歌手」直接搜 MV（网易云 type=1004 / QQ search_type=4）。
+    // 命中的 Song.sourceId 即 MV id，duration 为 MV 时长，供调用方做匹配打分。
+    void mvSearch(const QString &keyword, int limit, SongsCallback cb);
     // 公开 MV 榜单（无需登录），按地区分页；字段映射完全由 mvList 端点描述。
     void mvList(const QString &area, int limit, int offset, MvListCallback cb);
 

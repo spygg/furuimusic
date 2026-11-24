@@ -25,14 +25,23 @@ public:
 
     static QString filePath(const QString &name) { return dataDir() + QLatin1Char('/') + name; }
 
-    // 默认下载目录：桌面端在程序 exe 所在目录下建「下载」文件夹，便携式、跟着程序走，
-    // 用户在文件管理器里一眼就能找到；移动端（下载入口已隐藏）回退应用数据目录。
+    // 默认下载目录：
+    //   Windows 便携式，放在 exe 同级的「下载」目录，跟着程序走，文件管理器里一眼能找到；
+    //   macOS 的 exe 位于 .app/Contents/MacOS，bundle 通常只读；Linux AppImage 的
+    //   applicationDirPath 指向只读挂载点（/tmp/.mount_xxx/usr/bin）。这两个平台写进
+    //   程序目录会直接失败，统一改用系统「下载」目录下的 FuruiMusic 子目录。
+    //   移动端（下载入口已隐藏）回退应用数据目录。
     static QString defaultDownloadsDir()
     {
 #if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
         return filePath(QStringLiteral("downloads"));
-#else
+#elif defined(Q_OS_WIN)
         return QCoreApplication::applicationDirPath() + QStringLiteral("/下载");
+#else
+        QString base = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (base.isEmpty())
+            base = QDir::homePath();
+        return base + QStringLiteral("/FuruiMusic");
 #endif
     }
 

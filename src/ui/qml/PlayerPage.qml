@@ -306,7 +306,11 @@ Item {
             // 大屏（平板/车机）反而需要更宽的留白，按宽度分档。
             anchors.leftMargin: Math.max(16, Math.min(56, root.width * 0.045))
             anchors.rightMargin: anchors.leftMargin
-            anchors.topMargin: root.height < 420 ? 14 : 26
+            // 顶部避让：悬浮的「返回」按钮 topMargin 10 + 48 触控高 = 底部 58dp，
+            // 双栏排版原来只留 26，封面上沿会压到返回按钮下方（窄一点的车机/横屏手机
+            // 尤其明显，封面左边缘正好穿过按钮）。统一留到 62dp，与紧凑版式一致，
+            // 顺带让右栏歌词也不再贴住右上角按钮。
+            anchors.topMargin: root.height < 420 ? 14 : 62
             anchors.bottomMargin: root.height < 420 ? 8 : 14
             visible: root.wide
 

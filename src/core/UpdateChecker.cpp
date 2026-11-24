@@ -98,7 +98,7 @@ QString platformKey()
     return QStringLiteral("android");
 #elif defined(Q_OS_WIN)
     return QStringLiteral("windows");
-#elif defined(Q_OS_MACOS)
+#elif defined(Q_OS_MACOS) || defined(Q_OS_MAC)
     return QStringLiteral("macos");
 #else
     return QStringLiteral("linux");
@@ -159,7 +159,11 @@ int androidApkInstallability(const QString &path)
                                             "()Landroid/content/pm/PackageManager;");
     if (!pm.isValid()) return -1;
     const QJniObject jPath = QJniObject::fromString(path);
-    const QJniObject jPkg = QJniObject::fromString(QStringLiteral("cn.furui.music"));
+    // 当前包名必须运行时取：车机特供版的 applicationId 是 com.netease.cloudmusic.iot，
+    // 写死 cn.furui.music 会让 getPackageInfo 抛 NameNotFoundException，版本/签名
+    // 两项检查全部退化成「判断不了」，最终仍拉起安装器并给出含糊的失败提示。
+    const QJniObject jPkg = context.callObjectMethod("getPackageName",
+                                                     "()Ljava/lang/String;");
     const jint flags = 64; // PackageManager.GET_SIGNATURES
     QJniObject archive = pm.callObjectMethod(
         "getPackageArchiveInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
@@ -476,7 +480,20 @@ QStringList UpdateChecker::downloadCandidates(const QString &version) const
     return urls;
 }
 
-// 并行探测所有候选：Range 取前 2KB，HTTP 2xx 且开头是 "PK" 才算可用。
+// 探测下载地址时校验响应体是不是真的发布包。Windows/macOS 的资产是 zip（"PK"），
+// Linux 的 AppImage 是 ELF（"\x7fELF"）；只认 zip 会把 Linux 的每条候选都判成
+// BAD，镜像加速形同虚设、只能退回 GitHub 原链。
+static bool looksLikeReleaseAsset(const QByteArray &head)
+{
+    if (head.size() >= 2 && head.at(0) == 'P' && head.at(1) == 'K')
+        return true;
+    if (head.size() >= 4 && static_cast<unsigned char>(head.at(0)) == 0x7f
+        && head.at(1) == 'E' && head.at(2) == 'L' && head.at(3) == 'F')
+        return true;
+    return false;
+}
+
+// 并行探测所有候选：Range 取前 2KB，HTTP 2xx 且文件头匹配才可用。
 // 探测超时 6s（只是取 2KB，6s 还没回包的线路对整包下载也没意义）。
 // 探测期间 progress=-1，UI 显示不确定进度；选出最快可用地址后开始真正下载。
 void UpdateChecker::probeAndDownload(const QStringList &candidates)
@@ -500,7 +517,7 @@ void UpdateChecker::probeAndDownload(const QStringList &candidates)
                 DownloadProbeState::Candidate c;
                 c.url = url;
                 c.valid = r.ok && (r.status == 200 || r.status == 206)
-                          && r.body.size() >= 2 && r.body.at(0) == 'P' && r.body.at(1) == 'K';
+                          && looksLikeReleaseAsset(r.body);
                 c.elapsedMs = clock->elapsed();
                 state->results.append(c);
                 const QString verdict = c.valid ? QStringLiteral("OK")
@@ -689,11 +706,24 @@ void UpdateChecker::installUpdate()
                                       QStringLiteral("warning"));
 #endif
 #else
-    // 桌面：exe 安装器直接运行；zip/AppImage 打开所在文件夹由用户解压/安装
+    // 桌面：exe 直接运行；AppImage 补执行位后启动；zip 打开所在文件夹由用户解压/安装
     const QFileInfo fi(m_downloadedPath);
-    if (fi.suffix().compare(QLatin1String("exe"), Qt::CaseInsensitive) == 0
+    const QString suffix = fi.suffix().toLower();
+    if (suffix == QLatin1String("exe")
         && QProcess::startDetached(m_downloadedPath, QStringList()))
         return;
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+    // Linux 发布资产是 AppImage，下载后没有执行位（双击也起不来）。
+    // 先补 +x 再启动；系统缺 FUSE 时启动会失败，退回打开所在文件夹。
+    if (suffix == QLatin1String("appimage")) {
+        QFile::setPermissions(m_downloadedPath,
+                              QFile::permissions(m_downloadedPath)
+                                  | QFileDevice::ExeOwner | QFileDevice::ExeUser
+                                  | QFileDevice::ExeGroup | QFileDevice::ExeOther);
+        if (QProcess::startDetached(m_downloadedPath, QStringList()))
+            return;
+    }
+#endif
     QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));
 #endif
 }
