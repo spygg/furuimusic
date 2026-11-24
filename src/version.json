@@ -1,7 +1,11 @@
 {
-  "version": "1.4.47",
-  "desc": "新增\n- 搜索历史：点击搜索框弹出「历史搜索」下拉，展示最近 20 条关键词，点任意一条即可再次搜索，支持一键清空\n- 歌单收藏管理：「我的歌单」中收藏的外部歌单可一键取消收藏（列表行尾/封面右上角红心），取消后立即从我的歌单移除；封面长按弹出菜单「打开歌单 / 添加收藏 · 取消收藏」，我的歌单、发现榜单、搜索歌单均支持\n",
+  "version": "1.4.48",
+  "desc": "修复\n- 在线更新下载后提示「版本相同，无需重复安装」：v1.4.46 / v1.4.47 的发布包内部版本号误停在 1.4.45，下载的 APK versionCode 与已装版本相同被安装预检拦截；现同步为 1.4.48，可正常覆盖安装。\n- CI 增加 tag / Version.h / 版本清单三处版本一致性校验，防止发版漏改版本号再次发生。",
   "history": [
+    {
+      "version": "1.4.47",
+      "desc": "新增\n- 搜索历史：点击搜索框弹出「历史搜索」下拉，展示最近 20 条关键词，点任意一条即可再次搜索，支持一键清空\n- 歌单收藏管理：「我的歌单」中收藏的外部歌单可一键取消收藏（列表行尾/封面右上角红心），取消后立即从我的歌单移除；封面长按弹出菜单「打开歌单 / 添加收藏 · 取消收藏」，我的歌单、发现榜单、搜索歌单均支持\n"
+    },
     {
       "version": "1.4.46",
       "desc": "修复\n- 搜索结果的歌曲封面卡片墙没有收藏入口：每张歌曲封面右上角新增半透明心形角标，点击即可收藏/取消收藏（已收藏显示实心红），与歌单卡片墙、列表视图行为一致——不管列表还是封面墙都有红心"
@@ -204,10 +208,10 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.45/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.45/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.45/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.45/FuruiMusic-android-arm64-v8a.apk",
-    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.45/FuruiMusic-carcompat-netease-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.48/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.48/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.48/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.48/FuruiMusic-android-arm64-v8a.apk",
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.48/FuruiMusic-carcompat-netease-arm64-v8a.apk"
   }
 }

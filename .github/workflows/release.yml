@@ -36,6 +36,42 @@ jobs:
             exit 1;
           }
           echo "version manifest in sync"
+      # v1.4.46/v1.4.47 曾只改 version.json 而漏改 Version.h：CI 照旧打包，
+      # 结果 APK 的 versionCode 与已装版本相同，用户下载后装不上。这里把
+      # 「tag / Version.h / 清单 version / 清单 downloads 链接」四处锁死。
+      - name: Verify Version.h and manifest URLs agree
+        run: |
+          header_version=$(sed -n 's/^#define FURUI_APP_VERSION "\([0-9][0-9.]*\)".*/\1/p' src/core/Version.h | head -n 1)
+          manifest_version=$(python3 -c 'import json; print(json.load(open("src/version.json", encoding="utf-8"))["version"])')
+          echo "Version.h=$header_version manifest=$manifest_version"
+          if [ -z "$header_version" ] || [ "$header_version" != "$manifest_version" ]; then
+            echo "::error::src/core/Version.h ($header_version) 与 src/version.json ($manifest_version) 不一致；发版请先跑 python src/tools/release.py <版本> 或手工同步 Version.h"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, re, sys
+          d = json.load(open("src/version.json", encoding="utf-8"))
+          want = d["version"]
+          bad = []
+          for key, url in d.get("downloads", {}).items():
+              m = re.search(r"/download/v(\d+(?:\.\d+)*)/", url)
+              if not m or m.group(1) != want:
+                  bad.append("%s: %s" % (key, url))
+          if bad:
+              print("::error::downloads 链接版本与清单版本 %s 不一致：%s" % (want, "; ".join(bad)))
+              sys.exit(1)
+          print("downloads URLs in sync")
+          PY
+      - name: Verify git tag matches version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          header_version=$(sed -n 's/^#define FURUI_APP_VERSION "\([0-9][0-9.]*\)".*/\1/p' src/core/Version.h | head -n 1)
+          echo "tag=$tag_version Version.h=$header_version"
+          if [ "$tag_version" != "$header_version" ]; then
+            echo "::error::git tag ($tag_version) 与 Version.h ($header_version) 不一致"
+            exit 1
+          fi
 
   build:
     name: ${{ matrix.config.name }}
