@@ -111,17 +111,18 @@ Item {
             // 全屏模式下不留外边距：网页区必须真正铺满整块可用区域；
             // 工具条/地址栏的左右留白由各自的 Layout.leftMargin 提供
             anchors.margins: root.fullscreenMode ? 0 : 12
-            spacing: 10
+            // 工具条按钮抬到触控最小值后，靠收紧行距把高度让回网页区
+            spacing: root.fullscreenMode ? 6 : 8
 
             // 导航条：后退/前进/刷新 居左，关闭居右
             RowLayout {
                 Layout.fillWidth: true
                 Layout.leftMargin: root.chromePad
                 Layout.rightMargin: root.chromePad
-                Layout.topMargin: root.fullscreenMode ? 6 : 0
-                spacing: 8
+                Layout.topMargin: root.fullscreenMode ? 4 : 0
+                spacing: theme.spaceSm
                 Row {
-                    spacing: 8
+                    spacing: theme.spaceSm
                     Repeater {
                         model: [
                             { label: "后退", action: "back" },
@@ -130,7 +131,7 @@ Item {
                         ]
                         Rectangle {
                             width: 52
-                            height: 34
+                            height: theme.touchMin
                             radius: 8
                             // 前进/后退按键在无可回退/前进历史时灰显。
                             // 读一下 url/loading：canGoBack 是即时查询而不是带 NOTIFY
@@ -158,6 +159,7 @@ Item {
                                 anchors.fill: parent
                                 enabled: isEnabled
                                 cursorShape: isEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                Accessible.name: modelData.label
                                 onClicked: {
                                     const view = webLoader.item
                                     if (!view) return
@@ -171,8 +173,8 @@ Item {
                 }
                 Item { Layout.fillWidth: true }
                 Rectangle {
-                    width: 52
-                    height: 34
+                    Layout.preferredWidth: 52
+                    Layout.preferredHeight: theme.touchMin
                     radius: 8
                     color: Qt.rgba(theme.text.r, theme.text.g, theme.text.b, 0.07)
                     Text {
@@ -184,6 +186,7 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
+                        Accessible.name: "关闭浏览器"
                         onClicked: browser.close()
                     }
                 }
@@ -199,7 +202,7 @@ Item {
         TextField {
             id: address
             Layout.fillWidth: true
-            Layout.preferredHeight: 34
+            Layout.preferredHeight: theme.touchMin
             placeholderText: "输入网址后按回车"
             color: theme.text
             placeholderTextColor: theme.mutedText
@@ -231,7 +234,7 @@ Item {
         }
         Rectangle {
             Layout.preferredWidth: 56
-            Layout.preferredHeight: 34
+            Layout.preferredHeight: theme.touchMin
             radius: 8
             color: theme.accent
             Text {

@@ -8,12 +8,41 @@
 set -e
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/src"
-QT_ANDROID="${QT_ANDROID:-$HOME/Qt/6.11.1/android_arm64_v8a}"
-QT_HOST="${QT_HOST:-$HOME/Qt/6.11.1/gcc_64}"
+QT_VERSION="${QT_VERSION:-6.11.1}"
+# macOS Qt ships clang_64, Linux uses gcc_64; the Android kit dir is host-independent.
+UNAME_S="$(uname -s)"
+case "$UNAME_S" in
+    Darwin) QT_HOST_DEFAULT="$HOME/Qt/$QT_VERSION/clang_64" ;;
+    *)      QT_HOST_DEFAULT="$HOME/Qt/$QT_VERSION/gcc_64" ;;
+esac
+QT_ANDROID="${QT_ANDROID:-$HOME/Qt/$QT_VERSION/android_arm64_v8a}"
+QT_HOST="${QT_HOST:-$QT_HOST_DEFAULT}"
 export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}"
 export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-$ANDROID_SDK_ROOT/ndk/27.1.12297006}"
-export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
+# Honour an inherited JAVA_HOME; otherwise probe the usual Linux/macOS JDK 17 homes.
+if [ -z "${JAVA_HOME:-}" ] || [ ! -x "$JAVA_HOME/bin/java" ]; then
+    for candidate in \
+        /usr/lib/jvm/java-17-openjdk-amd64 \
+        /usr/lib/jvm/java-17-openjdk-arm64 \
+        /usr/lib/jvm/java-17-openjdk \
+        /Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home; do
+        if [ -x "$candidate/bin/java" ]; then JAVA_HOME="$candidate"; break; fi
+    done
+    if [ -z "${JAVA_HOME:-}" ] && [ -x /usr/libexec/java_home ]; then
+        JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || true)"
+    fi
+fi
+if [ -z "${JAVA_HOME:-}" ] || [ ! -x "$JAVA_HOME/bin/java" ]; then
+    echo "[error] JDK 17 not found; set JAVA_HOME to a JDK 17 installation." >&2
+    exit 1
+fi
+export JAVA_HOME
 export PATH="$QT_HOST/bin:$JAVA_HOME/bin:$PATH"
+# Linux has nproc; macOS does not (sysctl is the portable way there).
+case "$UNAME_S" in
+    Darwin) JOB_COUNT="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)" ;;
+    *)      JOB_COUNT="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)" ;;
+esac
 
 BUILD_DIR="$ROOT/build/android_qt6"
 EXTRA=""
@@ -35,5 +64,5 @@ cmake -S "$SRC" -B "$BUILD_DIR" -G Ninja \
     -DANDROID_PLATFORM=android-23 \
     -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
     $EXTRA
-cmake --build "$BUILD_DIR" --target FuruiMusic_make_apk -j"$(nproc)"
+cmake --build "$BUILD_DIR" --target FuruiMusic_make_apk -j"$JOB_COUNT"
 echo "APK output under: $BUILD_DIR/android-build/build/outputs/apk/"

@@ -48,8 +48,8 @@ Item {
                 }
                 Item { Layout.fillWidth: true }
                 Rectangle {
-                    width: theme.touchMin
-                    height: theme.touchMin
+                    Layout.preferredWidth: theme.touchMin
+                    Layout.preferredHeight: theme.touchMin
                     radius: width / 2
                     color: closeMa.containsMouse ? cSoft : "transparent"
                     // ✕ 在部分 Android 机型上没有对应字形会显示成豆腐块，用内置矢量图标
@@ -123,7 +123,16 @@ Item {
                                 asynchronous: true
                                 cache: true
                                 visible: modelData.avatar !== ""
-                                onStatusChanged: { if (status === Image.Error) visible = false }
+                                // 命令式写 visible 会永久打断绑定，之后换头像/复用委托
+                                // 就再也不显示。出错时临时写死，恢复时用 Qt.binding 重绑。
+                                onStatusChanged: {
+                                    if (status === Image.Error)
+                                        visible = false
+                                    else
+                                        visible = Qt.binding(function () {
+                                            return modelData.avatar !== ""
+                                        })
+                                }
                             }
                             Text {
                                 anchors.centerIn: parent

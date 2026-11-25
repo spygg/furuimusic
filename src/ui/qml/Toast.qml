@@ -14,7 +14,8 @@ Item {
     property int autoHideMs: 2400
     property bool opened: false
 
-    width: Math.min(420, Math.max(200, (parent ? parent.width : 420) - 32))
+    // 上限放宽到 560，短文案不必再被挤成两行；同时保留 200 下限与 32px 边距
+    width: Math.min(560, Math.max(200, (parent ? parent.width : 560) - 32))
     height: card.height + 12
     opacity: root.opened ? 1 : 0
     // opacity 归零后不再接收鼠标事件，避免挡住底部播放栏

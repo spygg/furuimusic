@@ -1,6 +1,11 @@
 // Copyright (C) 2025 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 // Qt-Security score:significant reason:default
+//
+// NOTE: 本目录的插件源码复制自 Qt 6.11.1，下方私有头（qwebviewfactory_p.h /
+// qfunctions_win_p.h）与 Qt6::WebViewPrivate 只在 Qt 6.11.x 下匹配。
+// src/cmake/FuruiWebView2.cmake 会在其他 Qt 版本（例如 CI 的 6.8.3）下跳过
+// 本插件，请不要在未经适配的情况下手工把它编进其他版本。
 
 #include "qwebview2webview_p.h"
 #include "webview2_cookie_bridge.h"

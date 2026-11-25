@@ -222,8 +222,10 @@ if(ANDROID)
     qt_add_executable(FuruiMusic MANUAL_FINALIZATION ${UI_FILES})
     # androiddeployqt 不会自动读 project() 的 VERSION，缺省写死 1.0/1；
     # 这里显式传进去，保证「应用关于页显示的版本 = git tag」。
+    # 1.4.49 -> 1040049：主版本占两位、次版本两位、补丁两位，避免 1.4.x 与
+    # 1.3.x / 2.0.x 的版本码区间互相碰撞（旧的 *10000 写法在次版本跨 100 时会撞）。
     math(EXPR FURUI_ANDROID_VERSION_CODE
-         "${PROJECT_VERSION_MAJOR} * 10000 + ${PROJECT_VERSION_MINOR} * 100 + ${PROJECT_VERSION_PATCH}")
+         "${PROJECT_VERSION_MAJOR} * 1000000 + ${PROJECT_VERSION_MINOR} * 10000 + ${PROJECT_VERSION_PATCH}")
     # 车机兼容版（仅测试）：-DFURUI_ANDROID_CAR_COMPAT=ON 出网易云车机版包名的 APK。
     # 用暂存目录做覆盖：基准包资源目录 + 换 manifest（包名
     # com.netease.cloudmusic.iot + BYD 命令入口）+ 追加 Byd*.java。
@@ -250,6 +252,8 @@ if(ANDROID)
              DESTINATION "${FURUI_STAGED_PACKAGE_DIR}/src")
         # 应用名改为「福瑞音乐」：车机设置里按包标签显示为福瑞音乐、可选为默认，
         # 与官方版区分；语音按词表映射包名，关键词仍是「网易云音乐」。
+        # CI 的 manifest job 会比对两份 manifest 的 uses-permission / service / receiver
+        # 集合：权限与服务必须一致，车机版额外多出的 BYD 接收器是允许的；改权限时别漏同步。
         file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/platform/android-qt6-carcompat/res/"
              DESTINATION "${FURUI_STAGED_PACKAGE_DIR}/res")
         set(FURUI_PACKAGE_SOURCE_DIR "${FURUI_STAGED_PACKAGE_DIR}")

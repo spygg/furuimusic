@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 车机兼容版与主流版共用同一份 FileProvider 路径配置（CMake 会把本 res/
+     覆盖到主流包资源目录），UpdateInstaller.java 的私有下载目录与公共 Download
+     都需要可访问，改这里时两份要保持一致。 -->
+<paths>
+    <files-path name="internal_files" path="." />
+    <external-files-path name="external_app_files" path="." />
+    <external-path name="external_files" path="." />
+</paths>

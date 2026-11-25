@@ -18,8 +18,9 @@ ApplicationWindow {
            ? (Qt.Window | Qt.FramelessWindowHint)
            : Qt.Window
 
-    // 窗口底色与主题同步，避免切换深色时闪白
+    // 窗口底色与主题同步，避免切换深色时闪白；加渐变防止明暗切换瞬间硬跳
     color: theme.bg
+    Behavior on color { ColorAnimation { duration: theme.durationBase } }
 
     // ---- Android 返回键主通道（onClosing）----
     // Keys.onReleased（见下方 Loader）依赖 activeFocusItem 的焦点链，实测在部分
@@ -66,7 +67,10 @@ ApplicationWindow {
     property bool inMultiWindow: false
     readonly property bool forceMobileShell: platform.isMobile
                                              && (!platform.isTablet || inMultiWindow)
-    property bool compact: forceMobileShell
+    // compact 始终保持为绑定：forceMobileShell 由 platform 的状态推导，
+    // 宽度滞后判定只写 backing 属性，避免命令式赋值把绑定永久打断。
+    property bool compactByWidth: false
+    property bool compact: forceMobileShell || compactByWidth
     // 用 visibility 而不是平台查询，最大化状态变化时才能自动刷新
     readonly property bool maximized: win.visibility === Window.Maximized
                       || win.visibility === Window.FullScreen
@@ -95,10 +99,13 @@ ApplicationWindow {
 
     function applyQueuedFormFactor()
     {
-        if (win.compact)
-            win.shellSource = "MainMobile.qml"
-        else
-            win.shellSource = "MainDesktop.qml"
+        // 旧写法直接写死字符串，会打断 shellSource 的声明式绑定：之后
+        // platform 报 formFactorChanged 时外壳再也切不回正确形态。
+        // 这里用 Qt.binding 重绑，forceMobileShell / compact 任一变化都能自动跟随。
+        win.shellSource = Qt.binding(function () {
+            return (win.forceMobileShell || win.compact)
+                   ? "MainMobile.qml" : "MainDesktop.qml"
+        })
     }
 
     function evaluateFormFactor()
@@ -114,9 +121,14 @@ ApplicationWindow {
                 : (win.compact
                    ? win.width <= win.compactLeaveWidth
                    : win.width < win.compactEnterWidth)
-        if (nextCompact !== win.compact)
-            win.compact = nextCompact
-        else
+        if (nextCompact !== win.compact) {
+            win.compactByWidth = nextCompact
+            // 命令式写值会打断 compact 绑定；立刻用 Qt.binding 恢复，
+            // 让 platform 后续上报的形态/触控变化继续驱动 compact。
+            win.compact = Qt.binding(function () {
+                return win.forceMobileShell || win.compactByWidth
+            })
+        } else
             win.applyQueuedFormFactor()
         // 令牌缩放与安全区每次尺寸变化都重新上报（与外壳无关）
         theme.setViewport(win.width, win.height, true)
@@ -208,6 +220,14 @@ ApplicationWindow {
             if (!win.activeFocusItem && win.visible)
                 shell.forceActiveFocus()
         }
+    }
+
+    // PlatformAdapter 在启动 1200ms 后才上报最终形态/触控方式（分屏、外接屏、
+    // 触屏切换），此前一直没有消费者，外壳会停留在冷启动时的错误形态。
+    Connections {
+        target: platform
+        function onFormFactorChanged() { win.evaluateFormFactor() }
+        function onTouchPrimaryChanged() { win.evaluateFormFactor() }
     }
 
     function syncShellState()

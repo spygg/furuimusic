@@ -188,7 +188,7 @@ Item {
         // 胶囊上下留白。以前写成 miniBar.topMargin（不存在的属性）→ 表达式得 NaN，
         // 被 QML 当成 0，底部栏高度恒为 0：页面区一路铺到屏幕底，设置页/曲库页的
         // 最后一行会被浮动胶囊压住。改成显式常量，两边引用同一个值。
-        readonly property int barPad: 4
+        readonly property int barPad: root.shortViewport ? 2 : 4
         height: (tabBar.visible ? tabBar.height : 0)
                 + (miniBar.visible ? miniBar.height + barPad * 2 : 0)
 
@@ -201,12 +201,11 @@ Item {
             anchors.bottom: tabBar.visible ? tabBar.top : parent.bottom
             anchors.leftMargin: 12
             anchors.rightMargin: 12
-            anchors.topMargin: bottomBar.barPad
             anchors.bottomMargin: bottomBar.barPad
-            // 横屏用竖排导航时高度更金贵，胶囊压到 56；横屏手机（矮窗）再收到 48
-            height: root.shortViewport ? 48 : (root.sideNav ? 56 : 64)
-            // 按钮跟胶囊高度联动：48dp 胶囊里塞 48dp 圆钮会把上下边距吃没
-            readonly property int buttonSize: Math.min(theme.touchMin, height - 6)
+            // 横屏用竖排导航时高度更金贵，胶囊压到 56；横屏手机（矮窗）也按触控
+            // 最小值给足按钮（旧值 48 胶囊 + 42 按钮不达标），多余空间由 barPad 收紧。
+            height: root.shortViewport ? theme.touchMin + 8 : (root.sideNav ? 56 : 64)
+            readonly property int buttonSize: theme.touchMin
             radius: 18
             color: cCard
             border.color: cLine
@@ -380,8 +379,21 @@ Item {
                         size: 14
                         color: "#FFFFFF"
                     }
-                    MouseArea {
+                    // 渐变底不能直接用 color 做按压反馈，叠一层半透明膜
+                    Rectangle {
                         anchors.fill: parent
+                        radius: parent.radius
+                        color: miniPlayMa.pressed ? Qt.rgba(0, 0, 0, 0.22)
+                                                  : (miniPlayMa.containsMouse ? Qt.rgba(1, 1, 1, 0.12)
+                                                                              : "transparent")
+                        Behavior on color { ColorAnimation { duration: theme.durationFast } }
+                    }
+                    MouseArea {
+                        id: miniPlayMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        Accessible.name: app.playing ? "暂停" : "播放"
                         onClicked: app.togglePause()
                     }
                 }
@@ -396,11 +408,23 @@ Item {
                     Text {
                         anchors.centerIn: parent
                         text: "›"
-                        color: cSub
+                        color: miniNextMa.containsMouse ? cPrimary : cSub
                         font.pixelSize: 20
                     }
-                    MouseArea {
+                    Rectangle {
                         anchors.fill: parent
+                        radius: parent.radius
+                        color: miniNextMa.pressed ? Qt.rgba(1, 1, 1, 0.16)
+                                                  : (miniNextMa.containsMouse ? Qt.rgba(1, 1, 1, 0.08)
+                                                                              : "transparent")
+                        Behavior on color { ColorAnimation { duration: theme.durationFast } }
+                    }
+                    MouseArea {
+                        id: miniNextMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        Accessible.name: "下一首"
                         onClicked: app.next()
                     }
                 }
@@ -565,7 +589,9 @@ Item {
             // 不用 anchors.bottom：面板靠 y 做升降动画，和底边锚点会互相覆盖。
             // 高度多出一个圆角并把下半截压到窗口外，Qt5 的 Rectangle 没有「只圆上两角」，
             // 这样贴底时才不会在屏幕角落露出两个圆角缺口。
-            height: Math.max(200, Math.min(parent.height - 8, parent.height * 0.62)) + corner
+            // 输入法弹起时窗口可能被压到不足 200dp，钳到父高度内避免 y 变负
+            height: Math.min(Math.max(200, Math.min(parent.height - 8, parent.height * 0.62)),
+                             Math.max(0, parent.height - 8)) + corner
             y: root.queueOpen ? parent.height - height + corner : parent.height + corner
             Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
@@ -597,7 +623,8 @@ Item {
             clip: true
             anchors.left: parent.left
             anchors.right: parent.right
-            height: Math.max(260, Math.min(parent.height - 8, parent.height * 0.72)) + corner
+            height: Math.min(Math.max(260, Math.min(parent.height - 8, parent.height * 0.72)),
+                             Math.max(0, parent.height - 8)) + corner
             y: root.commentsOpen ? parent.height - height + corner : parent.height + corner
             Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
             CommentDrawer {

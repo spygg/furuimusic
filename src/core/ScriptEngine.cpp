@@ -3,7 +3,9 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDebug>
+#include <QAbstractSocket>
 #include <QHostAddress>
+#include <QHostInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -13,6 +15,7 @@
 #include <QSet>
 #include <QUrl>
 #include <QtMath>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -26,10 +29,72 @@ namespace Furui {
 // lx.request 的安全边界：默认阻断本机/回环/私有网段与非 HTTP(S) 目标，
 // 避免用户导入的脚本借宿主权限探测本机服务或内网（SSRF）。
 // 需访问自建内网音源时，设 FURUI_SCRIPT_ALLOW_PRIVATE=1 显式放开。
+static bool scriptAllowsPrivate()
+{
+    static const bool allow = qEnvironmentVariableIsSet("FURUI_SCRIPT_ALLOW_PRIVATE");
+    return allow;
+}
+
+// 单个 IP 的安全检查：覆盖 IPv4/IPv6 的回环、链路本地、组播、私有与保留网段。
+// 主机名必须先解析成 IP 再逐个过这一关——只查字面域名挡不住指向内网的 DNS 记录。
+static QString unsafeRequestIp(const QHostAddress &address)
+{
+    if (address.isNull()) return QStringLiteral("地址无效");
+    if (address.isLoopback()) return QStringLiteral("禁止访问回环地址");
+    if (address.isLinkLocal()) return QStringLiteral("禁止访问链路本地地址");
+    if (address.isMulticast() || address.isBroadcast())
+        return QStringLiteral("禁止访问组播/广播地址");
+
+    QHostAddress check = address;
+    if (address.protocol() == QAbstractSocket::IPv6Protocol) {
+        const Q_IPV6ADDR v6 = address.toIPv6Address();
+        // 嵌在 IPv6 里的 IPv4 必须按 IPv4 网段判定，否则 ::ffff:127.0.0.1
+        // 这类地址会绕过检查。覆盖 mapped / compatible / translated / NAT64
+        // 四种常见内嵌形式（6to4 与 Teredo 前缀则整段阻断，见下表）。
+        const quint32 v4 = (quint32(v6.c[12]) << 24) | (quint32(v6.c[13]) << 16)
+                         | (quint32(v6.c[14]) << 8) | quint32(v6.c[15]);
+        bool mapped = true, compatible = true, translated = true;
+        for (int i = 0; i < 10; ++i) {
+            if (v6.c[i] != 0) { mapped = false; }
+            if (i < 8 && v6.c[i] != 0) { translated = false; }
+        }
+        for (int i = 0; i < 12; ++i) {
+            if (v6.c[i] != 0) { compatible = false; break; }
+        }
+        const bool ipv4Mapped = mapped && v6.c[10] == 0xff && v6.c[11] == 0xff;
+        const bool ipv4Translated = translated && v6.c[8] == 0xff
+                                    && v6.c[9] == 0xff && v6.c[10] == 0
+                                    && v6.c[11] == 0;
+        bool nat64 = v6.c[0] == 0x00 && v6.c[1] == 0x64
+                     && v6.c[2] == 0xff && v6.c[3] == 0x9b;
+        for (int i = 4; nat64 && i < 12; ++i)
+            if (v6.c[i] != 0) nat64 = false;
+        if (ipv4Mapped || compatible || ipv4Translated || nat64)
+            check = QHostAddress(v4);
+    }
+    struct Subnet { const char *address; int prefix; };
+    static const Subnet blocked[] = {
+        {"0.0.0.0", 8}, {"10.0.0.0", 8}, {"100.64.0.0", 10},
+        {"127.0.0.0", 8}, {"169.254.0.0", 16}, {"172.16.0.0", 12},
+        {"192.0.0.0", 24}, {"192.0.2.0", 24}, {"192.168.0.0", 16},
+        {"198.18.0.0", 15}, {"198.51.100.0", 24}, {"203.0.113.0", 24},
+        {"224.0.0.0", 4}, {"240.0.0.0", 4},
+        {"fc00::", 7}, {"fe80::", 10}, {"ff00::", 8}, {"::", 128},
+        {"2001:db8::", 32},
+        // 6to4（2002:V4ADDR::/48）与 Teredo（2001::/32）能把内网 IPv4 藏进
+        // IPv6 地址走公网隧道，直接整段拒绝，避免绕过上面的内嵌 IPv4 判定。
+        {"2002::", 16}, {"2001::", 32}
+    };
+    for (const Subnet &s : blocked) {
+        if (check.isInSubnet(QHostAddress(QLatin1String(s.address)), s.prefix))
+            return QStringLiteral("禁止访问私有/保留网段");
+    }
+    return QString();
+}
+
 static QString unsafeRequestTarget(const QUrl &u)
 {
-    static const bool allowPrivate = qEnvironmentVariableIsSet("FURUI_SCRIPT_ALLOW_PRIVATE");
-    if (allowPrivate) return QString();
+    if (scriptAllowsPrivate()) return QString();
     const QString scheme = u.scheme().toLower();
     if (scheme != QLatin1String("http") && scheme != QLatin1String("https"))
         return QStringLiteral("只允许 http/https 协议");
@@ -39,27 +104,8 @@ static QString unsafeRequestTarget(const QUrl &u)
         host.endsWith(QLatin1String(".local")) || host == QLatin1String("localhost.localdomain"))
         return QStringLiteral("禁止访问本机/本地域名");
     const QHostAddress addr(host);
-    if (!addr.isNull()) {
-        if (addr == QHostAddress(QHostAddress::LocalHost) ||
-            addr == QHostAddress(QHostAddress::LocalHostIPv6))
-            return QStringLiteral("禁止访问回环地址");
-        const quint32 v4 = addr.toIPv4Address();
-        if (v4 != 0) {
-            const quint8 a = quint8(v4 >> 24), b = quint8(v4 >> 16);
-            if (a == 0 || a == 10 || a == 127 || a >= 224 ||
-                (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168) ||
-                (a == 169 && b == 254) || (a == 100 && b >= 64 && b <= 127) ||
-                (a == 192 && b == 0))
-                return QStringLiteral("禁止访问私有/保留网段");
-        } else {
-            const QString ip = addr.toString().toLower();
-            if (ip.startsWith(QLatin1String("fc")) || ip.startsWith(QLatin1String("fd")) ||
-                ip.startsWith(QLatin1String("fe80")) || ip.startsWith(QLatin1String("ff")) ||
-                ip.startsWith(QLatin1String("::ffff:127.")) ||
-                ip == QLatin1String("::") || ip == QLatin1String("::1"))
-                return QStringLiteral("禁止访问私有/回环 IPv6 地址");
-        }
-    }
+    if (!addr.isNull())
+        return unsafeRequestIp(addr);   // 字面 IP 立即判定；域名留给 DNS 解析后判定
     return QString();
 }
 
@@ -432,6 +478,131 @@ struct ScriptEngineHost {
         return JS_UNDEFINED;
     }
 
+    // lx.request 的异步状态：JSValue 只在引擎还活着时有效，随上下文一起销毁。
+    struct ReqState {
+        QPointer<ScriptEngine> engine;
+        JSValue cb = JS_UNDEFINED;
+    };
+    using ReqStatePtr = std::shared_ptr<ReqState>;
+
+    // 把最终（或安全拒绝）的响应交给 JS 回调；这里是唯一释放 cb 的地方。
+    static void deliverScriptReply(const ReqStatePtr &st, const QString &method,
+                                   const QString &url, const HttpClient::Reply &r)
+    {
+        if (scriptTraceEnabled())
+            scriptTrace(QStringLiteral("[lx.request] %1 %2 => %3 %4")
+                            .arg(method, url, QString::number(r.status),
+                                 r.error.left(160)));
+        ScriptEngine *engine = st->engine.data();
+        if (!engine || engine->m_stopped) {
+            // 引擎已销毁：JSValue 随上下文一起释放，这里不再碰它
+            return;
+        }
+        JSContext *c = static_cast<JSContext *>(engine->m_ctx);
+        if (!c) return;
+        JSValue args[2];
+        if (!r.ok) {
+            args[0] = JS_NewString(c, r.error.toUtf8().constData());
+            args[1] = JS_UNDEFINED;
+        } else {
+            args[0] = JS_NULL;
+            JSValue resp = JS_NewObject(c);
+            JS_SetPropertyStr(c, resp, "status", JS_NewInt32(c, r.status));
+            if (r.json.isArray() || r.json.isObject()) {
+                QJsonValue root = r.json.isArray()
+                    ? QJsonValue(r.json.array())
+                    : QJsonValue(r.json.object());
+                JS_SetPropertyStr(c, resp, "body", qjsonToJs(c, root));
+            } else {
+                // 用 JS_NewStringLen：响应体可能含 '\0'（二进制/截断探测），
+                // JS_NewString 会在第一个 NUL 处截断。
+                JS_SetPropertyStr(c, resp, "body",
+                                  JS_NewStringLen(c, r.body.constData(),
+                                                  static_cast<std::size_t>(r.body.size())));
+            }
+            JSValue hdrs = JS_NewObject(c);
+            for (auto it = r.headers.constBegin(); it != r.headers.constEnd(); ++it)
+                JS_SetPropertyStr(c, hdrs, it.key().toUtf8().constData(),
+                                  JS_NewString(c, it.value().toUtf8().constData()));
+            JS_SetPropertyStr(c, resp, "headers", hdrs);
+            JS_SetPropertyStr(c, resp, "bytes", JS_NewInt32(c, r.body.size()));
+            args[1] = resp;
+        }
+        JSValue ret;
+        {
+            ScriptEngine::ExecDeadlineGuard deadline(engine, 12000);
+            ret = JS_Call(c, st->cb, JS_UNDEFINED, 2, args);
+        }
+        if (JS_IsException(ret)) engine->reportException(QStringLiteral("lx.request"));
+        JS_FreeValue(c, ret);
+        JS_FreeValue(c, args[0]);
+        JS_FreeValue(c, args[1]);
+        JS_FreeValue(c, st->cb);
+        st->cb = JS_UNDEFINED;
+        engine->drainJobs();
+    }
+
+    // 先解析主机名并逐个校验 IP，再发请求；同时关闭自动重定向，每一跳都重新校验。
+    static void issueValidatedRequest(const ReqStatePtr &st, const QUrl &target,
+                                      const QString &method, const QVariantMap &headers,
+                                      const QByteArray &body, int timeout,
+                                      bool follow, int hopsLeft)
+    {
+        ScriptEngine *engine = st->engine.data();
+        if (!engine || engine->m_stopped) return;
+        const QString blocked = unsafeRequestTarget(target);
+        if (!blocked.isEmpty()) {
+            HttpClient::Reply r;
+            r.error = QStringLiteral("lx.request 目标被安全策略拒绝：%1（%2）")
+                          .arg(blocked, target.toString());
+            deliverScriptReply(st, method, target.toString(), r);
+            return;
+        }
+        QHostInfo::lookupHost(target.host(), engine,
+            [st, target, method, headers, body, timeout, follow, hopsLeft](const QHostInfo &info) {
+                ScriptEngine *eng = st->engine.data();
+                if (!eng || eng->m_stopped) return;
+                QString bad;
+                if (info.error() != QHostInfo::NoError || info.addresses().isEmpty()) {
+                    bad = QStringLiteral("目标主机名解析失败");
+                } else {
+                    for (const QHostAddress &a : info.addresses()) {
+                        bad = unsafeRequestIp(a);
+                        if (!bad.isEmpty()) break;
+                    }
+                }
+                if (!bad.isEmpty()) {
+                    HttpClient::Reply r;
+                    r.error = QStringLiteral("lx.request 目标被安全策略拒绝：%1（%2）")
+                                  .arg(bad, target.toString());
+                    deliverScriptReply(st, method, target.toString(), r);
+                    return;
+                }
+                // followRedirects=false：手动跟随 Location，每跳重新做 DNS/IP 校验。
+                HttpClient::instance()->request(method, target, headers, body,
+                    [st, target, method, headers, body, timeout, follow, hopsLeft]
+                    (const HttpClient::Reply &r) {
+                        const QString loc = r.headers.value(QStringLiteral("location"));
+                        if (follow && hopsLeft > 0 && r.status >= 300 && r.status < 400
+                            && !loc.isEmpty()) {
+                            const QUrl next = target.resolved(QUrl(loc));
+                            const QString why = unsafeRequestTarget(next);
+                            if (why.isEmpty()) {
+                                issueValidatedRequest(st, next, method, headers, body,
+                                                      timeout, follow, hopsLeft - 1);
+                                return;
+                            }
+                            HttpClient::Reply rejected;
+                            rejected.error = QStringLiteral("lx.request 目标被安全策略拒绝：%1（%2）")
+                                                 .arg(why, next.toString());
+                            deliverScriptReply(st, method, target.toString(), rejected);
+                            return;
+                        }
+                        deliverScriptReply(st, method, target.toString(), r);
+                    }, timeout, false);
+            });
+    }
+
     static JSValue jsRequest(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
     {
         ScriptEngine *e = self(ctx);
@@ -463,65 +634,13 @@ struct ScriptEngineHost {
         if (!blocked.isEmpty())
             return throwErr(ctx, QStringLiteral("lx.request 目标被安全策略拒绝：%1（%2）").arg(blocked, url));
 
-        struct ReqState {
-            QPointer<ScriptEngine> engine;
-            JSValue cb = JS_UNDEFINED;
-        };
         auto st = std::make_shared<ReqState>();
         st->engine = e;
         st->cb = JS_DupValue(ctx, cb);
-
-        HttpClient::instance()->request(method, target, headers, body,
-            [st, method, url](const HttpClient::Reply &r) {
-                if (scriptTraceEnabled())
-                    scriptTrace(QStringLiteral("[lx.request] %1 %2 => %3 %4")
-                                    .arg(method, url, QString::number(r.status),
-                                         r.error.left(160)));
-                ScriptEngine *engine = st->engine.data();
-                if (!engine || engine->m_stopped) {
-                    // 引擎已销毁：JSValue 随上下文一起释放，这里不再碰它
-                    return;
-                }
-                JSContext *c = static_cast<JSContext *>(engine->m_ctx);
-                if (!c) return;
-                JSValue args[2];
-                if (!r.ok) {
-                    args[0] = JS_NewString(c, r.error.toUtf8().constData());
-                    args[1] = JS_UNDEFINED;
-                } else {
-                    args[0] = JS_NULL;
-                    JSValue resp = JS_NewObject(c);
-                    JS_SetPropertyStr(c, resp, "status", JS_NewInt32(c, r.status));
-                    if (r.json.isArray() || r.json.isObject()) {
-                        QJsonValue root = r.json.isArray()
-                            ? QJsonValue(r.json.array())
-                            : QJsonValue(r.json.object());
-                        JS_SetPropertyStr(c, resp, "body", qjsonToJs(c, root));
-                    } else {
-                        JS_SetPropertyStr(c, resp, "body",
-                            JS_NewString(c, r.body.constData()));
-                    }
-                    JSValue hdrs = JS_NewObject(c);
-                    for (auto it = r.headers.constBegin(); it != r.headers.constEnd(); ++it)
-                        JS_SetPropertyStr(c, hdrs, it.key().toUtf8().constData(),
-                                          JS_NewString(c, it.value().toUtf8().constData()));
-                    JS_SetPropertyStr(c, resp, "headers", hdrs);
-                    JS_SetPropertyStr(c, resp, "bytes", JS_NewInt32(c, r.body.size()));
-                    args[1] = resp;
-                }
-                JSValue ret;
-                {
-                    ScriptEngine::ExecDeadlineGuard deadline(engine, 12000);
-                    ret = JS_Call(c, st->cb, JS_UNDEFINED, 2, args);
-                }
-                if (JS_IsException(ret)) engine->reportException(QStringLiteral("lx.request"));
-                JS_FreeValue(c, ret);
-                JS_FreeValue(c, args[0]);
-                JS_FreeValue(c, args[1]);
-                JS_FreeValue(c, st->cb);
-                st->cb = JS_UNDEFINED;
-                engine->drainJobs();
-            });
+        // 最多跟随 5 跳，每跳都重新做字面 + DNS/IP 校验。
+        // 保持原有超时语义（-1 = 用 HttpClient 的设置默认），不因安全改造缩短脚本请求。
+        Q_UNUSED(timeout);
+        issueValidatedRequest(st, target, method, headers, body, -1, follow, 5);
 
         return JS_UNDEFINED;
     }

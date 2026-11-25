@@ -947,8 +947,8 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 12
-        spacing: 8
+        anchors.margins: theme.spaceSm
+        spacing: theme.spaceXs
 
         // 顶部：返回 + 平台名 + 刷新。没有地址栏——这里不是浏览器，是「该平台的登录页」
         RowLayout {
@@ -957,7 +957,7 @@ Item {
 
             Rectangle {
                 Layout.preferredWidth: 64
-                Layout.preferredHeight: 32
+                Layout.preferredHeight: theme.touchMin
                 radius: 8
                 color: Qt.rgba(theme.text.r, theme.text.g, theme.text.b, 0.07)
                 Text {
@@ -969,6 +969,7 @@ Item {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
+                    Accessible.name: "关闭官网登录页"
                     onClicked: root.closed()
                 }
             }
@@ -985,7 +986,7 @@ Item {
 
             Rectangle {
                 Layout.preferredWidth: 52
-                Layout.preferredHeight: 32
+                Layout.preferredHeight: theme.touchMin
                 radius: 8
                 color: Qt.rgba(theme.text.r, theme.text.g, theme.text.b, 0.07)
                 Text {
@@ -997,6 +998,7 @@ Item {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
+                    Accessible.name: "刷新官网登录页"
                     onClicked: {
                         root.trimmedFor = ""
                         const view = webLoader.item

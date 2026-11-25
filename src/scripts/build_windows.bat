@@ -21,9 +21,18 @@ rem Plain ASCII on purpose: cmd.exe parses .bat files in byte chunks and non-ASC
 rem bytes desynchronise the parser.
 set "QTROOT="
 set "QT6_VER="
-for %%R in ("E:\programes\Qt\Qt" "D:\software\Qt" "C:\Qt") do (
+rem QT_ROOT_DIR / QT_DIR override the probe roots (Qt root or a version kit dir,
+rem e.g. what install-qt-action exports). Probe order prefers the local verified
+rem 6.11.1, then the 6.8.3 used by CI / the other platforms.
+set "QT_PROBE_ROOT="
+if defined QT_ROOT_DIR set "QT_PROBE_ROOT=%QT_ROOT_DIR%"
+if not defined QT_PROBE_ROOT if defined QT_DIR set "QT_PROBE_ROOT=%QT_DIR%"
+if defined QT_PROBE_ROOT if exist "%QT_PROBE_ROOT%\bin\windeployqt.exe" (
+    for %%R in ("%QT_PROBE_ROOT%\..\..") do set "QT_PROBE_ROOT=%%~fR"
+)
+for %%R in ("%QT_PROBE_ROOT%" "E:\programes\Qt\Qt" "D:\software\Qt" "C:\Qt") do (
     if not defined QT6_VER (
-        for %%V in (6.11.3 6.11.1 6.11.2 6.10.0) do (
+        for %%V in (6.11.3 6.11.1 6.11.2 6.10.0 6.8.3) do (
             if not defined QT6_VER if exist "%%~R\%%V\mingw_64\bin\windeployqt.exe" (
                 set "QTROOT=%%~R"
                 set "QT6_VER=%%V"
@@ -32,8 +41,8 @@ for %%R in ("E:\programes\Qt\Qt" "D:\software\Qt" "C:\Qt") do (
     )
 )
 if not defined QT6_VER (
-    echo [error] Qt 6 mingw_64 not found under the known roots.
-    echo         Edit the probe list at the top of this script.
+    echo [error] Qt 6 mingw_64 not found. Set QT_ROOT_DIR / QT_DIR to the Qt root
+    echo         the parent of the 6.x version dirs, and retry.
     goto :fail
 )
 set "QT6_DIR=%QTROOT%\%QT6_VER%\mingw_64"

@@ -9,13 +9,72 @@ rem binary". This env var is a no-op under plain cmd.
 set "MSYS_NO_PATHCONV=1"
 set "ROOT=%~dp0..\.."
 set "SRC=%ROOT%\src"
-set "QT_ANDROID=E:\programes\Qt\Qt\5.15.2\android"
-set "MINGW_DIR=E:\programes\Qt\Qt\Tools\mingw810_64"
-set "ANDROID_SDK_ROOT=E:\programes\Android\SDK"
-set "ANDROID_NDK_ROOT=E:\programes\Android\SDK\ndk\21.3.6528147"
-set "ANDROID_NDK_HOST=windows-x86_64"
-set "ANDROID_NDK_PLATFORM=android-21"
-set "JAVA_HOME=E:\programes\Android\jdk11"
+rem ---------- toolchain discovery ----------
+rem Caller overrides win: QT_ANDROID (full .../5.15.2/android kit), MINGW_DIR,
+rem ANDROID_SDK_ROOT / ANDROID_HOME, ANDROID_NDK_ROOT / ANDROID_NDK, JAVA_HOME.
+rem QT_ROOT_DIR / QT_DIR should be the Qt root (parent of 5.15.2); use QT_ANDROID for a kit dir.
+rem Without overrides, probe the known roots instead of hard-coding one machine's paths.
+rem Plain ASCII only: cmd.exe parses .bat files byte-wise and non-ASCII desynchronises it.
+if not defined QT_ANDROID if defined QT_ROOT_DIR set "QT_ANDROID=%QT_ROOT_DIR%\5.15.2\android"
+if not defined QT_ANDROID if defined QT_DIR set "QT_ANDROID=%QT_DIR%\5.15.2\android"
+if defined QT_ANDROID if exist "%QT_ANDROID%\bin\qmake.exe" goto :have_qt
+set "QT_ANDROID="
+for %%R in ("E:\programes\Qt\Qt" "D:\software\Qt" "C:\Qt") do (
+    if not defined QT_ANDROID if exist "%%~R\5.15.2\android\bin\qmake.exe" set "QT_ANDROID=%%~R\5.15.2\android"
+)
+if not defined QT_ANDROID (
+    echo [error] Qt 5.15.2 Android kit not found. Set QT_ANDROID to the .../5.15.2/android directory.
+    goto :fail
+)
+:have_qt
+
+if not defined MINGW_DIR if defined QT_ROOT_DIR set "MINGW_DIR=%QT_ROOT_DIR%\Tools\mingw810_64"
+if not defined MINGW_DIR if defined QT_DIR set "MINGW_DIR=%QT_DIR%\Tools\mingw810_64"
+if defined MINGW_DIR if exist "%MINGW_DIR%\bin\mingw32-make.exe" goto :have_mingw
+set "MINGW_DIR="
+for %%R in ("E:\programes\Qt\Qt" "D:\software\Qt" "C:\Qt") do (
+    if not defined MINGW_DIR if exist "%%~R\Tools\mingw810_64\bin\mingw32-make.exe" set "MINGW_DIR=%%~R\Tools\mingw810_64"
+)
+if not defined MINGW_DIR (
+    echo [error] MinGW 8.1 not found. Set MINGW_DIR to the Qt Tools/mingw810_64 directory.
+    goto :fail
+)
+:have_mingw
+
+if not defined ANDROID_SDK_ROOT if defined ANDROID_HOME set "ANDROID_SDK_ROOT=%ANDROID_HOME%"
+if not defined ANDROID_SDK_ROOT (
+    for %%R in ("E:\programes\Android\SDK" "D:\software\Android\SDK" "C:\Android\Sdk") do (
+        if not defined ANDROID_SDK_ROOT if exist "%%~R\platform-tools\adb.exe" set "ANDROID_SDK_ROOT=%%~R"
+    )
+)
+if not defined ANDROID_SDK_ROOT (
+    echo [error] Android SDK not found. Set ANDROID_SDK_ROOT to the SDK directory.
+    goto :fail
+)
+if not defined ANDROID_NDK_ROOT if defined ANDROID_NDK set "ANDROID_NDK_ROOT=%ANDROID_NDK%"
+if not defined ANDROID_NDK_ROOT if exist "%ANDROID_SDK_ROOT%\ndk\21.3.6528147\build\cmake\android.toolchain.cmake" set "ANDROID_NDK_ROOT=%ANDROID_SDK_ROOT%\ndk\21.3.6528147"
+if not defined ANDROID_NDK_ROOT (
+    for /d %%D in ("%ANDROID_SDK_ROOT%\ndk\21*") do set "ANDROID_NDK_ROOT=%%~fD"
+)
+if not defined ANDROID_NDK_ROOT (
+    echo [error] Android NDK 21.x not found under %ANDROID_SDK_ROOT%\ndk. Set ANDROID_NDK_ROOT.
+    goto :fail
+)
+if not defined ANDROID_NDK_HOST set "ANDROID_NDK_HOST=windows-x86_64"
+if not defined ANDROID_NDK_PLATFORM set "ANDROID_NDK_PLATFORM=android-21"
+
+if defined JAVA_HOME if exist "%JAVA_HOME%\bin\java.exe" goto :have_java
+set "FOUND_JDK="
+for %%R in ("E:\programes\Android" "D:\software\Android" "C:\Program Files\Java") do (
+    if not defined FOUND_JDK for /d %%J in ("%%~R\jdk-11*" "%%~R\jdk11*") do set "FOUND_JDK=%%~fJ"
+)
+if defined FOUND_JDK (
+    set "JAVA_HOME=%FOUND_JDK%"
+) else (
+    echo [error] JDK 11 not found. Set JAVA_HOME to a JDK 11 installation.
+    goto :fail
+)
+:have_java
 set "PATH=%QT_ANDROID%\bin;%MINGW_DIR%\bin;%JAVA_HOME%\bin;%ANDROID_SDK_ROOT%\platform-tools;%PATH%"
 
 if not exist "%ROOT%\build\android_qt5" mkdir "%ROOT%\build\android_qt5"

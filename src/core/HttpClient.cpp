@@ -64,7 +64,7 @@ void HttpClient::setProxyFromSettings()
 
 void HttpClient::request(const QString &method, const QUrl &url, const QVariantMap &headers,
                          const QByteArray &body, const Callback &cb, int timeoutMs,
-                         bool followRedirects, const QString &peerVerifyName)
+                         bool followRedirects, const QString &peerVerifyName, qint64 bodyLimit)
 {
     QNetworkRequest req(url);
     // 只改「证书应该签给谁」这一项：证书链、有效期、根 CA 校验全部照常。
@@ -118,18 +118,45 @@ void HttpClient::request(const QString &method, const QUrl &url, const QVariantM
         if (cb) cb(r);
     };
 
+    // bodyLimit 命中时要在 readyRead 里提前投递结果，和 finished 走同一套封装，
+    // 保证 headers/setCookies/json/ok 语义与普通响应完全一致。
+    auto bodyBuf = std::make_shared<QByteArray>();
+    auto makeReply = [](QNetworkReply *reply, const QByteArray &bytes) {
+        Reply r;
+        r.status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        r.body = bytes;
+        r.json = Json::document(r.body);
+        for (const QByteArray &h : reply->rawHeaderList()) {
+            const QString key = QString::fromUtf8(h).toLower();
+            r.headers.insert(key, QString::fromUtf8(reply->rawHeader(h)));
+            if (key == QLatin1String("set-cookie"))
+                r.setCookies << QString::fromUtf8(reply->rawHeader(h));
+        }
+        const QVariant cookieVar = reply->header(QNetworkRequest::SetCookieHeader);
+        if (cookieVar.isValid()) {
+            for (const QNetworkCookie &c : cookieVar.value<QList<QNetworkCookie>>())
+                r.setCookies << QString::fromUtf8(c.toRawForm());
+        }
+        r.setCookies.removeDuplicates();
+        r.error = (reply->error() == QNetworkReply::NoError)
+                      ? QString() : reply->errorString();
+        r.ok = (reply->error() == QNetworkReply::NoError) && (r.status == 0 || r.status < 400);
+        return r;
+    };
+
     // FURUI_HTTP_TRACE=1：把每个请求的发出/结束/超时打到 stderr，用于定位
     // 「请求发出去了但一直不回包」这类问题（默认完全不输出）。
-    const bool trace = qEnvironmentVariableIsSet("FURUI_HTTP_TRACE");
+    const bool trace = qEnvironmentVariableIntValue("FURUI_HTTP_TRACE") > 0;
     auto clock = std::make_shared<QElapsedTimer>();
     clock->start();
     if (trace)
         std::fprintf(stderr, "[http] -> %s %s body=%lld headers=%d\n",
-                     qPrintable(m), qPrintable(url.toString()),
+                     qPrintable(m), qPrintable(url.toString(QUrl::RemoveQuery)),
                      (long long)body.size(), headers.size());
 
     QPointer<QNetworkReply> guard(reply);
-    if (timeoutMs < 0) timeoutMs = Settings::integer(QStringLiteral("timeout"), 12) * 1000;
+    // 设置里填 0/负数会让 QTimer 变成 0ms 定时器，请求瞬间「超时」；至少给 1s。
+    if (timeoutMs < 0) timeoutMs = qMax(1, Settings::integer(QStringLiteral("timeout"), 12)) * 1000;
     QTimer::singleShot(timeoutMs, this, [guard, finish, trace, clock]() {
         if (!guard) return;
         if (trace)
@@ -143,42 +170,52 @@ void HttpClient::request(const QString &method, const QUrl &url, const QVariantM
         guard->abort();
     });
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply, finish, trace, clock]() {
-        Reply r;
-        r.status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        r.body = reply->readAll();
-        if (trace)
-            std::fprintf(stderr, "[http] <- elapsed=%lldms status=%d error=%d %s body=%lld\n",
-                         (long long)clock->elapsed(), r.status, int(reply->error()),
-                         qPrintable(reply->errorString()), (long long)r.body.size());
+    if (bodyLimit >= 0) {
+        connect(reply, &QNetworkReply::readyRead, this,
+                [reply, guard, done, finish, makeReply, bodyBuf, bodyLimit]() {
+            if (*done || !guard) return;
+            const qint64 remaining = bodyLimit - bodyBuf->size();
+            if (remaining > 0)
+                bodyBuf->append(reply->read(remaining));
+            if (bodyBuf->size() >= bodyLimit) {
+                // 先投递截断结果再 abort：abort 触发的 finished 会在 done 门禁处直接返回
+                finish(makeReply(reply, *bodyBuf));
+                guard->abort();
+            }
+        });
+    }
+
+    connect(reply, &QNetworkReply::finished, this,
+            [reply, done, finish, makeReply, bodyBuf, bodyLimit, trace, clock]() {
+        // 超时/限流已经投递过结果，abort() 又同步触发了 finished；此时再 readAll()
+        // 会打印 "QIODevice::read (QNetworkReply): device not open"，且可能覆盖已投递的结果。
+        if (*done || reply->error() == QNetworkReply::OperationCanceledError) {
+            reply->deleteLater();
+            return;
+        }
+        QByteArray bytes;
+        if (bodyLimit >= 0) {
+            const qint64 remaining = bodyLimit - bodyBuf->size();
+            if (remaining > 0) bodyBuf->append(reply->read(remaining));
+            bytes = *bodyBuf;
+        } else {
+            bytes = reply->readAll();
+        }
         // FURUI_PERF=1：把 GUI 线程上的解析耗时打出来。要不要挪去线程池取决于这条数据，
         // 不靠猜——几十 KB 的搜索结果解析不到 1ms，为它引入跨线程回调生命周期风险不值。
         QElapsedTimer parseClock;
         const bool perfLog = qEnvironmentVariableIsSet("FURUI_PERF");
         if (perfLog) parseClock.start();
-        r.json = Json::document(r.body);   // JsonMapper 通过 Types.h 间接可见
+        Reply r = makeReply(reply, bytes);   // JsonMapper 通过 Types.h 间接可见
+        if (trace)
+            std::fprintf(stderr, "[http] <- elapsed=%lldms status=%d error=%d %s body=%lld\n",
+                         (long long)clock->elapsed(), r.status, int(reply->error()),
+                         qPrintable(reply->errorString()), (long long)r.body.size());
         if (perfLog && parseClock.elapsed() >= 8)
             qWarning().noquote() << QStringLiteral("[perf] json parse %1ms body=%2KB %3")
                                         .arg(parseClock.elapsed())
                                         .arg(r.body.size() / 1024)
                                         .arg(reply->url().host());
-        for (const QByteArray &h : reply->rawHeaderList()) {
-            const QString key = QString::fromUtf8(h).toLower();
-            r.headers.insert(key, QString::fromUtf8(reply->rawHeader(h)));
-            if (key == QLatin1String("set-cookie"))
-                r.setCookies << QString::fromUtf8(reply->rawHeader(h));
-        }
-        const QVariant cookieVar = reply->header(QNetworkRequest::SetCookieHeader);
-        if (cookieVar.isValid()) {
-            for (const QNetworkCookie &c : cookieVar.value<QList<QNetworkCookie>>())
-                r.setCookies << QString::fromUtf8(c.toRawForm());
-        }
-        // rawHeader 与 SetCookieHeader 是同一批 Cookie 的两种视图，去重后再交给业务层，
-        // 避免拼接头里出现重复键（网易对重复/空值 Cookie 会直接风控 -462）
-        r.setCookies.removeDuplicates();
-        r.error = (reply->error() == QNetworkReply::NoError)
-                      ? QString() : reply->errorString();
-        r.ok = (reply->error() == QNetworkReply::NoError) && (r.status == 0 || r.status < 400);
         reply->deleteLater();
         finish(r);
     });
@@ -234,7 +271,7 @@ void HttpClient::download(const QUrl &url, const QVariantMap &headers,
 
     QPointer<QNetworkReply> guard(reply);
     if (timeoutMs < 0)
-        timeoutMs = Settings::integer(QStringLiteral("timeout"), 12) * 1000;
+        timeoutMs = qMax(1, Settings::integer(QStringLiteral("timeout"), 12)) * 1000;
     QTimer::singleShot(timeoutMs, this, [guard, finish]() {
         if (!guard) return;
         // 与 request() 一致：先投递结果再 abort。abort() 可能同步触发 finished，

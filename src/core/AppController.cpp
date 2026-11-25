@@ -524,7 +524,9 @@ AppController::AppController(QObject *parent)
     connect(api, &OpenApiServer::stateChanged, this, [this] { emit settingsChanged(); });
     Logger::instance()->setFileEnabled(Settings::boolean(QStringLiteral("logToFile"), false));
     if (Settings::boolean(QStringLiteral("openApi"), false))
-        api->start(Settings::integer(QStringLiteral("openApiPort"), 23330), false);
+        // 默认仅本机；显式设置 openApiLocalOnly=false 且有令牌时才允许局域网访问
+        api->start(Settings::integer(QStringLiteral("openApiPort"), 23330),
+                   Settings::boolean(QStringLiteral("openApiLocalOnly"), true));
 
     Library::instance();
     SourceConfig::instance();
@@ -2119,14 +2121,20 @@ void AppController::downloadResult(int index)
     const QVector<Song> &songs = m_results->songs();
     if (index < 0 || index >= songs.size()) return;
     const Song song = songs.at(index);
+    const quint64 gen = d->resolveGen;   // 切歌后 resolveGen 递增，迟到的取链回调不再下载旧歌
     setStatus(QStringLiteral("正在准备下载「%1」…").arg(song.title));
-    SourceManager::instance()->resolve(song, d->quality, [this, song](const Playable &p) {
+    SourceManager::instance()->resolve(song, d->quality, [this, song, gen](const Playable &p) {
+        if (gen != d->resolveGen) return;
         if (!p.ok) { emit toast(p.message); return; }
         QString dir = Settings::string(QStringLiteral("downloadDir"));
         if (dir.isEmpty()) dir = Settings::defaultDownloadsDir();
         QDir().mkpath(dir);
         QString name = (song.artist.isEmpty() ? song.title : song.artist + QStringLiteral(" - ") + song.title);
         name.remove(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|]")));
+        name = name.trimmed();
+        if (name.isEmpty()) name = QStringLiteral("furui-music");
+        // 与 OpenApiServer::downloadFileName() 一致：超长文件名在部分系统/浏览器上会保存失败
+        if (name.size() > 120) name = name.left(120);
         const QString path = dir + QLatin1Char('/') + name + QLatin1Char('.') + extensionForUrl(p.url);
         // 流式写盘：整首 FLAC 动辄几十 MB，原来走 Reply::body 会把这些字节全留在内存里
         HttpClient::instance()->download(p.url, p.headers, path,
@@ -2411,8 +2419,10 @@ void AppController::setSetting(const QString &key, const QVariant &value)
     else if (key == QLatin1String("logToFile")) Logger::instance()->setFileEnabled(value.toBool());
     else if (key == QLatin1String("openApi") || key == QLatin1String("openApiPort")) {
         OpenApiServer *api = OpenApiServer::instance();
+        // 默认仅本机；显式设置 openApiLocalOnly=false 且有令牌时才允许局域网访问
         if (Settings::boolean(QStringLiteral("openApi"), false))
-            api->start(Settings::integer(QStringLiteral("openApiPort"), 23330), false);
+            api->start(Settings::integer(QStringLiteral("openApiPort"), 23330),
+                       Settings::boolean(QStringLiteral("openApiLocalOnly"), true));
         else api->stop();
     }
     // 取链策略/音质变了：已缓存的直链与歌词不再可信，全部作废

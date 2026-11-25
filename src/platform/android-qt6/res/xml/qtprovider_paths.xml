@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 可见路径，供 UpdateInstaller.java 的 getUriForFile() 使用：
+     - files-path：应用私有 files/update/ 里下载好的更新 APK；
+     - external-files-path：部分 ROM 把应用私有目录重定向到外部 files；
+     - external-path：公共 Download 目录（系统文件管理器兜底打开）。 -->
+<paths>
+    <files-path name="internal_files" path="." />
+    <external-files-path name="external_app_files" path="." />
+    <external-path name="external_files" path="." />
+</paths>

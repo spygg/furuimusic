@@ -153,10 +153,12 @@ Item {
     // 所以这里必须同时清输入框，否则清空后残留旧关键词
     function exitSearch()
     {
+        // 先清状态再动输入框：keyword.text 被清空会触发 onTextChanged，
+        // 旧顺序下 searchKeyword 还非空 → 又调一次 clearSearch() → 重复 reloadSongs。
+        root.searchKeyword = ""
         if (keyword.text.length > 0)
             keyword.text = ""
         root.searching = false
-        root.searchKeyword = ""
     }
 
     function clearSearch()
@@ -1121,7 +1123,12 @@ Item {
                                     Layout.preferredWidth: 76
                                     Layout.preferredHeight: theme.touchMin
                                     radius: height / 2
-                                    color: Qt.rgba(accent.r, accent.g, accent.b, 0.12)
+                                    color: addQueueMa.pressed ? Qt.rgba(accent.r, accent.g, accent.b, 0.30)
+                                         : (addQueueMa.containsMouse ? Qt.rgba(accent.r, accent.g, accent.b, 0.22)
+                                                                     : Qt.rgba(accent.r, accent.g, accent.b, 0.12))
+                                    Behavior on color { ColorAnimation { duration: theme.durationFast } }
+                                    scale: addQueueMa.pressed ? 0.96 : 1.0
+                                    Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
                                     Text {
                                         anchors.centerIn: parent
                                         text: "加入队列"
@@ -1129,7 +1136,11 @@ Item {
                                         font.pixelSize: theme.fontSm
                                     }
                                     MouseArea {
+                                        id: addQueueMa
                                         anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        Accessible.name: "将歌单加入播放队列"
                                         onClicked: app.addPlaylistToQueue(model.uid)
                                     }
                                 }
@@ -1243,11 +1254,12 @@ Item {
                             Layout.fillWidth: true
                             spacing: 10
                             Rectangle {
-                                width: 86
-                                height: theme.touchMin
+                                Layout.preferredWidth: 86
+                                Layout.preferredHeight: theme.touchMin
                                 radius: height / 2
-                                color: "transparent"
+                                color: backPlaylistMa.containsMouse ? root.cChipHover : "transparent"
                                 border.color: cLine
+                                Behavior on color { ColorAnimation { duration: theme.durationFast } }
                                 Text {
                                     anchors.centerIn: parent
                                     text: "← 返回歌单"
@@ -1255,7 +1267,11 @@ Item {
                                     font.pixelSize: theme.fontSm
                                 }
                                 MouseArea {
+                                    id: backPlaylistMa
                                     anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    Accessible.name: "返回歌单列表"
                                     onClicked: root.openPlaylistTitle = ""
                                 }
                             }
@@ -1452,7 +1468,9 @@ Item {
                         height: theme.touchMin
                         radius: height / 2
                         visible: queueList.count > 0
-                        color: cSoft
+                        color: clearQueueMa.pressed ? Qt.rgba(cPrimary.r, cPrimary.g, cPrimary.b, 0.30)
+                             : (clearQueueMa.containsMouse ? Qt.rgba(cPrimary.r, cPrimary.g, cPrimary.b, 0.22) : cSoft)
+                        Behavior on color { ColorAnimation { duration: theme.durationFast } }
                         Text {
                             anchors.centerIn: parent
                             text: "清空队列"
@@ -1460,7 +1478,11 @@ Item {
                             font.pixelSize: theme.fontSm
                         }
                         MouseArea {
+                            id: clearQueueMa
                             anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            Accessible.name: "清空播放队列"
                             onClicked: app.clearQueue()
                         }
                     }
@@ -1747,7 +1769,12 @@ Item {
                                     Layout.preferredWidth: 76
                                     Layout.preferredHeight: theme.touchMin
                                     radius: height / 2
-                                    color: Qt.rgba(accent.r, accent.g, accent.b, 0.12)
+                                    // 整行已有 MouseArea，这里只借它的 hover/press 做反馈，
+                                    // 不再叠一层 MouseArea 抢掉行的点击
+                                    color: Qt.rgba(accent.r, accent.g, accent.b,
+                                                   discoveryRowHover.pressed ? 0.30
+                                                   : (discoveryRowHover.containsMouse ? 0.22 : 0.12))
+                                    Behavior on color { ColorAnimation { duration: theme.durationFast } }
                                     Text {
                                         anchors.centerIn: parent
                                         text: "查看"
@@ -1759,12 +1786,21 @@ Item {
                         }
                     }
 
-                    Text {
+                    Row {
                         anchors.centerIn: parent
+                        spacing: theme.spaceSm
                         visible: app.discoveryLoading && discoveryGrid.count === 0
-                        text: "正在加载各平台公开榜单…"
-                        color: cSub
-                        font.pixelSize: 13
+                        BusyIndicator {
+                            running: parent.visible
+                            width: 28
+                            height: 28
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "正在加载各平台公开榜单…"
+                            color: cSub
+                            font.pixelSize: theme.fontSm
+                        }
                     }
 
                     EmptyState {
@@ -1786,11 +1822,12 @@ Item {
                             Layout.fillWidth: true
                             spacing: 10
                             Rectangle {
-                                width: 86
-                                height: theme.touchMin
+                                Layout.preferredWidth: 86
+                                Layout.preferredHeight: theme.touchMin
                                 radius: height / 2
-                                color: "transparent"
+                                color: backDiscoveryMa.containsMouse ? root.cChipHover : "transparent"
                                 border.color: cLine
+                                Behavior on color { ColorAnimation { duration: theme.durationFast } }
                                 Text {
                                     anchors.centerIn: parent
                                     text: "← 返回榜单"
@@ -1798,7 +1835,11 @@ Item {
                                     font.pixelSize: theme.fontSm
                                 }
                                 MouseArea {
+                                    id: backDiscoveryMa
                                     anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    Accessible.name: "返回榜单列表"
                                     onClicked: root.discoveryTitle = ""
                                 }
                             }
@@ -1819,11 +1860,13 @@ Item {
                                 font.pixelSize: theme.fontSm
                             }
                             Rectangle {
-                                width: 72
-                                height: theme.touchMin
+                                Layout.preferredWidth: 72
+                                Layout.preferredHeight: theme.touchMin
                                 radius: height / 2
-                                color: cSoft
+                                color: discoveryPlayAllMa.pressed ? Qt.rgba(cPrimary.r, cPrimary.g, cPrimary.b, 0.30)
+                                     : (discoveryPlayAllMa.containsMouse ? Qt.rgba(cPrimary.r, cPrimary.g, cPrimary.b, 0.22) : cSoft)
                                 visible: discoveryDetail.count > 0
+                                Behavior on color { ColorAnimation { duration: theme.durationFast } }
                                 Text {
                                     anchors.centerIn: parent
                                     text: "播放全部"
@@ -1831,7 +1874,11 @@ Item {
                                     font.pixelSize: theme.fontSm
                                 }
                                 MouseArea {
+                                    id: discoveryPlayAllMa
                                     anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    Accessible.name: "播放全部"
                                     onClicked: app.playResult(0)
                                 }
                             }
@@ -2633,8 +2680,11 @@ Item {
         onClicked: {
             const p = searchBox.mapToItem(root, 0, 0)
             if (mouse.x >= p.x && mouse.x <= p.x + searchBox.width
-                    && mouse.y >= p.y && mouse.y <= p.y + searchBox.height)
+                    && mouse.y >= p.y && mouse.y <= p.y + searchBox.height) {
+                // 点在输入框内要让事件继续传给 TextField，否则光标定位/选词全被吞掉
+                mouse.accepted = false
                 return
+            }
             root.historyOpen = false
             keyword.focus = false
         }

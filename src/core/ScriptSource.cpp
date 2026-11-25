@@ -63,18 +63,25 @@ QStringList repoFileMirrors(const QString &path)
 
 void fetchFirst(const QStringList &urls, int index,
                 std::function<void(bool, const QString &)> cb,
-                std::function<bool(const QString &)> accept)
+                std::function<bool(const QString &)> accept,
+                const std::shared_ptr<qint64> &deadline = std::shared_ptr<qint64>())
 {
-    if (index >= urls.size()) {
+    // 10 条镜像 × 20s = 最坏 200s，启动时会把界面卡在「正在发现音源」。
+    // 所有镜像共用一条总期限，单条超时再按剩余时间收紧。
+    if (index >= urls.size()
+        || (deadline && QDateTime::currentMSecsSinceEpoch() >= *deadline)) {
         if (cb) cb(false, QString());
         return;
     }
+    const int perMirror = deadline
+        ? qMin(20000, int(qMax<qint64>(1, *deadline - QDateTime::currentMSecsSinceEpoch())))
+        : 20000;
     QVariantMap headers;
     headers.insert(QStringLiteral("User-Agent"), QStringLiteral("FuruiMusic/1.0"));
     headers.insert(QStringLiteral("Accept"), QStringLiteral("*/*"));
     HttpClient::instance()->request(
         QStringLiteral("GET"), QUrl(urls.at(index)), headers, QByteArray(),
-        [urls, index, cb, accept](const HttpClient::Reply &r) {
+        [urls, index, cb, accept, deadline](const HttpClient::Reply &r) {
             // 部分加速站会返回 200 + 反爬 HTML（例如 ghproxy.cn），必须校验内容，
             // 否则第一条镜像就把后续可用镜像挡掉了。
             if (r.ok && !r.body.trimmed().isEmpty()) {
@@ -86,8 +93,8 @@ void fetchFirst(const QStringList &urls, int index,
                 qWarning("镜像内容不可用，继续下一条：%s",
                          qUtf8Printable(urls.at(index)));
             }
-            fetchFirst(urls, index + 1, cb, accept);
-        }, 20000, true);
+            fetchFirst(urls, index + 1, cb, accept, deadline);
+        }, perMirror, true);
 }
 
 QStringList mirrorUrlsForImpl(const QString &rawUrl)
@@ -592,8 +599,10 @@ void ScriptSourceManager::seedBuiltinSources()
         repoFileMirrors(QStringLiteral("health-status/health-state.json"));
 
     QPointer<ScriptSourceManager> self(this);
+    // README 与健康状态两条镜像链共用 30s 总期限（含所有回退）
+    auto deadline = std::make_shared<qint64>(QDateTime::currentMSecsSinceEpoch() + 30000);
     // 1) 仓库页面（README 原文）→ 解析出当前在维护的音源清单
-    fetchFirst(readmeUrls, 0, [self, healthUrls](bool ok, const QString &page) {
+    fetchFirst(readmeUrls, 0, [self, healthUrls, deadline](bool ok, const QString &page) {
         ScriptSourceManager *mgr = self.data();
         if (!ok || !mgr) {
             qWarning("音源仓库发现：仓库页面获取失败，本次跳过");
@@ -653,11 +662,11 @@ void ScriptSourceManager::seedBuiltinSources()
         }, [](const QString &text) {
             // 健康状态必须是含 sources 的 JSON
             return text.contains(QStringLiteral("\"sources\""));
-        });
+        }, deadline);
     }, [](const QString &text) {
         // README 必须真的包含脚本地址，避免把反爬 HTML 当成功
         return text.contains(QStringLiteral("latest.js"));
-    });
+    }, deadline);
 }
 
 void ScriptSourceManager::seedDiscovered(const QVector<DiscoveredSource> &list,

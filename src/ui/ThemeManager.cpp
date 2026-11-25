@@ -221,7 +221,13 @@ void ThemeManager::syncStatusBarIcons() const
     // 深色页面（MV 全屏）打开时走 override 强制浅色图标，否则黑底上什么都看不见。
     const bool lightIcons = m_statusBarOverride >= 0
                                 ? m_statusBarOverride == 1 : !isDark();
-    QNativeInterface::QAndroidApplication::runOnAndroidMainThread([lightIcons] {
+    // 状态栏底色与图标一起切：浅色主题用页面底色，深色主题 / MV 全屏（override=1）
+    // 用与黑底一致的近黑色，否则浅色主题下黑底配白底状态栏会有一条突兀的亮带。
+    const bool darkContent = m_statusBarOverride == 1
+                             || (m_statusBarOverride < 0 && isDark());
+    const QColor statusColor = darkContent ? QColor(QStringLiteral("#0E0E10")) : bg();
+    const jint statusArgb = static_cast<jint>(statusColor.rgb());
+    QNativeInterface::QAndroidApplication::runOnAndroidMainThread([lightIcons, statusArgb] {
         const QJniObject activity = QJniObject::callStaticObjectMethod(
             "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
         if (!activity.isValid())
@@ -231,6 +237,9 @@ void ThemeManager::syncStatusBarIcons() const
         if (!window.isValid())
             return;
         const jint sdk = QNativeInterface::QAndroidApplication::sdkVersion();
+        // setStatusBarColor 自 API 21 起可用；必须在主线程调用。
+        if (sdk >= 21)
+            window.callMethod<void>("setStatusBarColor", "(I)V", statusArgb);
         if (sdk >= 30) {
             // WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS = 0x8
             const QJniObject controller = window.callObjectMethod(

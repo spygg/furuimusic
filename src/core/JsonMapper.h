@@ -14,6 +14,8 @@
 #include <QVariantMap>
 #include <QtGlobal>
 
+#include <limits>
+
 #include "Types.h"
 
 namespace Furui {
@@ -58,7 +60,12 @@ inline QString str(const QJsonValue &v)
     case QJsonValue::String: return v.toString();
     case QJsonValue::Double: {
         const double d = v.toDouble();
-        if (qFuzzyCompare(d + 1.0, double(qint64(d)) + 1.0)) return QString::number(qint64(d));
+        // double -> qint64 超出范围时是未定义行为（Debug 下可能直接断言），先卡范围。
+        // numeric_limits<qint64>::max() 转成 double 会向上取整到 2^63，所以用开区间。
+        const bool inRange = d >= double(std::numeric_limits<qint64>::lowest())
+                             && d < double(std::numeric_limits<qint64>::max());
+        if (inRange && qFuzzyCompare(d + 1.0, double(qint64(d)) + 1.0))
+            return QString::number(qint64(d));
         return QString::number(d);
     }
     case QJsonValue::Bool:   return v.toBool() ? QStringLiteral("true") : QStringLiteral("false");

@@ -72,49 +72,74 @@ void requestNotificationPermission()
         return;
     g_permissionRequested = true;
 
-    QJniEnvironment env;
-    JNIEnv *jni = env.jniEnv();
-    if (!jni)
-        return;
-    // QtNative.activity() 在 Java 侧不是 public，但 JNI 按名称/签名查找不受可见性限制
-    QJniObject activity = QJniObject::callStaticObjectMethod(
-        "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
-    if (!activity.isValid() || !activity.object())
-        return;
+    // requestPermissions() 只能从 Android UI 线程发起：Qt 的事件循环跑在
+    // qtMainLoopThread，从那里直接 JNI 调用会得到
+    // "Found no valid pending permission request for request code 18002"，权限 dialog 不会出现。
+    // 与 applyKeepScreenOn() 一样把整段 JNI 操作切到主线程。
+    QNativeInterface::QAndroidApplication::runOnAndroidMainThread([]() {
+        QJniEnvironment env;
+        JNIEnv *jni = env.jniEnv();
+        if (!jni)
+            return;
+        // QtNative.activity() 在 Java 侧不是 public，但 JNI 按名称/签名查找不受可见性限制
+        QJniObject activity = QJniObject::callStaticObjectMethod(
+            "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
+        if (!activity.isValid() || !activity.object())
+            return;
 
-    // 读 Build.VERSION.SDK_INT，按版本决定申请哪些权限
-    jclass buildClass = jni->FindClass("android/os/Build$VERSION");
-    if (!buildClass) return;
-    jfieldID sdkField = jni->GetStaticFieldID(buildClass, "SDK_INT", "I");
-    const int sdk = sdkField ? jni->GetStaticIntField(buildClass, sdkField) : 0;
-    jni->DeleteLocalRef(buildClass);
+        // 读 Build.VERSION.SDK_INT，按版本决定申请哪些权限
+        jclass buildClass = jni->FindClass("android/os/Build$VERSION");
+        if (!buildClass) return;
+        jfieldID sdkField = jni->GetStaticFieldID(buildClass, "SDK_INT", "I");
+        const int sdk = sdkField ? jni->GetStaticIntField(buildClass, sdkField) : 0;
+        jni->DeleteLocalRef(buildClass);
 
-    QStringList perms;
-    if (sdk >= 33) perms << QStringLiteral("android.permission.POST_NOTIFICATIONS");
-    if (sdk <= 28) perms << QStringLiteral("android.permission.WRITE_EXTERNAL_STORAGE");
-    if (perms.isEmpty()) return;
+        QStringList candidates;
+        if (sdk >= 33) candidates << QStringLiteral("android.permission.POST_NOTIFICATIONS");
+        if (sdk <= 28) candidates << QStringLiteral("android.permission.WRITE_EXTERNAL_STORAGE");
+        if (candidates.isEmpty()) return;
 
-    jclass stringClass = jni->FindClass("java/lang/String");
-    if (!stringClass) return;
-    jobjectArray permissions = jni->NewObjectArray(perms.size(), stringClass, nullptr);
-    for (int i = 0; i < perms.size(); ++i) {
-        jstring name = jni->NewStringUTF(perms.at(i).toUtf8().constData());
-        jni->SetObjectArrayElement(permissions, i, name);
-        jni->DeleteLocalRef(name);
-    }
-    jni->DeleteLocalRef(stringClass);
+        jclass stringClass = jni->FindClass("java/lang/String");
+        if (!stringClass) return;
+        // 已授予的权限不要重复申请：某些 ROM 上重复 requestPermissions 会让系统在
+        // 回传结果时提示 "Found no valid pending permission request for request code 18002"。
+        jclass contextClass = jni->FindClass("android/content/Context");
+        jmethodID check = contextClass
+                          ? jni->GetMethodID(contextClass, "checkSelfPermission", "(Ljava/lang/String;)I")
+                          : nullptr;
+        QStringList perms;
+        for (const QString &p : candidates) {
+            jstring name = jni->NewStringUTF(p.toUtf8().constData());
+            // PackageManager.PERMISSION_GRANTED == 0
+            const bool need = !check || jni->CallIntMethod(activity.object(), check, name) != 0;
+            if (need) perms << p;
+            jni->DeleteLocalRef(name);
+        }
+        if (contextClass) jni->DeleteLocalRef(contextClass);
+        if (perms.isEmpty()) {
+            jni->DeleteLocalRef(stringClass);
+            return;
+        }
+        jobjectArray permissions = jni->NewObjectArray(perms.size(), stringClass, nullptr);
+        for (int i = 0; i < perms.size(); ++i) {
+            jstring name = jni->NewStringUTF(perms.at(i).toUtf8().constData());
+            jni->SetObjectArrayElement(permissions, i, name);
+            jni->DeleteLocalRef(name);
+        }
+        jni->DeleteLocalRef(stringClass);
 
-    jclass activityClass = jni->FindClass("android/app/Activity");
-    if (activityClass) {
-        jmethodID request = jni->GetMethodID(activityClass, "requestPermissions",
-                                             "([Ljava/lang/String;I)V");
-        if (request)
-            jni->CallVoidMethod(activity.object(), request, permissions, jint(0x4652));
-        jni->DeleteLocalRef(activityClass);
-    }
-    jni->DeleteLocalRef(permissions);
-    if (jni->ExceptionCheck())
-        jni->ExceptionClear();
+        jclass activityClass = jni->FindClass("android/app/Activity");
+        if (activityClass) {
+            jmethodID request = jni->GetMethodID(activityClass, "requestPermissions",
+                                                 "([Ljava/lang/String;I)V");
+            if (request)
+                jni->CallVoidMethod(activity.object(), request, permissions, jint(0x4652));
+            jni->DeleteLocalRef(activityClass);
+        }
+        jni->DeleteLocalRef(permissions);
+        if (jni->ExceptionCheck())
+            jni->ExceptionClear();
+    });
 }
 
 // 前台播放时保持屏幕常亮：用官方推荐的 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON，

@@ -271,7 +271,12 @@ void Library::removePlaylist(const QString &uid)
 void Library::setPlaylistSongs(const QString &playlistUid, const QVector<Song> &songs)
 {
     if (!m_ready) return;
-    m_db.transaction();
+    if (!m_db.transaction()) {
+        qWarning() << "[FuruiMusic] Library setPlaylistSongs 开启事务失败:"
+                   << m_db.lastError().text();
+        return;
+    }
+    bool ok = true;
 
     QSqlQuery songQuery(m_db);
     songQuery.prepare(QStringLiteral("INSERT OR REPLACE INTO songs (uid,source,source_id,title,artist,album,cover,duration,vip,extra) "
@@ -288,14 +293,16 @@ void Library::setPlaylistSongs(const QString &playlistUid, const QVector<Song> &
         songQuery.bindValue(8, s.vip ? 1 : 0);
         songQuery.bindValue(9, QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(s.extra))
                                                      .toJson(QJsonDocument::Compact)));
-        if (!songQuery.exec())
+        if (!songQuery.exec()) {
+            ok = false;
             qWarning() << "[FuruiMusic] setPlaylistSongs song:" << songQuery.lastError().text();
+        }
     }
 
     QSqlQuery del(m_db);
     del.prepare(QStringLiteral("DELETE FROM playlist_songs WHERE playlist_uid=?"));
     del.addBindValue(playlistUid);
-    execWrite(del, "setPlaylistSongs clear");
+    if (!execWrite(del, "setPlaylistSongs clear")) ok = false;
 
     QSqlQuery ins(m_db);
     ins.prepare(QStringLiteral("INSERT INTO playlist_songs (playlist_uid,song_uid,pos) VALUES (?,?,?)"));
@@ -304,14 +311,20 @@ void Library::setPlaylistSongs(const QString &playlistUid, const QVector<Song> &
         ins.bindValue(0, playlistUid);
         ins.bindValue(1, songs.at(i).uid);
         ins.bindValue(2, i);
-        if (!ins.exec())
+        if (!ins.exec()) {
             ++failed;
+            ok = false;
+        }
     }
     // 循环里逐条报警会把日志刷满，只在有失败时汇总一次；少掉的行就是界面上「歌单变短」的原因
     if (failed > 0)
         qWarning() << "[FuruiMusic] Library setPlaylistSongs 丢失" << failed << "/"
                    << songs.size() << "行:" << ins.lastError().text();
-    m_db.commit();
+    // 任何一步失败都整单回滚：半写入状态比原样不动更糟（界面短了一截）
+    if (!ok || !m_db.commit()) {
+        m_db.rollback();
+        return;
+    }
     emit changed();
 }
 

@@ -290,6 +290,13 @@ QString OpenApiServer::address() const
 void OpenApiServer::start(int port, bool localOnly)
 {
     if (port <= 0) port = 23330;
+    // 局域网监听 = 同网段任何设备都能访问，没有令牌就等于把播放控制/日志全部公开。
+    // 没设令牌时直接拒绝 LAN 模式（保持已有的本机实例不变），本机使用不受影响。
+    if (!localOnly && Settings::string(QStringLiteral("openApiToken")).trimmed().isEmpty()) {
+        emit toast(QStringLiteral("开放 API 局域网模式需先设置访问令牌，已取消启动"));
+        if (running() && !m_localOnly) stop();   // 令牌被清掉后不能留着旧的 LAN 监听
+        return;
+    }
     if (running() && m_port == port && m_localOnly == localOnly) return;
     stop();
     m_port = port;
@@ -349,6 +356,8 @@ void OpenApiServer::onReadyRead()
         return;
     }
     const QByteArray request = buf.left(end + 4);
+    // OpenAPI 端点全部是 GET（无 body 消费者）：header 之后的字节直接丢弃，
+    // 否则残留 body 会和下一条请求头拼在一起被误解析。
     m_buffers[socket].clear();
     m_origins.insert(socket, headerValue(request, "Origin"));
     handleRequest(socket, request);
@@ -395,6 +404,7 @@ void OpenApiServer::respond(QTcpSocket *socket, int code, const QString &content
     case 403: reason = "Forbidden"; break;
     case 404: reason = "Not Found"; break;
     case 405: reason = "Method Not Allowed"; break;
+    case 401: reason = "Unauthorized"; break;
     default:  reason = "Error"; break;
     }
     QByteArray header;
@@ -433,11 +443,11 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
         respond(socket, 200, QStringLiteral("text/plain"), "OK");
         return;
     }
-    // 可选访问令牌：设置 openApiToken 后，非本机来源必须带正确 token
-    //（X-Furui-Token 头或 ?token=），防止局域网任意设备无鉴权控制播放/读日志。
+    // 访问令牌：设了 openApiToken，或当前跑在局域网模式时，非本机来源必须带正确
+    // token（X-Furui-Token 头或 ?token=），防止局域网任意设备无鉴权控制播放/读日志。
     // 本机（127.0.0.1/::1）与同源网页控制台不受影响，保持既有本地工具/网页控制台行为。
     const QString token = Settings::string(QStringLiteral("openApiToken"));
-    if (!token.isEmpty()) {
+    if (!token.isEmpty() || !m_localOnly) {
         // isLoopback() 同时覆盖 127.0.0.1 / ::1 / IPv4-mapped ::ffff:127.0.0.1，
         // 直接和 LocalHost 比较会在服务监听 :: 时漏判映射地址，误伤本机工具。
         const bool local = socket->peerAddress().isLoopback();
@@ -446,7 +456,7 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
             const QString suppliedStr = supplied.isEmpty()
                 ? query.queryItemValue(QStringLiteral("token"))
                 : QString::fromUtf8(supplied);
-            if (suppliedStr != token) {
+            if (token.isEmpty() || suppliedStr != token) {
                 respond(socket, 401, QStringLiteral("application/json; charset=utf-8"),
                         "{\"error\":\"unauthorized\"}");
                 return;
@@ -814,6 +824,9 @@ void OpenApiServer::startStreamFromPlayable(QTcpSocket *socket, const QByteArray
     QNetworkReply *reply = HttpClient::instance()->openStream(req);
     QPointer<QNetworkReply> guard(reply);
     QPointer<QTcpSocket> sockGuard(socket);
+    // 同一 socket 重复请求（拖动进度/切歌）必须先中止旧流，否则两条 reply 同时往
+    // 一个 socket 写，音频会交错且旧流永远不释放。
+    abortStreamsForSocket(socket);
     m_streams.insert(socket, reply);
     auto headersSent = std::make_shared<bool>(false);
     auto retried = std::make_shared<bool>(false);
@@ -945,6 +958,9 @@ void OpenApiServer::streamWithAttachment(QTcpSocket *socket, const QNetworkReque
     QNetworkReply *reply = HttpClient::instance()->openStream(req);
     QPointer<QNetworkReply> guard(reply);
     QPointer<QTcpSocket> sockGuard(socket);
+    // 同一 socket 重复请求（拖动进度/切歌）必须先中止旧流，否则两条 reply 同时往
+    // 一个 socket 写，音频会交错且旧流永远不释放。
+    abortStreamsForSocket(socket);
     m_streams.insert(socket, reply);
     auto headersSent = std::make_shared<bool>(false);
 

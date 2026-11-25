@@ -42,9 +42,12 @@ public:
     // （QQ 扫码登录需要用这条链路把 graph.qq.com 的重定向一路追到带 code 的回调页）
     // peerVerifyName 非空时，仅把「证书主机名校验」用的名字换成它，连接/SNI/Host 仍用 url 的域名。
     // 只给已知证书配错的站点用（如酷狗 login.user.kugou.com 拿到的是只覆盖 *.kugou.com 的通配证书）。
+    // bodyLimit >=0 时最多保留这么多响应字节，达到上限立即 abort（用于只需要文件头的探测请求，
+    // 避免上游忽略 Range 时把整包下载进内存）；默认 -1 表示不限制。
     void request(const QString &method, const QUrl &url, const QVariantMap &headers,
                  const QByteArray &body, const Callback &cb, int timeoutMs = -1,
-                 bool followRedirects = true, const QString &peerVerifyName = QString());
+                 bool followRedirects = true, const QString &peerVerifyName = QString(),
+                 qint64 bodyLimit = -1);
     void download(const QUrl &url, const QVariantMap &headers, const QString &destPath,
                   const DownloadCallback &cb, int timeoutMs = -1,
                   const DownloadProgressCallback &progress = DownloadProgressCallback());

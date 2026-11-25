@@ -72,6 +72,42 @@ jobs:
             echo "::error::git tag ($tag_version) 与 Version.h ($header_version) 不一致"
             exit 1
           fi
+      # CMake 的 carcompat 分支在 configure 时用特供 manifest 覆盖主流 manifest，
+      # 两份文件靠人工同步。这里锁死权限与服务集合；车机版额外多出的 BYD
+      # receiver 是预期差异，只校验主流版的 receiver 都还在。
+      - name: Compare Qt6 Android manifests
+        run: |
+          python3 - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          main = "src/platform/android-qt6/AndroidManifest.xml"
+          car = "src/platform/android-qt6-carcompat/AndroidManifest.carcompat.xml"
+          ns = "{http://schemas.android.com/apk/res/android}"
+
+          def collect(path):
+              root = ET.parse(path).getroot()
+              def names(tag):
+                  return {e.get(ns + "name") for e in root.iter(tag) if e.get(ns + "name")}
+              return {"permission": names("uses-permission"),
+                      "service": names("service"),
+                      "receiver": names("receiver")}
+
+          a, b = collect(main), collect(car)
+          failed = False
+          for key in ("permission", "service"):
+              if a[key] != b[key]:
+                  print("::error::%s 集合不一致: main=%s carcompat=%s"
+                        % (key, sorted(a[key]), sorted(b[key])))
+                  failed = True
+          missing = a["receiver"] - b["receiver"]
+          if missing:
+              print("::error::carcompat manifest 缺少 receiver: %s" % sorted(missing))
+              failed = True
+          if failed:
+              sys.exit(1)
+          print("Qt6 Android manifests in sync (carcompat may add BYD receivers)")
+          PY
 
   build:
     name: ${{ matrix.config.name }}
@@ -137,13 +173,16 @@ jobs:
           modules: ${{ matrix.config.modules }}
           cache: false
 
+      # BrowserController 在 macOS / Linux 下禁用 QtWebView（改用外部浏览器），
+      # 所以只为 Windows job 追加 qtwebview。Windows MinGW 的官方 WebView2 后端
+      # 被关掉，由 src/cmake/FuruiWebView2.cmake 自编译插件补上；该插件依赖
+      # Qt 6.11.x 私有 API，在 CI 的 6.8.3 下会自动跳过（详见 README）。
       # install-qt-action@v4 自带的 aqtinstall 版本对 6.8.3 的 qtwebview addon 解析失败
       # （dry-run 验证：用最新 aqtinstall 可正常解析并定位 .7z 下载地址）。故这里只用
       # install-qt-action 装它稳过的 qtmultimedia，再用最新 aqtinstall 单独追加 qtwebview
-      # 到同一 Qt 目录，保证发布包保留应用内浏览器能力。
-      # 注意：必须追加到 install-qt-action 的默认目录 ${{ runner.temp }}/Qt（其 QT_ROOT_DIR
-      # 即该目录下的 6.8.3/<arch>），否则 CMake 找不到模块。
+      # 到同一 Qt 目录。必须追加到 ${{ runner.temp }}/Qt（QT_ROOT_DIR 即 6.8.3/<arch>）。
       - name: Append Qt WebView module
+        if: matrix.config.key == 'windows-x64'
         shell: bash
         run: |
           set -euo pipefail
@@ -294,7 +333,8 @@ jobs:
   # 所以仍单独一个 job。Qt 6 的 QtMultimedia 自带 FFmpeg 解码后端，两端 MV 都能在应用内播放。
   # 直接用仓库内的 src/scripts/build_android.sh 完成 CMake 配置与 make_apk。
   # Qt 6 的 CMake 流程不签名（只交 android-build-release-unsigned.apk），
-  # 这里用 CI 现场生成的 debug keystore 做 zipalign + apksigner，并 verify 复检。
+  # 这里 zipalign + apksigner 签名并 verify 复检：优先用 RELEASE_* secrets，
+  # 四个齐全才启用；否则打警告并回退仓库内的公开 debug keystore（仅保证可安装）。
   # 矩阵出两个变体：mainstream（cn.furui.music）与 carcompat（比亚迪特供，
   # 用网易云车机版包名 com.netease.cloudmusic.iot + BYD 小迪语音对接；应用名仍为
   # 「福瑞音乐」供车机设置里区分，语音关键词是「网易云音乐」，须先卸载官方网易云）。
@@ -419,15 +459,28 @@ jobs:
           echo "未签名 APK: $unsigned"
           BT="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
           KS="$RUNNER_TEMP/furui-release.keystore"
-          # Fixed debug signing identity checked in as base64. Generating a random
-          # keystore per CI run made every release APK carry a different signature,
-          # so the in-app updater could never replace an already installed build
-          # (device installer reported "same signature already installed").
-          # Public debug key only: used for installability, not a store signing key.
-          base64 -d src/platform/android-qt6/furui-debug.keystore.b64 > "$KS"
+          # Prefer a real release identity from secrets (all four must be set).
+          # Fallback is the fixed PUBLIC debug keystore checked in as base64: a
+          # stable signature is required for in-app updates (random per-run keys
+          # make the device installer reject the new APK as signature mismatch).
+          if [ -n "$RELEASE_KEYSTORE_B64" ] && [ -n "$RELEASE_KEYSTORE_PASSWORD" ] && \
+             [ -n "$RELEASE_KEY_ALIAS" ] && [ -n "$RELEASE_KEY_PASSWORD" ]; then
+            echo "::notice::Signing release APK with RELEASE_* secrets"
+            printf '%s' "$RELEASE_KEYSTORE_B64" | base64 -d > "$KS"
+            KSALIAS="$RELEASE_KEY_ALIAS"
+            KSPASS="$RELEASE_KEYSTORE_PASSWORD"
+            KEYPASS="$RELEASE_KEY_PASSWORD"
+          else
+            echo "::warning::RELEASE_* signing secrets incomplete; falling back to the checked-in PUBLIC DEBUG keystore in src/platform/android-qt6/furui-debug.keystore.b64. This APK is only guaranteed installable, NOT a production release identity."
+            base64 -d src/platform/android-qt6/furui-debug.keystore.b64 > "$KS"
+            KSALIAS="androiddebugkey"
+            KSPASS="android"
+            KEYPASS="android"
+          fi
+          test -s "$KS"
           "$BT/zipalign" -f -p 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
-          "$BT/apksigner" sign --ks "$KS" --ks-key-alias androiddebugkey \
-            --ks-pass pass:android --key-pass pass:android \
+          "$BT/apksigner" sign --ks "$KS" --ks-key-alias "$KSALIAS" \
+            --ks-pass "pass:$KSPASS" --key-pass "pass:$KEYPASS" \
             --out "$ARTIFACT_NAME" "$RUNNER_TEMP/aligned.apk"
           "$BT/apksigner" verify --print-certs "$ARTIFACT_NAME"
           # 启动崩溃回归守卫：src/platform/android-qt6/res/values/libs.xml 会覆盖 Qt
@@ -441,6 +494,11 @@ jobs:
             || { echo "::error::APK 包名不是 ${{ matrix.variant.pkg }}，变体产物混了"; exit 1; }
           test -s "$ARTIFACT_NAME"
           ls -la "$ARTIFACT_NAME"
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

@@ -87,6 +87,8 @@ Rectangle {
                         id: dotHover
                         anchors.fill: parent
                         hoverEnabled: true
+                        Accessible.name: modelData.action === "close" ? "关闭窗口"
+                                            : (modelData.action === "min" ? "最小化窗口" : "最大化窗口")
                         onClicked: {
                             if (modelData.action === "close")
                                 platform.closeWindow(root.win)
@@ -155,6 +157,7 @@ Rectangle {
                 id: themeBtn
                 anchors.fill: parent
                 hoverEnabled: true
+                Accessible.name: theme.dark ? "切换到浅色主题" : "切换到深色主题"
                 onClicked: root.themeToggleRequested()
             }
         }
@@ -193,6 +196,8 @@ Rectangle {
                         id: btnHover
                         anchors.fill: parent
                         hoverEnabled: true
+                        Accessible.name: modelData === "min" ? "最小化窗口"
+                                            : (modelData === "max" ? "最大化/还原窗口" : "关闭窗口")
                         onClicked: {
                             if (modelData === "min")
                                 platform.minimizeWindow(root.win)

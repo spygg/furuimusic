@@ -475,8 +475,8 @@ Item {
                         // 竖屏封面下方显示「上一句/当前句/下一句」三行歌词，预留 106dp
                         //（旧版单行只留 64dp，封面下方大片空白浪费了）。
                         readonly property real peekH: root.splitSingle ? 0 : 106
-                        readonly property real coverSide: Math.min(parent.width * 0.92,
-                                                                   parent.height - peekH, 300)
+                        readonly property real coverSide: Math.max(0, Math.min(parent.width * 0.92,
+                                                                               parent.height - peekH, 300))
                         Item {
                             id: compactCoverSlot
                             anchors.horizontalCenter: parent.horizontalCenter
@@ -799,7 +799,8 @@ Item {
                 width: parent.width
                 text: root.hasSong ? app.currentTitle : "还没有播放歌曲"
                 color: root.ink
-                font.pixelSize: root.wide ? 26 : 21
+                // 与 PlayBar 标题同一套字号令牌，保持页面间层级一致（26/21 不变）
+                font.pixelSize: root.wide ? theme.fontXl + 6 : theme.fontXl + 1
                 font.bold: true
                 font.letterSpacing: -0.3
                 elide: Text.ElideRight
@@ -815,7 +816,7 @@ Item {
                       ? (app.currentArtist.length > 0 ? app.currentArtist : "未知艺人")
                       : "在曲库或歌单里选一首开始"
                 color: root.inkSub
-                font.pixelSize: root.wide ? 15 : 13
+                font.pixelSize: root.wide ? theme.fontLg - 1 : theme.fontMd
                 elide: Text.ElideRight
                 horizontalAlignment: Text.AlignHCenter
             }
@@ -948,7 +949,10 @@ Item {
                 var avail = Math.max(0, width - ctrlPlayW)
                 var gapTarget = root.wide ? 18 : 12
                 var byWidth = Math.floor((avail - gapTarget * 5) / 5)
-                return Math.max(34, Math.min(theme.touchMin, byWidth))
+                // 触屏优先的车机/手机不能为了塞下 5 枚按钮缩到 34dp，
+                // 间距会自动收到 2dp；桌面鼠标保持旧行为。
+                var floorSize = platform.touchPrimary ? theme.touchMin : 34
+                return Math.max(floorSize, Math.min(theme.touchMin, byWidth))
             }
             readonly property int ctrlGap: {
                 var avail = Math.max(0, width - ctrlPlayW - ctrlBtn * 5)

@@ -108,7 +108,12 @@ PY
         fetch "$url.sha1" "$dest.sha1" || { echo "[qt-mirror] ERROR: 无法获取校验文件 $url.sha1" >&2; exit 1; }
         local expect actual
         expect="$(awk '{print tolower($1)}' "$dest.sha1")"
-        actual="$(sha1sum "$dest" | awk '{print $1}')"
+        # macOS 只有 shasum（GNU coreutils 的 sha1sum 不在系统 PATH 里）
+        if [ "$(uname -s)" = "Darwin" ]; then
+            actual="$(shasum -a 1 "$dest" | awk '{print $1}')"
+        else
+            actual="$(sha1sum "$dest" | awk '{print $1}')"
+        fi
         rm -f "$dest.sha1"
         [ "$expect" = "$actual" ] || { echo "[qt-mirror] ERROR: SHA1 不匹配 $archive (期望 $expect, 实际 $actual)" >&2; exit 1; }
         mkdir -p "$target"

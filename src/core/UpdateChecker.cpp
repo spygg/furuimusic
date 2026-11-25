@@ -319,6 +319,11 @@ void UpdateChecker::checkForUpdates()
     m_checking = true;
     m_progress = 0;
     m_lastResult.clear();
+    // 新一轮检测必须先作废上一轮的更新状态：否则这次网络失败后 hasUpdate() 仍为 true
+    m_remoteVersion.clear();
+    m_changelog.clear();
+    m_downloads.clear();
+    m_history.clear();
     emit stateChanged();
     probeLatestRelease();
 }
@@ -373,20 +378,21 @@ void UpdateChecker::fetchManifests(const QString &ref, const QString &apiVersion
 
 void UpdateChecker::finishCheck(const std::shared_ptr<FetchState> &state)
 {
-    if (!state->bestVersion.isEmpty()) {
-        applyManifest(state->best);
+    if (!state->bestVersion.isEmpty() && applyManifest(state->best))
         return;
-    }
     if (!state->apiVersion.isEmpty()) {
         // 清单一条都没拉到，但 API 已经明确了最新 tag：至少要让用户知道有更新
         QJsonObject fallback;
         fallback.insert(QStringLiteral("version"), state->apiVersion);
-        applyManifest(fallback);
-        return;
+        if (applyManifest(fallback))
+            return;
     }
+    // 清单版本号非法（如 ../ 穿越）也要落到这里，不能让 m_checking 永远挂着
     // 以前这里回退到打包进 APK 的 version.json，它与本地版本同源，必然谎报「已是最新」；
     // 网络失败就必须如实说拿不到更新信息
     m_checking = false;
+    m_remoteVersion.clear();
+    m_downloads.clear();
     m_lastResult = QStringLiteral("无法获取更新信息（网络不可达或全部镜像失败）");
     emit stateChanged();
     emit checkFinished(false, m_lastResult);
@@ -395,7 +401,10 @@ void UpdateChecker::finishCheck(const std::shared_ptr<FetchState> &state)
 bool UpdateChecker::applyManifest(const QJsonObject &obj)
 {
     const QString remote = obj.value(QLatin1String("version")).toString();
-    if (remote.isEmpty())
+    // 版本号会拼进下载 URL（{version} 模板）和本地保存路径，必须是纯数字点分格式；
+    // 否则清单被篡改/镜像被污染时用 "../" 就能写到下载目录之外。
+    static const QRegularExpression validVersion(QStringLiteral("^[0-9]+(\\.[0-9]+)*$"));
+    if (remote.isEmpty() || !validVersion.match(remote).hasMatch())
         return false;
     m_checking = false;
     m_remoteVersion = remote;
@@ -558,7 +567,7 @@ void UpdateChecker::probeAndDownload(const QStringList &candidates)
                               QStringLiteral("[更新探测] 线路优先级: %1").arg(m_downloadQueue.join(QStringLiteral(" | "))));
                 m_downloadIndex = 0;
                 startDownload(m_downloadQueue.first());
-            }, 6000);
+            }, 6000, true, QString(), 2048);   // 只要 2KB 文件头；截断了也不会 whole-file 进内存
     }
 }
 
@@ -631,8 +640,12 @@ QString UpdateChecker::targetPath() const
 #endif
     if (!dir.exists())
         dir.mkpath(QStringLiteral("."));
+    // 双保险：即使 m_remoteVersion 被别的路径写入异常值，也不允许它带路径分隔符。
+    QString version = m_remoteVersion;
+    static const QRegularExpression validVersion(QStringLiteral("^[0-9]+(\\.[0-9]+)*$"));
+    if (!validVersion.match(version).hasMatch()) version = QStringLiteral("unknown");
     return dir.filePath(QStringLiteral("FuruiMusic-v%1-%2.%3")
-                            .arg(m_remoteVersion, platformKey(), suffix));
+                            .arg(version, platformKey(), suffix));
 }
 
 void UpdateChecker::downloadUpdate()

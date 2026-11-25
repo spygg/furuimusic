@@ -40,27 +40,36 @@ Item {
                 }
                 Item { Layout.fillWidth: true }
                 Rectangle {
-                    width: theme.touchMin
-                    height: theme.touchMin
+                    Layout.preferredWidth: theme.touchMin
+                    Layout.preferredHeight: theme.touchMin
                     radius: height / 2
-                    color: cSoft
+                    color: clearMa.pressed ? Qt.rgba(cPrimary.r, cPrimary.g, cPrimary.b, 0.24)
+                                           : (clearMa.containsMouse ? cPrimary : cSoft)
+                    Behavior on color { ColorAnimation { duration: theme.durationFast } }
+                    scale: clearMa.pressed ? 0.94 : 1.0
+                    Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
                     Text {
                         anchors.centerIn: parent
                         text: "清空"
-                        color: cSub
+                        color: clearMa.containsMouse ? cText : cSub
                         font.pixelSize: theme.fontSm
                     }
                     MouseArea {
+                        id: clearMa
                         anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        Accessible.name: "清空播放队列"
                         onClicked: app.clearQueue()
                     }
                 }
                 Rectangle {
-                    width: theme.touchMin
-                    height: theme.touchMin
+                    Layout.preferredWidth: theme.touchMin
+                    Layout.preferredHeight: theme.touchMin
                     radius: width / 2
-                    color: "transparent"
+                    color: closeMa.containsMouse ? cSoft : "transparent"
                     border.color: cLine
+                    Behavior on color { ColorAnimation { duration: theme.durationFast } }
                     Text {
                         anchors.centerIn: parent
                         text: "×"
@@ -68,7 +77,11 @@ Item {
                         font.pixelSize: 13
                     }
                     MouseArea {
+                        id: closeMa
                         anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        Accessible.name: "关闭播放队列"
                         onClicked: root.closeRequested()
                     }
                 }
@@ -80,17 +93,21 @@ Item {
                 color: cLine
             }
 
-            ListView {
+            Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                clip: true
-                cacheBuffer: visible ? height * 2 : 100   // 预渲染两屏：默认只多备 100px，长队列滚动时委托反复重建
-                model: app.queue
-                spacing: 2
-                topMargin: 6
-                bottomMargin: 6
 
-                delegate: Rectangle {
+                ListView {
+                    id: queueList
+                    anchors.fill: parent
+                    clip: true
+                    cacheBuffer: visible ? height * 2 : 100   // 预渲染两屏：默认只多备 100px，长队列滚动时委托反复重建
+                    model: app.queue
+                    spacing: 2
+                    topMargin: 6
+                    bottomMargin: 6
+
+                    delegate: Rectangle {
                     width: ListView.view.width
                     height: Math.max(54, theme.touchMin)
                     radius: 6
@@ -144,10 +161,21 @@ Item {
                             horizontalAlignment: Text.AlignHCenter
                             MouseArea {
                                 anchors.fill: parent
+                                Accessible.name: "从播放队列移除"
                                 onClicked: app.removeQueue(index)
                             }
                         }
                     }
+                    }
+                } // ListView
+
+                EmptyState {
+                    anchors.centerIn: parent
+                    visible: queueList.count === 0
+                    compact: root.height < 360
+                    iconName: "list"
+                    title: "播放队列是空的"
+                    hint: "在歌曲行点「＋」把歌曲加入队列"
                 }
             }
         }

@@ -26,6 +26,8 @@
 
 namespace Furui {
 
+class AudioSink;   // 定义在 .cpp：GUI 线程持有的 QAudioOutput + 线程安全 PCM 缓冲
+
 class FfmpegVideoPlayer : public QQuickPaintedItem
 {
     Q_OBJECT
@@ -80,7 +82,7 @@ private slots:
 private:
     static int interruptCallback(void *opaque);
     void stopDecode();
-    void decodeLoop(const QString &url);
+    void decodeLoop(const QString &url, int gen);
     void publishError(const QString &msg);
     void refreshAtomicVolume();
 
@@ -114,10 +116,19 @@ private:
     std::atomic<bool> m_seekable{false};
     std::atomic<qint64> m_pos{0};
     std::atomic<qint64> m_dur{0};
+    std::atomic<int> m_threadDone{-1};  // 记录已退出的解码线程代次
+    std::atomic<int> m_decodeGen{0};   // 递增即终止当前/残留（detach 后）的解码线程
 
+    // GUI 线程创建/控制音频设备；解码线程只往它的 PCM 缓冲里推数据
+    AudioSink *m_audioSink = nullptr;
     std::thread m_thread;
     std::mutex m_waitMutex;
     std::condition_variable m_waitCv;
+    // 正在运行（含 detach 后尚未退出）的解码线程数：析构必须等它归零，
+    // 否则残留线程还会写 m_stop / m_frame 等成员（use-after-free）。
+    std::atomic<int> m_activeDecoders{0};
+    std::mutex m_exitMutex;
+    std::condition_variable m_exitCv;
 };
 
 } // namespace Furui

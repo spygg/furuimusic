@@ -84,7 +84,9 @@ Rectangle {
                                               : Qt.rgba(0, 0, 0, 0.06)
     readonly property color cSoft: Qt.rgba(accent.r, accent.g, accent.b, 0.12)
 
-    implicitHeight: 64
+    // 胶囊按 touchMin 给足高度；大 uiScale 下 48*1.15 会超过旧的行高 64，
+    // 行高跟着令牌走，避免上下行的胶囊互相压住。
+    implicitHeight: Math.max(64, theme.touchMin + 16)
     radius: 16
     // 车机和手机没有 hover：按下必须有反馈，否则点一下像没反应。按下时叠一层主色底并
     // 轻微内收，松手由 Behavior 回弹。
@@ -226,8 +228,9 @@ Rectangle {
                 }
                 Rectangle {
                     visible: root.sourceName.length > 0
-                    width: sourceLabel.implicitWidth + 12
-                    height: 18
+                    // 行内胶囊是 RowLayout 的直接子项，raw width/height 会被布局清零
+                    Layout.preferredWidth: sourceLabel.implicitWidth + 12
+                    Layout.preferredHeight: 18
                     radius: 9
                     color: cSoft
                     Text {
@@ -283,6 +286,7 @@ Rectangle {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
+                        Accessible.name: root.favorite ? "取消收藏" : "收藏"
                         onClicked: root.favoriteRequested()
                     }
                 }
@@ -301,6 +305,7 @@ Rectangle {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
+                        Accessible.name: root.inQueue ? "从播放队列移除" : "加入播放队列"
                         onClicked: root.addRequested()
                     }
                 }
@@ -318,6 +323,7 @@ Rectangle {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
+                        Accessible.name: "播放 MV"
                         onClicked: root.mvRequested()
                     }
                 }
@@ -335,6 +341,7 @@ Rectangle {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
+                        Accessible.name: "下载到本地"
                         onClicked: root.downloadRequested()
                     }
                 }
@@ -352,6 +359,7 @@ Rectangle {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
+                        Accessible.name: "移除"
                         onClicked: root.removeRequested()
                     }
                 }
@@ -386,6 +394,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
+                        Accessible.name: root.playing ? "暂停" : "播放"
                         onClicked: root.playRequested()
                     }
                 }
@@ -403,6 +412,7 @@ Rectangle {
                     }
                     MouseArea {
                         anchors.fill: parent
+                        Accessible.name: "更多操作"
                         onClicked: actionMenu.popup()
                     }
                 }

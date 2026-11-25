@@ -177,6 +177,9 @@ private:
     // 或超时放弃，确保续播真的生效。
     QTimer *m_resumeSeekTimer = nullptr;
     int m_resumeSeekTries = 0;
+    // 媒体已报告 LoadedMedia/BufferedMedia：只有此后才允许 200ms 重试计数，
+    // 防止在线流加载慢（>4s）时还没可 seek 就放弃续播。
+    bool m_resumeSeekReady = false;
     // 最近一次有效播放位置（position>1s 时刷新）。error 到达的瞬间部分后端会把
     // position 清成 0，上层据此记的 failedPos 就变成 0，续播又从头来。用这个值兜底。
     qint64 m_lastGoodPosition = 0;

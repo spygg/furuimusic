@@ -18,6 +18,16 @@ Rectangle {
     // 外壳用 opacity+enabled 控制 MV 显隐（不能动 visible，Android 会销毁 video
     // sink），所以监听 enabled：进 MV 强制浅色图标，退出恢复跟随主题。
     onEnabledChanged: theme.statusBarOverride = enabled ? 1 : -1
+    // 外壳重建/页面销毁时可能来不及走 enabled→false，留下全局 override；
+    // 只在仍由本页置位时才复位，避免误伤另一个 MV 实例。
+    Component.onDestruction: {
+        if (theme.statusBarOverride === 1)
+            theme.statusBarOverride = -1
+    }
+    onVisibleChanged: {
+        if (!visible && theme.statusBarOverride === 1)
+            theme.statusBarOverride = -1
+    }
 
     signal requestClose()
 
@@ -31,6 +41,8 @@ Rectangle {
     readonly property var _media: videoLoader.item
     readonly property bool compact: root.width < 700
     readonly property bool touchLike: !platform.isDesktop
+    // 触屏优先的车机/平板按触控最小值给按钮，桌面鼠标维持紧凑尺寸
+    readonly property int ctrlSize: platform.touchPrimary ? theme.touchMin : 40
     property bool controlsVisible: true
     property bool modeSingle: false
     property bool isFullscreen: false
@@ -445,8 +457,9 @@ Rectangle {
             Rectangle {
                 Layout.alignment: Qt.AlignVCenter
                 visible: !root.compact
-                width: backendText.implicitWidth + 20
-                height: 26
+                // RowLayout 的直接子项：raw width/height 会被布局清零
+                Layout.preferredWidth: backendText.implicitWidth + 20
+                Layout.preferredHeight: 26
                 radius: 13
                 color: root.chipBg
                 Text {
@@ -497,6 +510,14 @@ Rectangle {
                     if (root._media) root._media.seekTo(value)
                     root.wake()
                 }
+                // 拖动时 Slider 会写 value 打断绑定，松手后用 Qt.binding 恢复，
+                // 与 PlayBar/PlayerPage 的进度条处理方式一致。
+                onPressedChanged: {
+                    if (!pressed)
+                        value = Qt.binding(function () {
+                            return root._media ? root._media.position : 0
+                        })
+                }
                 background: Rectangle {
                     x: progress.leftPadding
                     y: progress.topPadding + progress.availableHeight / 2 - height / 2
@@ -505,14 +526,16 @@ Rectangle {
                     radius: 2
                     color: Qt.rgba(1, 1, 1, 0.24)
                     Rectangle {
-                        width: progress.visualPosition * parent.width
+                        // 水平 Slider 的 position === visualPosition；统一用逻辑 position，
+                        // 与 PlayBar 的竖滑块/顶边进度条同一套口径。
+                        width: progress.position * parent.width
                         height: parent.height
                         radius: 2
                         color: root.ink
                     }
                 }
                 handle: Rectangle {
-                    x: progress.leftPadding + progress.visualPosition * (progress.availableWidth - width)
+                    x: progress.leftPadding + progress.position * (progress.availableWidth - width)
                     y: progress.topPadding + progress.availableHeight / 2 - height / 2
                     width: 12
                     height: 12
@@ -540,8 +563,8 @@ Rectangle {
                         readonly property bool shown: !root.compact
                             || (key !== "prev" && key !== "next")
 
-                        Layout.preferredWidth: root.compact ? 38 : 40
-                        Layout.preferredHeight: root.compact ? 38 : 40
+                        Layout.preferredWidth: root.ctrlSize
+                        Layout.preferredHeight: root.ctrlSize
                         Layout.alignment: Qt.AlignVCenter
                         visible: shown
                         radius: height / 2
@@ -578,7 +601,7 @@ Rectangle {
                 Slider {
                     id: volumeSlider
                     Layout.preferredWidth: 76
-                    Layout.preferredHeight: 26
+                    Layout.preferredHeight: platform.touchPrimary ? theme.touchMin : 26
                     Layout.alignment: Qt.AlignVCenter
                     visible: !root.compact
                     from: 0
@@ -589,6 +612,12 @@ Rectangle {
                         root.muted = false
                         root.wake()
                     }
+                    onPressedChanged: {
+                        if (!pressed)
+                            value = Qt.binding(function () {
+                                return root.muted ? 0 : root.volume
+                            })
+                    }
                     background: Rectangle {
                         x: volumeSlider.leftPadding
                         y: volumeSlider.topPadding + volumeSlider.availableHeight / 2 - height / 2
@@ -597,7 +626,7 @@ Rectangle {
                         radius: 2
                         color: Qt.rgba(1, 1, 1, 0.24)
                         Rectangle {
-                            width: volumeSlider.visualPosition * parent.width
+                            width: volumeSlider.position * parent.width
                             height: parent.height
                             radius: 2
                             color: root.ink
@@ -605,7 +634,7 @@ Rectangle {
                     }
                     handle: Rectangle {
                         x: volumeSlider.leftPadding
-                           + volumeSlider.visualPosition * (volumeSlider.availableWidth - width)
+                           + volumeSlider.position * (volumeSlider.availableWidth - width)
                         y: volumeSlider.topPadding + volumeSlider.availableHeight / 2 - height / 2
                         width: 10
                         height: 10

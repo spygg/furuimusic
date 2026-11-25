@@ -157,7 +157,10 @@ PlayerController::PlayerController(QObject *parent)
         // 反复校验重试，直到 position 真正到位才清 m_pendingSeek。
         if (m_pendingSeek > 0
             && (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia)) {
-            m_resumeSeekTimer->start();  // 加载就绪，启动校验式续播（200ms 重试）
+            // 加载就绪才开始 200ms 重试计时；在线流加载慢也不会提前放弃
+            m_resumeSeekReady = true;
+            if (!m_resumeSeekTimer->isActive())
+                m_resumeSeekTimer->start();
             applyPendingSeek();          // 并立即尝试一次
         }
         // 新歌加载完成前忽略旧曲残留的结束信号。在线流常停留在 BufferingMedia
@@ -300,6 +303,10 @@ void PlayerController::applyPendingSeek()
         m_resumeSeekTimer->stop();
         return;
     }
+    // 媒体尚未报告 Loaded/Buffered 前不许开始计数：在线流常要 4s 以上才加载完成，
+    // 过早启动 200ms×20 的定时重试会在真正可 seek 之前就放弃。
+    if (!m_resumeSeekReady)
+        return;
     // 目标不能超过媒体时长：换源后新源时长可能与旧源差几秒，越界的 seek 会被夹到
     // 结尾甚至归零。留 2s 余量，避免刚续播就触发末尾连播。
     qint64 target = m_pendingSeek;
@@ -312,12 +319,14 @@ void PlayerController::applyPendingSeek()
     if (pos >= target - 2000 && (pos > 0 || target <= 2000)) {
         qInfo("[续播] 到位 pos=%lld target=%lld 尝试 %d 次", pos, target, m_resumeSeekTries);
         m_pendingSeek = 0;
+        m_resumeSeekReady = false;
         m_resumeSeekTimer->stop();
         return;
     }
-    if (m_resumeSeekTries >= 20) {   // 20 × 200ms = 4s 仍未生效，放弃
+    if (m_resumeSeekTries >= 20) {   // 加载完成后 20 × 200ms = 4s 仍未生效，放弃
         qWarning("[续播] seek 4s 未生效，放弃；pos=%lld target=%lld", pos, target);
         m_pendingSeek = 0;
+        m_resumeSeekReady = false;
         m_resumeSeekTimer->stop();
         return;
     }
@@ -341,9 +350,11 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers, qint
     if (resumeMs >= 0) {
         m_pendingSeek = resumeMs;
         m_resumeSeekTries = 0;
-        // 校验式续播：启动重试表，直到 position 真正跳到目标才停。
+        m_resumeSeekReady = false;
+        // 校验式续播：先不起表，等媒体报告 LoadedMedia/BufferedMedia 再开始计数；
+        // 否则在线流还在加载时 20×200ms 就耗尽了重试次数。
         // 注意默认 -1（普通切歌/启动续播）时不碰 m_pendingSeek，也不重置计数。
-        m_resumeSeekTimer->start();
+        m_resumeSeekTimer->stop();
     }
     // 断流前的有效位置不能跨歌沿用：新歌还没出声前 error 若到来，failedPos
     // 必须来自本歌而非上一首，否则换源续播会跳到一个毫不相关的位置。
@@ -816,6 +827,7 @@ void PlayerController::restoreState()
     m_currentIndex = qBound(-1, idx, m_queue.size() - 1);
     m_pendingSeek = static_cast<qint64>(Settings::integer(QStringLiteral("resumePosition"), 0));
     m_resumeSeekTries = 0;   // 启动续播也要走校验式 seek，计数从头
+    m_resumeSeekReady = false;   // 等媒体 Loaded/Buffered 后才开始计时
     m_lastGoodPosition = 0;
     const bool wasPlaying = Settings::boolean(QStringLiteral("resumePlaying"), false);
 
@@ -836,6 +848,7 @@ void PlayerController::seek(qint64 ms)
     // 互相打架（定时器下一拍又把位置拽回续播目标）。
     if (m_pendingSeek > 0) {
         m_pendingSeek = 0;
+        m_resumeSeekReady = false;
         m_resumeSeekTimer->stop();
     }
     // 往回拖过结尾：这首重新算「没播完」，之后再按播放是继续播而不是跳下一首
@@ -914,6 +927,8 @@ void PlayerController::setQueue(const QVector<Song> &songs, int index)
     m_queue = songs;
     m_currentIndex = qBound(-1, index, m_queue.size() - 1);
     m_pendingSeek = 0;   // 用户显式换歌/开新列表，不再套用续播位置
+    m_resumeSeekReady = false;
+    m_resumeSeekTimer->stop();
     m_advancing = false;
     m_suppressEnd = false;
     emit queueChanged();
@@ -975,6 +990,8 @@ void PlayerController::setCurrentIndex(int index)
     if (index < 0 || index >= m_queue.size()) return;
     m_currentIndex = index;
     m_pendingSeek = 0;
+    m_resumeSeekReady = false;
+    m_resumeSeekTimer->stop();
     m_advancing = false;
     m_suppressEnd = false;
     m_ended = false;
@@ -1060,6 +1077,8 @@ void PlayerController::advance(bool allowRecommend)
     }
     m_currentIndex = nextIndex;
     m_pendingSeek = 0;
+    m_resumeSeekReady = false;
+    m_resumeSeekTimer->stop();
     qInfo("切到下一首：index %d / %d「%s」", nextIndex, int(m_queue.size()),
           qUtf8Printable(m_queue.at(nextIndex).title));
     emit mediaChanged();
@@ -1098,6 +1117,8 @@ void PlayerController::previous()
     if (prev == m_currentIndex) return;
     m_currentIndex = prev;
     m_pendingSeek = 0;
+    m_resumeSeekReady = false;
+    m_resumeSeekTimer->stop();
     qInfo("切到上一首：index %d / %d「%s」", prev, int(m_queue.size()),
           qUtf8Printable(m_queue.at(prev).title));
     emit mediaChanged();

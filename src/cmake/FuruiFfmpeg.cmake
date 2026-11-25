@@ -105,11 +105,21 @@ if(FURUI_AUTO_BUILD_FFMPEG)
     elseif(NOT EXISTS "${_ff_script}")
         message(WARNING "构建脚本缺失：${_ff_script}，跳过自动编译")
     else()
-        # Windows 靠 Git Bash 提供 sh / perl / cygpath；Linux/macOS 用系统 sh
+        # Windows 靠 Git Bash 提供 sh / perl / cygpath；Linux/macOS 用系统 sh。
+        # 不再硬编码作者机器的 Git 路径：PATH 优先，Git Bash 则由 `git --exec-path`
+        # 反推安装根（<root>/usr/bin、<root>/bin），对任何安装位置都成立。
+        set(_ff_shell_hints /bin /usr/bin)
+        find_program(FURUI_GIT_EXE NAMES git)
+        if(FURUI_GIT_EXE)
+            execute_process(COMMAND "${FURUI_GIT_EXE}" --exec-path
+                OUTPUT_VARIABLE _ff_git_exec_path OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+            if(_ff_git_exec_path)
+                get_filename_component(_ff_git_root "${_ff_git_exec_path}" DIRECTORY)
+                list(APPEND _ff_shell_hints "${_ff_git_root}/usr/bin" "${_ff_git_root}/bin")
+            endif()
+        endif()
         find_program(FURUI_FFMPEG_SHELL NAMES sh bash
-            HINTS "E:/programes/Git/usr/bin" "E:/programes/Git/bin"
-                  "C:/Program Files/Git/usr/bin" "C:/Program Files/Git/bin"
-                  /bin /usr/bin
+            HINTS ${_ff_shell_hints}
             DOC "执行 build_ffmpeg_desktop.sh 的 POSIX shell")
         if(NOT FURUI_FFMPEG_SHELL)
             message(WARNING "未找到 sh/bash（Windows 需要 Git Bash），Qt5 MV 将退回 DirectShow")

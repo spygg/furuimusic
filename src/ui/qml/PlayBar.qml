@@ -17,6 +17,10 @@ Rectangle {
     implicitHeight: Math.max(76, theme.touchMin + 22)
 
     readonly property bool isDark: theme.dark
+    // 窗口最小宽度只有 320（见 PlatformAdapter.h）：窄窗先收掉次级按钮，
+    // 极窄窗再收掉音量/模式，保证封面、切歌与队列始终完整可点。
+    readonly property bool narrow: root.width < 780
+    readonly property bool tiny: root.width < 560
     readonly property color cText: theme.text
     readonly property color cSub: theme.subText
     readonly property color cAccent: theme.accent
@@ -85,7 +89,8 @@ Rectangle {
             color: theme.line
             Behavior on height { NumberAnimation { duration: 140 } }
             Rectangle {
-                width: topSeek.visualPosition * parent.width
+                // 统一用逻辑 position（与 MV 页进度条同一口径；水平 Slider 上两者相等）
+                width: topSeek.position * parent.width
                 height: parent.height
                 color: cAccent
             }
@@ -95,15 +100,17 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 20
-        anchors.rightMargin: 16
+        anchors.leftMargin: root.tiny ? 8 : 20
+        anchors.rightMargin: root.tiny ? 8 : 16
         anchors.topMargin: 12
         anchors.bottomMargin: 10
         spacing: 8
 
         // ---------- 左：封面 + 曲名 ----------
         Item {
-            Layout.preferredWidth: 258
+            Layout.preferredWidth: root.tiny ? 64
+                                    : (root.narrow ? Math.min(258, root.width * 0.28) : 258)
+            Layout.minimumWidth: 0
             Layout.fillHeight: true
 
             Rectangle {
@@ -185,7 +192,7 @@ Rectangle {
                         Layout.fillWidth: true
                         text: app.currentTitle.length > 0 ? app.currentTitle : "尚未开始播放"
                         color: cText
-                        font.pixelSize: 14
+                        font.pixelSize: theme.fontMd + 1
                         font.bold: true
                         elide: Text.ElideRight
                     }
@@ -246,7 +253,7 @@ Rectangle {
 
             // 胶囊播放键：参考项目 80x48、全圆角
             Rectangle {
-                Layout.preferredWidth: 78
+                Layout.preferredWidth: root.tiny ? 56 : 78
                 Layout.preferredHeight: theme.touchMin
                 Layout.alignment: Qt.AlignVCenter
                 radius: height / 2
@@ -329,6 +336,7 @@ Rectangle {
             // 音量：悬停向上弹出竖滑块
             Item {
                 id: volBox
+                visible: !root.tiny
                 Layout.preferredWidth: theme.touchMin
                 Layout.preferredHeight: theme.touchMin
                 Layout.alignment: Qt.AlignVCenter
@@ -425,6 +433,7 @@ Rectangle {
 
             // 播放模式
             Item {
+                visible: !root.tiny
                 Layout.preferredWidth: theme.touchMin
                 Layout.preferredHeight: theme.touchMin
                 Layout.alignment: Qt.AlignVCenter
@@ -452,6 +461,7 @@ Rectangle {
 
             // 收藏
             Item {
+                visible: !root.narrow
                 Layout.preferredWidth: theme.touchMin
                 Layout.preferredHeight: theme.touchMin
                 Layout.alignment: Qt.AlignVCenter
@@ -482,6 +492,7 @@ Rectangle {
 
             // 展开播放页
             Item {
+                visible: !root.narrow
                 Layout.preferredWidth: theme.touchMin
                 Layout.preferredHeight: theme.touchMin
                 Layout.alignment: Qt.AlignVCenter
@@ -509,6 +520,7 @@ Rectangle {
 
             // 设置
             Item {
+                visible: !root.narrow
                 Layout.preferredWidth: theme.touchMin
                 Layout.preferredHeight: theme.touchMin
                 Layout.alignment: Qt.AlignVCenter

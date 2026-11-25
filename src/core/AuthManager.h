@@ -162,8 +162,6 @@ private:
     // 咪咕扫码会话：qrc_sessionid 是轮询凭据，JSESSIONID 必须跟着一起发回门户
     QString m_mgSession;
     QString m_mgCookie;
-    // 咪咕扫码成功后拿到的凭据（ticket/uid 等），用于换取门户登录态
-    QString m_mgTicket;
     // 汽水扫码会话：base 是自建账号 API 服务地址（/auth 契约）；未配置时登录走官方
     // passport/web/* 直连（m_qsBase 留空即可区分两条链路）。
     QString m_qsBase;

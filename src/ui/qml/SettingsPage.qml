@@ -47,7 +47,6 @@ Item {
             anchors.top: parent.top
             width: Math.max(240, Math.min(parent.width - 2 * root.sideMargin, root.formMaxWidth))
             anchors.topMargin: root.pageTopMargin
-            height: implicitHeight
             spacing: 8
 
             // 大标题（与搜索/音乐库同版式）
@@ -55,15 +54,16 @@ Item {
                 Layout.fillWidth: true
                 text: "设置"
                 color: cText
-                font.pixelSize: 30
+                // 与账号页页头统一到 24px / 次级 13px（旧值 30/14 明显更大）
+                font.pixelSize: theme.fontXl + 4
                 font.bold: true
-                font.letterSpacing: -0.5
+                font.letterSpacing: -0.3
             }
             Text {
                 Layout.fillWidth: true
                 text: "外观、音质与在线音源"
                 color: cSub
-                font.pixelSize: 14
+                font.pixelSize: theme.fontMd
             }
 
             Text { Layout.fillWidth: true; text: "外观主题"; color: cSub; font.pixelSize: 12 }
@@ -451,7 +451,7 @@ Item {
                 wrapMode: Text.Wrap
             }
 
-            Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
+            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: cLine }
 
             RowLayout {
                 Layout.fillWidth: true
@@ -672,7 +672,7 @@ Item {
             }
             } // 在线音源详情（默认收起）
 
-            Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
+            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: cLine }
 
             Text {
                 Layout.fillWidth: true
@@ -737,7 +737,7 @@ Item {
 
             // 汽水音乐设置区已移除（账号同步说明 + 汽水漫游开关）。汽水漫游保持默认开启，
             // 默认值见 AppController::qishuiRoam / PlayerController::advance。
-            Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
+            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: cLine }
 
             // 在线检测更新：检查 -> 弹层展示更新说明 -> 同意后应用内直接下载 -> 安装
             RowLayout {
@@ -778,7 +778,7 @@ Item {
                 }
             }
 
-            Rectangle { Layout.fillWidth: true; height: 1; color: cLine }
+            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: cLine }
 
             Text {
                 Layout.fillWidth: true

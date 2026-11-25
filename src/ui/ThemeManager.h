@@ -61,6 +61,9 @@ class ThemeManager : public QObject {
     Q_PROPERTY(int fontLg READ fontLg NOTIFY metricsChanged)
     Q_PROPERTY(int fontXl READ fontXl NOTIFY metricsChanged)
     Q_PROPERTY(int titleBarHeight READ titleBarHeight NOTIFY metricsChanged)
+    // 统一动画时长：140ms 用于轻反馈（颜色/缩放），220ms 用于整块淡入淡出
+    Q_PROPERTY(int durationFast READ durationFast CONSTANT)
+    Q_PROPERTY(int durationBase READ durationBase CONSTANT)
 
     // 歌词字号缩放（百分比，75~175，100=跟随视口基准）。设置页可改并持久化；
     // 用独立信号，改字号不会连带重算所有与歌词无关的间距/圆角绑定。
@@ -100,13 +103,14 @@ public:
 
     // ---- 配色对齐 AlgerMusicPlayer（品牌绿 #22C55E + 白/黑干净的底）----
     QColor bg() const { return isDark() ? QColor("#0E0E10") : QColor("#FFFFFF"); }
-    QColor surface() const { return isDark() ? QColor("#17171A") : QColor("#FFFFFF"); }
+    QColor surface() const { return isDark() ? QColor("#1B1B20") : QColor("#F7F8FA"); }
     QColor card() const { return isDark() ? QColor("#1A1A1E") : QColor("#FFFFFF"); }
     QColor cardHover() const { return isDark() ? QColor("#242429") : QColor("#F3F4F6"); }
     QColor text() const { return isDark() ? QColor("#F5F5F7") : QColor("#111827"); }
-    // 次级/弱化文字仍然过 4.5:1：浅色 #6B7280 / #9CA3AF，深色 #A1A1AA / #71717A
+    // 次级/弱化文字都过 4.5:1：浅色 #6B7280，深色 #A1A1AA。
+    // 旧值浅 #9CA3AF / 深 #71717A 在各自底色上只有约 2.8:1，小字几乎看不清。
     QColor subText() const { return isDark() ? QColor("#A1A1AA") : QColor("#6B7280"); }
-    QColor mutedText() const { return isDark() ? QColor("#71717A") : QColor("#9CA3AF"); }
+    QColor mutedText() const { return isDark() ? QColor("#A1A1AA") : QColor("#6B7280"); }
     QColor line() const { return isDark() ? QColor("#2A2A2F") : QColor("#E8EAED"); }
     // 浅色下 #E8EAED 与纯白底几乎同色，无边框窗口/白底区块的边界会完全消失；
     // 这一档取 gray-300 / zinc-700，肉眼可见又不至于像分割线那么抢眼
@@ -139,12 +143,14 @@ public:
     int spaceSm() const { return scaled(8); }
     int spaceMd() const { return scaled(12); }
     int spaceLg() const { return scaled(16); }
-    int fontXs() const { return scaled(10); }
-    int fontSm() const { return scaled(11); }
+    int fontXs() const { return scaled(11); }
+    int fontSm() const { return scaled(12); }
     int fontMd() const { return scaled(13); }
     int fontLg() const { return scaled(16); }
     int fontXl() const { return scaled(20); }
     int titleBarHeight() const { return scaled(44); }
+    int durationFast() const { return 140; }
+    int durationBase() const { return 220; }
 
     int lyricFontScale() const { return m_lyricFontScale; }
     void setLyricFontScale(int scale);

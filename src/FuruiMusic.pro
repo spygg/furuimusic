@@ -119,8 +119,16 @@ CONFIG(legacy_widgets) {
 } else {
     # 统一 QML 前端：桌面与 Android 共用同一入口和资源
     TARGET = FuruiMusic
+    # main.cpp 在桌面分支用 QApplication + TrayController（QSystemTrayIcon/QMenu 属 Widgets）；
+    # Android / iOS 走 QGuiApplication，不编译托盘源文件也不链接 widgets。
+    # legacy_widgets 分支在上方已无条件 QT += widgets，这里只补 QML 分支的桌面构建。
+    !android:!ios: QT += widgets
     HEADERS += ui/PlatformAdapter.h ui/ThemeManager.h ui/GlyphImageProvider.h ui/AndroidMediaSession.h
     SOURCES += ui/main.cpp ui/PlatformAdapter.cpp ui/ThemeManager.cpp ui/GlyphImageProvider.cpp ui/AndroidMediaSession.cpp
+    !android:!ios: {
+        HEADERS += ui/TrayController.h
+        SOURCES += ui/TrayController.cpp
+    }
     RESOURCES += ui/qml.qrc ui/icons/icons.qrc
 
     # Qt5 自编译 FFmpeg 播放后端：src/scripts/build_ffmpeg_desktop.bat 产出

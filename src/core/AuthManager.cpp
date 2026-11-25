@@ -486,7 +486,6 @@ void AuthManager::cancelQrLogin()
     m_kgQrcode.clear();
     m_mgSession.clear();
     m_mgCookie.clear();
-    m_mgTicket.clear();
     m_kwUuid.clear();
     m_kwPollBusy = false;
     m_kwTm.clear();
@@ -595,7 +594,7 @@ void AuthManager::pollQr()
                                       .arg(fromBody ? QStringLiteral("是") : QStringLiteral("否"),
                                            cookieValue(cookie, {QStringLiteral("MUSIC_U")}).isEmpty()
                                                ? QStringLiteral("无") : QStringLiteral("有"),
-                                           QString::fromUtf8(r.body.left(200))));
+                                           redactBody(r.body)));
                     if (cookieValue(cookie, {QStringLiteral("MUSIC_U")}).isEmpty()) {
                         m_qrStatus = QStringLiteral("授权成功但未取到 MUSIC_U，请改用密码方式登录或重新扫码");
                         emit qrChanged();
@@ -2092,7 +2091,6 @@ void AuthManager::startMiguQr()
     m_qrSource = QStringLiteral("migu");
     m_mgSession.clear();
     m_mgCookie.clear();
-    m_mgTicket.clear();
     m_qrImagePath.clear();
     m_qrHint = QStringLiteral("正在获取二维码…");
     m_qrStatus = QStringLiteral("准备中");
@@ -2232,10 +2230,6 @@ void AuthManager::pollMiguQr()
             const QString avatar = Json::firstString(root, {
                 QStringLiteral("result.userPicture"), QStringLiteral("result.avatar"),
                 QStringLiteral("result.headPic"), QStringLiteral("result.portrait")});
-            m_mgTicket = Json::firstString(root, {
-                QStringLiteral("result.ticket"), QStringLiteral("result.token"),
-                QStringLiteral("result.assertion"), QStringLiteral("result.ssoTicket")});
-
             // 把整包响应留一份：门户成功分支的字段名各家版本不一致，
             // 解析不到昵称时靠它定位，不用让用户重扫码复现。
             // 必须走 redactBody：ticket/token/mobile 是能直接复用登录态的凭据，

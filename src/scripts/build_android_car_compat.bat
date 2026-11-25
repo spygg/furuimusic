@@ -27,9 +27,17 @@ rem Everything below is plain ASCII on purpose: cmd.exe parses .bat files in byt
 rem chunks and non-ASCII bytes desynchronise the parser.
 set "QTROOT="
 set "QTV="
-for %%R in ("E:\programes\Qt\Qt" "D:\software\Qt" "C:\Qt") do (
+rem QT_ROOT_DIR / QT_DIR override the probe roots (Qt root or a version kit dir,
+rem e.g. what install-qt-action exports). Also accept the CI version 6.8.3.
+set "QT_PROBE_ROOT="
+if defined QT_ROOT_DIR set "QT_PROBE_ROOT=%QT_ROOT_DIR%"
+if not defined QT_PROBE_ROOT if defined QT_DIR set "QT_PROBE_ROOT=%QT_DIR%"
+if defined QT_PROBE_ROOT if exist "%QT_PROBE_ROOT%\bin\qmake.bat" (
+    for %%R in ("%QT_PROBE_ROOT%\..\..") do set "QT_PROBE_ROOT=%%~fR"
+)
+for %%R in ("%QT_PROBE_ROOT%" "E:\programes\Qt\Qt" "D:\software\Qt" "C:\Qt") do (
     if not defined QTV (
-        for %%V in (6.11.3 6.11.1 6.11.2 6.10.0) do (
+        for %%V in (6.11.3 6.11.1 6.11.2 6.10.0 6.8.3) do (
             if not defined QTV if exist "%%~R\%%V\android_arm64_v8a\bin\qmake.bat" (
                 set "QTROOT=%%~R"
                 set "QTV=%%V"
@@ -38,8 +46,8 @@ for %%R in ("E:\programes\Qt\Qt" "D:\software\Qt" "C:\Qt") do (
     )
 )
 if not defined QTV (
-    echo [error] Qt for Android arm64-v8a not found under the known roots.
-    echo         Edit the probe list at the top of this script.
+    echo [error] Qt for Android arm64-v8a not found. Set QT_ROOT_DIR / QT_DIR to
+    echo         the Qt root, parent of the 6.x version dirs, and retry.
     goto :fail
 )
 set "QT_ANDROID=%QTROOT%\%QTV%\android_arm64_v8a"

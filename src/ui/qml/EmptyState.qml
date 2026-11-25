@@ -21,8 +21,10 @@ ColumnLayout {
 
     Rectangle {
         Layout.alignment: Qt.AlignHCenter
-        width: root.compact ? 40 : 64
-        height: width
+        // 本项是 ColumnLayout 的直接子项：raw width/height 会被布局清零，
+        // 必须走 Layout.preferred*（尺寸仍由下方文字/图标按 width 引用）
+        Layout.preferredWidth: root.compact ? 40 : 64
+        Layout.preferredHeight: Layout.preferredWidth
         radius: width / 2
         color: "transparent"
         border.color: cLine
@@ -43,11 +45,16 @@ ColumnLayout {
     }
 
     Text {
+        Layout.fillWidth: true
         Layout.alignment: Qt.AlignHCenter
         text: root.title
         color: root.cSub
         font.pixelSize: 14
         font.bold: true
+        horizontalAlignment: Text.AlignHCenter
+        wrapMode: Text.WordWrap
+        maximumLineCount: 2
+        elide: Text.ElideRight
     }
 
     Text {

@@ -10,6 +10,12 @@
 
     <!-- 权限由 %%INSERT_PERMISSIONS 根据 Qt 模块依赖自动注入，避免重复声明 -->
 
+    <!-- Qt 5 APK = 基础播放版：这里没有 MediaSession 前台服务（MediaSessionService）、
+         MEDIA_BUTTON 接收器（MediaButtonReceiver）或 REQUEST_INSTALL_PACKAGES 权限，
+         AndroidMediaSession 的 Qt 5 分支也是空实现。因此只有应用内播放/切歌，
+         没有通知栏/锁屏/耳机媒体键控制，也不支持应用内更新拉起安装器。
+         需要这些能力请用 Qt 6 打包链路（platform/android-qt6/AndroidManifest.xml）。 -->
+
     <!-- xlargeScreens：车机中控屏常被判定为 xlarge，缺这项时部分 ROM 会直接拒绝安装或锁死兼容模式 -->
     <supports-screens android:largeScreens="true" android:normalScreens="true" android:anyDensity="true" android:smallScreens="true" android:xlargeScreens="true"/>
     <!-- resizeableActivity：分屏/自由形态的前提，不给就是「分屏时整块黑屏」而不是自适应 -->

@@ -35,8 +35,10 @@ Item {
     readonly property bool hasPassword: root.method === "password"
     readonly property bool qrMine: root.selectedSource.length > 0
                                    && app.qrSource === root.selectedSource
-    readonly property int qrSide: root.width < 560 ? 148 : 184
-    readonly property int platCols: root.width < 620 ? 2 : (root.width >= 900 ? 3 : 2)
+    // 大屏车机/平板按 uiScale 放大，避免二维码在 12 寸屏上只有手机大小
+    readonly property int qrSide: Math.round((root.width < 560 ? 148 : 184) * theme.uiScale)
+    readonly property int platCols: root.width < 620 * theme.uiScale ? 2
+                                  : (root.width >= 900 * theme.uiScale ? 3 : 2)
     // accounts 是 QAbstractListModel，QML 里既没有 length 也不能按下标取，
     // 已登录数量只能由 C++ 算好再推过来（登录/登出时手动刷新）
     property int loggedCount: 0
@@ -71,15 +73,22 @@ Item {
                          && app.accountLogged(root.selectedSource)
     }
 
-    // 把 C++ 侧的状态文案收敛成有限相位，遮罩只认相位，不猜字符串
+    // 把 C++ 侧的状态文案收敛成有限相位，遮罩只认相位，不猜字符串。
+    // 统一在这里做词匹配，并兼容在线脚本配置里可能出现的英文别名；
+    // 判定顺序：失败/过期优先，再成功，最后才是扫码中。
+    function qrPhaseOf(status) {
+        var s = String(status || "").toLowerCase()
+        if (s.length === 0) return ""
+        if (/失败|错误|风控|拒绝|取消|error|fail|denied|reject|cancel/.test(s)) return "error"
+        if (/过期|超时|expired|expire|timeout/.test(s)) return "expired"
+        if (/成功|success|confirmed|authorized/.test(s)) return "done"
+        if (/已扫码|扫码|scanned|scan/.test(s)) return "scanned"
+        return ""
+    }
     readonly property string qrPhase: {
         if (!root.qrMine) return "idle"
-        var s = app.qrStatus || ""
-        if (s.indexOf("过期") >= 0) return "expired"
-        if (s.indexOf("已扫码") >= 0) return "scanned"
-        if (s.indexOf("成功") >= 0) return "done"
-        if (s.indexOf("失败") >= 0 || s.indexOf("风控") >= 0 || s.indexOf("拒绝") >= 0)
-            return "error"
+        const phase = root.qrPhaseOf(app.qrStatus || "")
+        if (phase.length > 0) return phase
         if (app.qrActive && app.qrImagePath.length === 0) return "loading"
         if (app.qrActive) return "waiting"
         return "idle"
@@ -295,13 +304,14 @@ Item {
                     Text {
                         text: "账号"
                         color: cText
-                        font.pixelSize: root.narrow ? 20 : 23
+                        // 与设置页页头统一到 21/24px
+                        font.pixelSize: root.narrow ? theme.fontXl + 1 : theme.fontXl + 4
                         font.bold: true
                     }
                     Text {
                         text: "每个平台独立登录，登录态只保存在本机"
                         color: cSub
-                        font.pixelSize: 11
+                        font.pixelSize: theme.fontXs
                     }
                 }
 

@@ -33,6 +33,16 @@ function(furui_configure_webview2)
         message(STATUS "[webview2] MSVC: Qt 官方已提供 WebView2 后端，跳过自编译")
         return()
     endif()
+    # 插件源码复制自 Qt 6.11.1，直接包含 QtWebView/private/qwebviewfactory_p.h 与
+    # QtCore/private/qfunctions_win_p.h（并链接 Qt6::WebViewPrivate）。这些私有 API
+    # 在不同小版本间会变，CI 的 Qt 6.8.3 与本地验证过的 6.11.1 不兼容，因此只在
+    # 6.11.x（>=6.11.1 且 <6.12）编译；其他版本明确打印跳过原因，避免编译失败。
+    set(_furui_webview_qt_version "${Qt${QT_VERSION_MAJOR}_VERSION}")
+    if(_furui_webview_qt_version VERSION_LESS "6.11.1"
+       OR _furui_webview_qt_version VERSION_GREATER_EQUAL "6.12.0")
+        message(STATUS "[webview2] Qt ${_furui_webview_qt_version} 不使用 6.11.x 私有 API，跳过自编译 WebView2 后端（内置浏览器退回外部浏览器）")
+        return()
+    endif()
     if(TARGET qtwebview_webview2)
         set(FURUI_WEBVIEW2_AVAILABLE TRUE PARENT_SCOPE)
         return()
