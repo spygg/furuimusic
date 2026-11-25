@@ -166,10 +166,12 @@ void MusicSource::call(const Endpoint &ep, const QVariantMap &vars, ReplyCallbac
 {
     // 内置平台音源与脚本音源共用同一把风险确认锁：未在设置页完成
     // 「我自己承担后果」+ 连点导入的确认（AppController::seedOnlineSources 置
-    // onlineSourcesUnlocked）前，所有取链请求（搜索/歌单/播放地址/歌词/MV）
+    // onlineSourcesUnlocked）前，所有取链请求（搜索/歌单/播放地址/MV）
     // 一律不发出，保证全新安装时整个音源层都处于未初始化状态。
-    // 登录接口走 callLogin 的放行通道，账号功能不受影响。
-    if (!m_loginCall && !Settings::get(QStringLiteral("onlineSourcesUnlocked")).toBool()) {
+    // 登录接口走 callLogin、歌词走 callMeta 的放行通道：账号功能与歌词显示
+    // 不依赖音源初始化（歌词是只读文本元数据，不返回音频链接）。
+    if (!m_loginCall && !m_metaCall
+        && !Settings::get(QStringLiteral("onlineSourcesUnlocked")).toBool()) {
         HttpClient::Reply r;
         r.error = QStringLiteral("音源未初始化：请先在设置页完成风险确认（输入「我自己承担后果」并连点导入）");
         if (cb) cb(r);
@@ -208,6 +210,15 @@ void MusicSource::callLogin(const QString &name, const QVariantMap &vars, ReplyC
     m_loginCall = true;
     call(ep, vars, cb);
     m_loginCall = false;
+}
+
+// 歌词（含酷狗两段式）走的放行通道：每个调用点各自置位，第二段在异步回调里
+// 发起，不能用函数级标记包住整个 lyric()（回调触发时标记早已复位）
+void MusicSource::callMeta(const Endpoint &ep, const QVariantMap &vars, ReplyCallback cb)
+{
+    m_metaCall = true;
+    call(ep, vars, cb);
+    m_metaCall = false;
 }
 
 void MusicSource::requestSongs(const Endpoint &ep, const QVariantMap &vars, SongsCallback cb)
@@ -680,7 +691,7 @@ void MusicSource::lyric(const Song &song, LyricCallback cb)
             return qMakePair(firstId, firstKey);
         };
         const QVariantMap vars = songVars(song, QStringLiteral("standard"));
-        call(ep, vars, [this, ep, song, vars, download, pick](const HttpClient::Reply &r1) {
+        callMeta(ep, vars, [this, ep, song, vars, download, pick](const HttpClient::Reply &r1) {
             const QPair<QString, QString> hit = pick(r1);
             if (!hit.first.isEmpty()) { download(hit.first, hit.second); return; }
             // krcs 对关键词很挑：有的歌只能「歌名」搜到（如晴天），有的必须带歌手
@@ -688,7 +699,7 @@ void MusicSource::lyric(const Song &song, LyricCallback cb)
             QVariantMap v2 = vars;
             v2.insert(QStringLiteral("name"),
                       (song.title + QLatin1Char(' ') + song.artist).trimmed());
-            call(ep, v2, [download, pick](const HttpClient::Reply &r2) {
+            callMeta(ep, v2, [download, pick](const HttpClient::Reply &r2) {
                 const QPair<QString, QString> hit2 = pick(r2);
                 download(hit2.first, hit2.second);
             });
@@ -696,7 +707,7 @@ void MusicSource::lyric(const Song &song, LyricCallback cb)
         return;
     }
 
-    call(ep, songVars(song, QStringLiteral("standard")), [this, ep, cb](const HttpClient::Reply &r) {
+    callMeta(ep, songVars(song, QStringLiteral("standard")), [this, ep, cb](const HttpClient::Reply &r) {
         QString out;
         // 只认从 JSON 结构里解析出的歌词字段。此前这里有一段
         // `if (out.isEmpty() && r.json.isEmpty()) out = QString::fromUtf8(r.body)` 的

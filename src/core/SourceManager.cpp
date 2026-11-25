@@ -699,7 +699,12 @@ void SourceManager::lyricCrossSource(const Song &song, LyricCallback cb)
                   [](const QPair<qreal, Song> &a, const QPair<qreal, Song> &b) {
                       return a.first > b.first;
                   });
-        if (ranked.isEmpty()) return;   // 软刷新批次可能不全，等下一批
+        if (ranked.isEmpty()) {
+            // 锁着时内置平台搜索全被拦，这里会频繁空手而归；留一行日志便于定位「歌词没有」
+            qInfo().noquote() << QStringLiteral("[歌词] 「%1 - %2」跨源搜索无匹配候选")
+                                  .arg(song.title, song.artist);
+            return;   // 兜底定时器会回调空歌词
+        }
         *started = true;                // 已有候选，兜底定时器不再触发
 
         // 逐个候选源试歌词，拿到第一个带时间轴的有效歌词就收工。

@@ -75,12 +75,17 @@ public:
     // 登录流程复用同一套请求构造器
     void call(const Endpoint &ep, const QVariantMap &vars, ReplyCallback cb);
     void callLogin(const QString &name, const QVariantMap &vars, ReplyCallback cb);
+    // 歌词等只读元数据的放行通道：不返回音频链接，不属于「取链」风险面，
+    // 未完成风险确认也允许拉取（否则锁着时歌词几乎全没，只剩脚本源的 lyric 能力）
+    void callMeta(const Endpoint &ep, const QVariantMap &vars, ReplyCallback cb);
     QVariantMap baseVars() const;
     QVariantMap songVars(const Song &song, const QString &quality) const;
 
 private:
     // 登录接口放行标记：callLogin 置位，绕过风险确认锁（账号功能不依赖音源初始化）
     bool m_loginCall = false;
+    // 歌词等只读元数据放行标记：callMeta 置位，同 login 通道
+    bool m_metaCall = false;
     QUrl buildUrl(const Endpoint &ep, const QVariantMap &vars, QVariantMap *headers,
                   QByteArray *body) const;
     void requestSongs(const Endpoint &ep, const QVariantMap &vars, SongsCallback cb);
