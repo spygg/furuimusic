@@ -2,6 +2,7 @@
 #include "BrowserController.h"
 
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QLibrary>
