@@ -34,14 +34,14 @@ Rectangle {
         property bool manualMove: false
         property point pressPos
         property point windowPos
-        onPressed: {
+        onPressed: function (mouse) {
             if (!root.win)
                 return
             manualMove = !platform.startSystemMove(root.win)
             pressPos = Qt.point(mouse.x, mouse.y)
             windowPos = Qt.point(root.win.x, root.win.y)
         }
-        onPositionChanged: {
+        onPositionChanged: function (mouse) {
             if (!pressed || !manualMove || !root.win)
                 return
             root.win.x = windowPos.x + (mouse.x - pressPos.x)
@@ -174,10 +174,13 @@ Rectangle {
                 delegate: Rectangle {
                     width: 44
                     height: 32
-                    radius: 8
+                    radius: theme.radiusSm
                     color: {
-                        if (modelData === "close")
+                        if (modelData === "close") {
+                            if (btnHover.pressed) return Qt.darker(theme.danger, 1.2)
                             return btnHover.containsMouse ? theme.danger : "transparent"
+                        }
+                        if (btnHover.pressed) return Qt.darker(theme.cardHover, 1.15)
                         return btnHover.containsMouse ? theme.cardHover : "transparent"
                     }
                     Behavior on color { ColorAnimation { duration: 120 } }

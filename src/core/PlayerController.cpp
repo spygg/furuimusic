@@ -197,6 +197,15 @@ PlayerController::PlayerController(QObject *parent)
     connect(m_player, &QMediaPlayer::errorOccurred, this,
             [this](QMediaPlayer::Error error, const QString &msg) {
                 if (error == QMediaPlayer::NoError) return;
+                // 坏链上 FFmpeg 会把同一条错误连发上百次：同一次播放里的同文本错误只处理一次，
+                // 否则上层会跟着刷「播放失败」并反复跑一遍恢复判定（日志实测 1s 内 141 条）。
+                const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                if (msg == m_lastErrorMsg && m_loadStarted == m_lastErrorLoadStarted
+                    && nowMs - m_lastErrorAt < 800)
+                    return;
+                m_lastErrorMsg = msg;
+                m_lastErrorAt = nowMs;
+                m_lastErrorLoadStarted = m_loadStarted;
                 qWarning("[播放器] 错误：%s（pos %lld / dur %lld，状态 %d）",
                          qUtf8Printable(msg), position(), duration(),
                          int(m_player->mediaStatus()));
@@ -227,6 +236,14 @@ PlayerController::PlayerController(QObject *parent)
                 if (error == QMediaPlayer::NoError) return;
                 // Qt5 DirectShow 失败时 errorString 可能是空串，直接透传会弹一个空 toast
                 const QString msg = m_player->errorString();
+                // 与 Qt6 相同的去抖：同一次播放内的同文本错误只处理一次
+                const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                if (msg == m_lastErrorMsg && m_loadStarted == m_lastErrorLoadStarted
+                    && nowMs - m_lastErrorAt < 800)
+                    return;
+                m_lastErrorMsg = msg;
+                m_lastErrorAt = nowMs;
+                m_lastErrorLoadStarted = m_loadStarted;
                 qWarning("[播放器] 错误：%s（pos %lld / dur %lld）",
                          qUtf8Printable(msg), position(), duration());
                 // 换源后旧流迟到的 error：不属于当前源，吞掉
@@ -323,8 +340,13 @@ void PlayerController::applyPendingSeek()
         m_resumeSeekTimer->stop();
         return;
     }
-    if (m_resumeSeekTries >= 20) {   // 加载完成后 20 × 200ms = 4s 仍未生效，放弃
-        qWarning("[续播] seek 4s 未生效，放弃；pos=%lld target=%lld", pos, target);
+    // 已从头出声（pos > 0）后 20 次仍无效 → 这条流确实不可 seek，放弃，避免死循环。
+    // 还没出声时（在线流首包常超过 4s，或新链直接 5XX）不能按同样节奏放弃：
+    // 此时放弃等于「从头播」，而断点信息还要留给下一级换源，因此放宽到 15s。
+    const int limit = pos > 0 ? 20 : 75;
+    if (m_resumeSeekTries >= limit) {
+        qWarning("[续播] seek 未生效，放弃；pos=%lld target=%lld 尝试 %d 次", pos, target,
+                 m_resumeSeekTries);
         m_pendingSeek = 0;
         m_resumeSeekReady = false;
         m_resumeSeekTimer->stop();
@@ -358,7 +380,11 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers, qint
     }
     // 断流前的有效位置不能跨歌沿用：新歌还没出声前 error 若到来，failedPos
     // 必须来自本歌而非上一首，否则换源续播会跳到一个毫不相关的位置。
-    m_lastGoodPosition = 0;
+    // 但同一首歌的换源续播（resumeMs >= 0）必须保留：新链若打不开/不可 seek，
+    // 上一级换源已经清空了 position，下一级换源只能靠这个值把进度带过去，
+    // 否则就是日志里「卡一下之后从头再播一遍」。
+    if (resumeMs < 0)
+        m_lastGoodPosition = 0;
     // 网易云等平台返回的播放直链常为 http://（如 http://m?.music.126.net/...）。
     // Android 9+ 默认禁止明文流量、桌面 Qt 部分环境也会拒绝 http 拉流，表现为
     // "Error transferring http://..."。与封面统一策略（MusicSource::mvCoverThumb）对齐，
@@ -377,6 +403,7 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers, qint
     m_lastPosition = -1;
     m_stallSince = 0;
     m_everPlayed = false;
+    m_lastErrorMsg.clear();   // 新一次起播：上一次的错误去抖记录作废
     m_loadStarted = QDateTime::currentMSecsSinceEpoch();
     m_watchdog->start();
     m_headers = headers;
@@ -446,6 +473,7 @@ void PlayerController::fetchWithHeaders()
         m_lastPosition = -1;
         m_stallSince = 0;
         m_everPlayed = false;
+        m_lastErrorMsg.clear();
         m_loadStarted = QDateTime::currentMSecsSinceEpoch();
         m_watchdog->start();
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
@@ -667,6 +695,22 @@ void PlayerController::onWatchdog()
     // 暂停 / 缓冲中：不干预，等回到播放态再看位置
     if (state != QMediaPlayer::PlayingState) return;
 
+    // 停滞阈值按媒体状态区分（Qt6）：
+    //   BufferingMedia —— 网络慢、正在缓冲，位置本来就不前进，放宽到 20s 再判失败，
+    //                     否则网速一抖就被当成断流去换源（日志里大量 10s 停滞由此而来）；
+    //   StalledMedia   —— 后端已确认卡住，不会自己恢复，5s 即可进入自愈；
+    //   其它           —— 维持原有 10s。
+    int statusForLog = -1;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const QMediaPlayer::MediaStatus status = m_player->mediaStatus();
+    statusForLog = int(status);
+    const qint64 stallLimit = status == QMediaPlayer::BufferingMedia ? 20000
+                           : status == QMediaPlayer::StalledMedia   ? 5000
+                                                                    : 10000;
+#else
+    const qint64 stallLimit = 10000;
+#endif
+
     // 位置往前走：播放正常，清停滞记录
     if (pos > m_lastPosition) {
         m_lastPosition = pos;
@@ -708,9 +752,9 @@ void PlayerController::onWatchdog()
     }
     // 中途停滞超过 10s 仍不动：先交给上层做「原链接重连/同音源重新取链」自愈，
     // 前两级失败才会换源。原来直接 15s 就判失败并扣分，一次网络抖动就会把好源打下去。
-    if (now - m_stallSince >= 10000) {
+    if (now - m_stallSince >= stallLimit) {
         m_watchdog->stop();
-        qWarning("播放停滞 %lldms：%s", now - m_stallSince,
+        qWarning("播放停滞 %lldms（状态 %d）：%s", now - m_stallSince, statusForLog,
                  qUtf8Printable(current().title));
         emit errorOccurred(QStringLiteral("播放中断，正在尝试恢复"));
     }

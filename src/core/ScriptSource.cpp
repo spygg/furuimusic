@@ -1194,6 +1194,15 @@ void ScriptSourceManager::warmUp()
 {
     // 只预热真正能取播放链接的脚本；搜索/歌词类脚本等用到时再起。
     // persistResult=false、silent=true：不改库、不弹提示（失败状态仍记在内存里）。
+    //
+    // 移动端限制数量：每个引擎常驻约 2~3MB，17 个全量预热在手机上就是 40MB 上下的
+    // 常驻内存 + 一轮密集 QuickJS 初始化（实测还会把某个脚本顶到 32s 初始化超时）。
+    // 只预热用户排序最前的几个，其余在第一次播放时按需拉起。
+#if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
+    int budget = 4;
+#else
+    int budget = std::numeric_limits<int>::max();
+#endif
     for (const QString &id : orderedIds()) {
         Item item = m_items.value(id);
         if (!item.enabled || item.script.isEmpty()
@@ -1203,6 +1212,7 @@ void ScriptSourceManager::warmUp()
         if (QPointer<ScriptEngine> e = m_engines.value(id)) {
             if (e->ready()) continue;
         }
+        if (budget-- <= 0) break;
         startEngine(item, {}, false, true);
     }
 }

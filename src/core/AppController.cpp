@@ -536,7 +536,9 @@ AppController::AppController(QObject *parent)
     // 空闲预热在线音源脚本引擎：把首次 QuickJS eval 的耗时挪到启动后 1.5s，
     // 用户第一次切歌时引擎已就绪（失败也不打扰用户）
     QTimer::singleShot(1500, this, [] {
-        ScriptSourceManager::instance()->warmUp();
+        // FURUI_NO_SCRIPT_WARMUP=1 时跳过预热（用于对比预热占用的内存）
+        if (qEnvironmentVariableIsEmpty("FURUI_NO_SCRIPT_WARMUP"))
+            ScriptSourceManager::instance()->warmUp();
     });
     PlayerController *player = PlayerController::instance();
 

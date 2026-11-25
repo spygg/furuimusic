@@ -503,10 +503,10 @@ Item {
                             property real pressX: 0
                             property real pressY: 0
                             property bool swiped: false
-                            onPressed: {
+                            onPressed: function (mouse) {
                                 pressX = mouse.x; pressY = mouse.y; swiped = false
                             }
-                            onPositionChanged: {
+                            onPositionChanged: function (mouse) {
                                 if (!pressed) return
                                 const dx = mouse.x - pressX
                                 const dy = mouse.y - pressY
@@ -606,26 +606,21 @@ Item {
                             property real pressX: 0
                             property real pressY: 0
                             property bool swiped: false
-                            onPressed: {
+                            onPressed: function (mouse) {
                                 pressX = mouse.x; pressY = mouse.y; swiped = false
-                                console.log("[swipe-debug] bg onPressed", mouse.x, mouse.y)
                             }
-                            onPositionChanged: {
+                            onPositionChanged: function (mouse) {
                                 if (!pressed) return
                                 const dx = mouse.x - pressX
                                 const dy = mouse.y - pressY
-                                if (Math.abs(dx) > 30 || Math.abs(dy) > 30)
-                                    console.log("[swipe-debug] bg move dx=", dx.toFixed(1), "dy=", dy.toFixed(1))
                                 if (Math.abs(dx) > 24 || Math.abs(dy) > 24)
                                     swiped = true
                                 if (Math.abs(dx) > Math.min(80, root.width * 0.18)
                                         && Math.abs(dx) > Math.abs(dy) * 1.2) {
-                                    console.log("[swipe-debug] bg requestClose")
                                     root.requestClose()
                                 }
                             }
                             onClicked: {
-                                console.log("[swipe-debug] bg clicked swiped=", swiped)
                                 if (!swiped)
                                     pager.setCurrentIndex(0)
                             }
@@ -1443,25 +1438,20 @@ Item {
                             anchors.fill: parent
                             property real pressX: -1
                             property real pressY: -1
-                            onPressed: {
+                            onPressed: function (mouse) {
                                 pressX = mouse.x; pressY = mouse.y
-                                console.log("[swipe-debug] row onPressed", mouse.x, mouse.y)
                             }
-                            onPositionChanged: {
+                            onPositionChanged: function (mouse) {
                                 if (pressX < 0) return
                                 const dx = mouse.x - pressX
                                 const dy = mouse.y - pressY
-                                if (Math.abs(dx) > 30 || Math.abs(dy) > 30)
-                                    console.log("[swipe-debug] row move dx=", dx.toFixed(1), "dy=", dy.toFixed(1))
                                 if (Math.abs(dx) > Math.min(80, root.width * 0.18)
                                         && Math.abs(dx) > Math.abs(dy) * 1.2) {
                                     pressX = -1   // 防止一次拖动重复触发
-                                    console.log("[swipe-debug] row requestClose")
                                     root.requestClose()
                                 }
                             }
                             onReleased: {
-                                console.log("[swipe-debug] row released dx=", (mouseX - pressX).toFixed(1), "dy=", (mouseY - pressY).toFixed(1))
                                 if (pressX < 0 || pressY < 0) return
                                 // 松手位置离按下位置很近才算点击；拖动列表/横滑都不切换
                                 if (Math.abs(mouseX - pressX) > 10

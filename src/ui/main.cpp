@@ -34,6 +34,10 @@
 #if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
 #include "TrayController.h"
 #include <QApplication>
+#include <QDir>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QWindow>
 #endif
 #ifdef FURUI_HAVE_WEBVIEW
 #include <QtWebView/qtwebviewfunctions.h>
@@ -45,6 +49,73 @@
 #include "thirdparty/breakpad/crashhandler.h"
 #include "core/Settings.h"
 #include <QDir>
+#endif
+
+#if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
+// ---------------- 单实例 ----------------
+// 再次启动时新进程只把已有窗口带到前台再退出，避免两个播放器抢同一个媒体设备、
+// 同时往同一份设置/数据库里写。实现用 Qt 的本地套接字（Windows 命名管道 /
+// Unix domain socket），跨平台行为一致。
+// Android/iOS 由系统保证单实例（再点图标只是把任务切回前台），不参与这段逻辑。
+static QString instanceSocketName()
+{
+    // Linux/macOS 的套接字文件落在 /tmp 这类共享目录，带上用户主目录哈希，
+    // 避免同一台机器的两个用户互相顶掉对方
+    return QStringLiteral("FuruiMusic-%1").arg(qHash(QDir::homePath()));
+}
+
+// 把已经运行的那个实例的窗口显示出来（最小化则还原）
+static void raiseExistingWindow()
+{
+    const QWindowList windows = QGuiApplication::topLevelWindows();
+    for (QWindow *w : windows) {
+        // 托盘里可能还有 ToolTip/Popup 这类附属窗口，只认主窗口
+        if (!qobject_cast<QQuickWindow *>(w))
+            continue;
+        // 从托盘/最小化状态恢复；正常显示时只置前
+        if (!w->isVisible() || w->visibility() == QWindow::Minimized)
+            w->showNormal();
+        w->raise();
+        w->requestActivate();
+        return;
+    }
+}
+
+// true = 本进程是主实例，继续启动；false = 已有实例，已请它置前，本进程应退出
+static bool claimSingleInstance(QCoreApplication &app)
+{
+    // 自检/开发期要并行跑两个实例时用 FURUI_MULTI_INSTANCE=1 跳过
+    if (!qEnvironmentVariableIsEmpty("FURUI_MULTI_INSTANCE"))
+        return true;
+
+    const QString name = instanceSocketName();
+    QLocalSocket probe;
+    probe.connectToServer(name);
+    if (probe.waitForConnected(300)) {
+        probe.write("raise");
+        probe.flush();
+        probe.waitForBytesWritten(300);
+        return false;
+    }
+    // 上次异常退出可能留下套接字文件（Unix）：先清理再监听
+    QLocalServer::removeServer(name);
+    auto *server = new QLocalServer(&app);
+    // UserAccessOption：只允许同一用户连接（Unix 下是 0600 权限）
+    server->setSocketOptions(QLocalServer::UserAccessOption);
+    if (!server->listen(name)) {
+        // 监听失败（权限/名字被占用）不阻断启动：单实例只是体验优化，不能因此打不开
+        Furui::Logger::write(QStringLiteral("W"),
+                             QStringLiteral("单实例套接字监听失败：%1").arg(server->errorString()));
+        return true;
+    }
+    QObject::connect(server, &QLocalServer::newConnection, server, [server] {
+        while (QLocalSocket *s = server->nextPendingConnection()) {
+            QObject::connect(s, &QLocalSocket::disconnected, s, &QLocalSocket::deleteLater);
+            raiseExistingWindow();
+        }
+    });
+    return true;
+}
 #endif
 
 int main(int argc, char *argv[])
@@ -61,6 +132,13 @@ int main(int argc, char *argv[])
 #endif
     QGuiApplication::setApplicationName(QStringLiteral("福瑞音乐"));
     QGuiApplication::setOrganizationName(QStringLiteral("Furui"));
+
+#if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
+    // 单实例必须在任何初始化（日志、数据库、托盘、QML）之前判定：
+    // 第二个进程只负责通知主实例置前，然后立刻退出，不再碰共享的媒体设备与数据文件
+    if (!claimSingleInstance(app))
+        return 0;
+#endif
 
 #ifdef FURUI_HAVE_BREAKPAD
     // 崩溃转储 handler 越早装越好：拦截未捕获异常 / 信号，写出 minidump 到
@@ -455,6 +533,24 @@ int main(int argc, char *argv[])
                         mv.insert(QStringLiteral("hasNext"), false);
                         QMetaObject::invokeMethod(a, "mvOpened", Q_ARG(QVariantMap, mv));
                     }
+                }
+                // FURUI_MV_CLOSE_MS=<ms>：到点关闭 MV 页，用来验证「退出 MV 后
+                // 媒体项被回收、内存回落」（配 FURUI_CAPTURE_MS 观察回落曲线）
+                const int mvCloseMs = qEnvironmentVariableIntValue("FURUI_MV_CLOSE_MS");
+                if (mvCloseMs > 0) {
+                    QTimer::singleShot(mvCloseMs, &engine, [&engine] {
+                        QQuickWindow *w = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0));
+                        if (!w) return;
+                        std::function<QQuickItem *(QQuickItem *)> find =
+                                [&find](QQuickItem *it) -> QQuickItem * {
+                            if (it->property("mvTitle").isValid()) return it;
+                            for (QQuickItem *c : it->childItems())
+                                if (QQuickItem *r = find(c)) return r;
+                            return nullptr;
+                        };
+                        if (QQuickItem *mv = find(w->contentItem()))
+                            QMetaObject::invokeMethod(mv, "close");
+                    });
                 }
                 // FURUI_CAPTURE_TOAST=<text>：发一条带语义色的通知，用来截统一 Toast
                 const QString toastText = qEnvironmentVariable("FURUI_CAPTURE_TOAST");

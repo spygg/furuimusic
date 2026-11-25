@@ -208,6 +208,11 @@ private:
     qint64 m_stallSince = 0;        // 位置开始停滞的时刻（ms），0 = 未停滞
     qint64 m_loadStarted = 0;       // 本次 playUrl 起播时刻（ms），用于加载超时判定
     bool m_everPlayed = false;      // 本次源是否真正出过声音（position 越过 0.5s）
+    // 错误去抖：FFmpeg 后端在坏链上会把同一条 Demuxing failed 连发上百次，
+    // 每次都走一遍旧流判定/结尾判定并上报上层。同一次播放内的同文本错误只放行一次。
+    QString m_lastErrorMsg;
+    qint64 m_lastErrorAt = 0;
+    qint64 m_lastErrorLoadStarted = 0;
     void onWatchdog();
 };
 

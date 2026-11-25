@@ -446,7 +446,8 @@ Item {
                 implicitWidth: refreshText.implicitWidth + 32
                 implicitHeight: root.headerRowH
                 radius: height / 2
-                color: refreshMa.containsMouse ? Qt.darker(cPrimary, 1.15) : cPrimary
+                color: refreshMa.pressed ? Qt.darker(cPrimary, 1.3)
+                       : (refreshMa.containsMouse ? Qt.darker(cPrimary, 1.15) : cPrimary)
                 Text {
                     id: refreshText
                     anchors.centerIn: parent
@@ -482,7 +483,8 @@ Item {
                 implicitWidth: root.headerRowH
                 implicitHeight: root.headerRowH
                 radius: height / 2
-                color: refreshIconMa.containsMouse ? Qt.darker(cPrimary, 1.15) : cPrimary
+                color: refreshIconMa.pressed ? Qt.darker(cPrimary, 1.3)
+                       : (refreshIconMa.containsMouse ? Qt.darker(cPrimary, 1.15) : cPrimary)
                 GlyphIcon {
                     anchors.centerIn: parent
                     name: "refresh"
@@ -1178,6 +1180,7 @@ Item {
                         id: playlistGrid
                         anchors.fill: parent
                         clip: true
+                        cacheBuffer: 320
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                         model: app.playlists
                         cellWidth: root.gridCellWidth
@@ -1592,6 +1595,10 @@ Item {
                                             Image {
                                                 anchors.fill: parent
                                                 source: model.cover
+                                                // 卡片只有 92x86，各平台封面原图常是 600~1080px：
+                                                // 不限解码尺寸会导致一排榜单就吃掉上百 MB 内存
+                                                sourceSize.width: 200
+                                                sourceSize.height: 200
                                                 fillMode: Image.PreserveAspectCrop
                                                 asynchronous: true
                                             }
@@ -1662,6 +1669,7 @@ Item {
                         id: discoveryGrid
                         anchors.fill: parent
                         clip: true
+                        cacheBuffer: 320
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                         model: app.discovery
                         cellWidth: root.gridCellWidth
@@ -1989,6 +1997,7 @@ Item {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
+                            cacheBuffer: 320
                             model: app.mvList
                             readonly property int cols: Math.max(2, Math.min(5,
                                 Math.floor(Math.max(320, width) / 220)))
@@ -2294,6 +2303,7 @@ Item {
                                 id: searchSongGrid
                                 anchors.fill: parent
                                 clip: true
+                                cacheBuffer: 320
                                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                                 model: app.results
                                 cellWidth: root.gridCellWidth
@@ -2444,6 +2454,7 @@ Item {
                                 id: searchPlaylistGrid
                                 anchors.fill: parent
                                 clip: true
+                                cacheBuffer: 320
                                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                                 model: app.searchPlaylists
                                 cellWidth: root.gridCellWidth
@@ -2601,6 +2612,9 @@ Item {
                                 anchors.fill: parent
                                 visible: model.cover !== ""
                                 source: model.cover
+                                // 38x38 的小方块，按原图解码纯属浪费
+                                sourceSize.width: 96
+                                sourceSize.height: 96
                                 fillMode: Image.PreserveAspectCrop
                                 asynchronous: true
                             }
@@ -2677,7 +2691,7 @@ Item {
         visible: root.historyOpen
         enabled: root.historyOpen
         preventStealing: true
-        onClicked: {
+        onClicked: function (mouse) {
             const p = searchBox.mapToItem(root, 0, 0)
             if (mouse.x >= p.x && mouse.x <= p.x + searchBox.width
                     && mouse.y >= p.y && mouse.y <= p.y + searchBox.height) {

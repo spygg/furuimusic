@@ -142,7 +142,9 @@ Rectangle {
         triggeredOnStart: false
         onTriggered: {
             if (root.countdown > 0) root.countdown--
-            if (root.countdown <= 0) root.stop()
+            // 必须是倒计时 Timer 自己停：之前写成 root.stop()，对话框没有 stop() 方法，
+            // 每秒抛一次 TypeError，Cold start 后一直刷到进程结束（Android 上实测每秒一条）。
+            if (root.countdown <= 0) countdownTimer.stop()
         }
     }
 

@@ -51,6 +51,21 @@ Logger::Logger(QObject *parent)
 {
 }
 
+Logger::~Logger()
+{
+    QMutexLocker lock(&m_mutex);
+    closeFile();
+}
+
+void Logger::closeFile()
+{
+    if (!m_file) return;
+    m_file->flush();
+    m_file->close();
+    delete m_file;
+    m_file = nullptr;
+}
+
 void Logger::install()
 {
     // 无捕获 lambda 可以隐式转成函数指针，避免为处理器再单独定义一个静态函数
@@ -85,6 +100,7 @@ void Logger::setFileEnabled(bool on)
         changed = (on != m_fileEnabled);
         m_fileEnabled = on;
         m_path = todayPath();
+        if (!on) closeFile();   // 关闭开关时立刻释放句柄，之后不再占用文件
     }
     // append() 也要拿同一把锁，这里必须先放开再补记开日志这条记录
     if (!on) return;
@@ -130,21 +146,38 @@ void Logger::append(const QString &level, const QString &message)
 
     // 跨天时文件名要跟着换：长时间运行的桌面端可能连着挂好几天
     const QString want = todayPath();
-    if (want != m_path) m_path = want;
+    if (want != m_path) {
+        closeFile();
+        m_path = want;
+    }
     QDir().mkpath(QFileInfo(m_path).absolutePath());
-    QFile f(m_path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Append)) return;
+    // 句柄常驻：只有首次写入、跨天、轮转后才重新打开
+    if (!m_file || !m_file->isOpen()) {
+        closeFile();
+        m_file = new QFile(m_path);
+        if (!m_file->open(QIODevice::WriteOnly | QIODevice::Append)) {
+            delete m_file;
+            m_file = nullptr;
+            return;
+        }
+    }
     // 超过 8 MB 就留一份上一代，避免长期开启把手机存储写满
-    if (f.size() > kMaxFileBytes) {
-        f.close();
+    if (m_file->size() > kMaxFileBytes) {
+        closeFile();
         const QString old = m_path + QStringLiteral(".1");
         QFile::remove(old);
         QFile::rename(m_path, old);
-        if (!f.open(QIODevice::WriteOnly | QIODevice::Append)) return;
+        m_file = new QFile(m_path);
+        if (!m_file->open(QIODevice::WriteOnly | QIODevice::Append)) {
+            delete m_file;
+            m_file = nullptr;
+            return;
+        }
     }
-    f.write(line.toUtf8());
-    f.write("\n");
-    f.close();
+    m_file->write(line.toUtf8());
+    m_file->write("\n");
+    // 每条立即 flush：崩溃时最后几行不能丢（与之前 open/close 的落盘时机一致）
+    m_file->flush();
 }
 
 } // namespace Furui

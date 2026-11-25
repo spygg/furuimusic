@@ -164,19 +164,9 @@ QUrl MusicSource::buildUrl(const Endpoint &ep, const QVariantMap &vars, QVariant
 
 void MusicSource::call(const Endpoint &ep, const QVariantMap &vars, ReplyCallback cb)
 {
-    // 内置平台音源与脚本音源共用同一把风险确认锁：未在设置页完成
-    // 「我自己承担后果」+ 连点导入的确认（AppController::seedOnlineSources 置
-    // onlineSourcesUnlocked）前，所有取链请求（搜索/歌单/播放地址/MV）
-    // 一律不发出，保证全新安装时整个音源层都处于未初始化状态。
-    // 登录接口走 callLogin、歌词走 callMeta 的放行通道：账号功能与歌词显示
-    // 不依赖音源初始化（歌词是只读文本元数据，不返回音频链接）。
-    if (!m_loginCall && !m_metaCall
-        && !Settings::get(QStringLiteral("onlineSourcesUnlocked")).toBool()) {
-        HttpClient::Reply r;
-        r.error = QStringLiteral("音源未初始化：请先在设置页完成风险确认（输入「我自己承担后果」并连点导入）");
-        if (cb) cb(r);
-        return;
-    }
+    // 风险确认锁只拦「取音频/视频地址」这一层（resolveUrl / mv），不拦只读元数据：
+    // 榜单、歌单、搜索、歌词都不返回直链，锁着也应该能浏览和检索，
+    // 否则全新安装的 发现榜单 会整页为空（平台接口本身是好的，只是被这里提前挡掉了）。
     if (!ep.valid()) {
         HttpClient::Reply r;
         r.error = QStringLiteral("该平台未配置此接口");
@@ -206,19 +196,14 @@ void MusicSource::callLogin(const QString &name, const QVariantMap &vars, ReplyC
     else if (name == QLatin1String("playlists")) ep = m_desc.login.playlists;
     else if (name == QLatin1String("favorites")) ep = m_desc.login.favorites;
     else if (name == QLatin1String("playlistDetail")) ep = m_desc.login.playlistDetail;
-    // 登录通道放行标记：只包住这一次 call，同步派发完即复位
-    m_loginCall = true;
+    // 登录通道：账号功能不依赖音源初始化，直接照常发起
     call(ep, vars, cb);
-    m_loginCall = false;
 }
 
-// 歌词（含酷狗两段式）走的放行通道：每个调用点各自置位，第二段在异步回调里
-// 发起，不能用函数级标记包住整个 lyric()（回调触发时标记早已复位）
+// 歌词（含酷狗两段式）走的通道：只读元数据，不受风险确认锁影响
 void MusicSource::callMeta(const Endpoint &ep, const QVariantMap &vars, ReplyCallback cb)
 {
-    m_metaCall = true;
     call(ep, vars, cb);
-    m_metaCall = false;
 }
 
 void MusicSource::requestSongs(const Endpoint &ep, const QVariantMap &vars, SongsCallback cb)
@@ -548,6 +533,17 @@ QVariantMap MusicSource::playbackHeaders() const
 
 void MusicSource::resolveUrl(const Song &song, const QString &quality, PlayableCallback cb)
 {
+    // 真正的「取链」闸门：用户未在设置页完成风险确认前，绝不向平台要音频直链。
+    // 榜单/歌单/搜索/歌词这些只读元数据不受此锁影响（见 call 的注释）。
+    if (!Settings::get(QStringLiteral("onlineSourcesUnlocked")).toBool()) {
+        Playable p;
+        p.ok = false;
+        p.needSubstitute = false;
+        p.reason = QStringLiteral("locked");
+        p.message = QStringLiteral("音源未初始化：请先在设置页完成风险确认（输入「我自己承担后果」并连点导入）");
+        if (cb) cb(p);
+        return;
+    }
     const Endpoint ep = m_desc.endpoints.value(QStringLiteral("url"));
     const QVariantMap vars = songVars(song, quality);
     call(ep, vars, [this, ep, song, cb](const HttpClient::Reply &r) {
@@ -1087,6 +1083,11 @@ void MusicSource::cover(const Song &song, StringCallback cb)
 
 void MusicSource::mv(const Song &song, MvCallback cb)
 {
+    // MV 同样是音视频直链，按「取链」统一过风险确认锁
+    if (!Settings::get(QStringLiteral("onlineSourcesUnlocked")).toBool()) {
+        if (cb) cb(false, QUrl(), QStringLiteral("在线音源未启用：请先在设置页完成风险确认"));
+        return;
+    }
     const Endpoint mvEp = m_desc.endpoints.value(QStringLiteral("mvUrl"));
     if (!mvEp.valid()) {
         if (cb) cb(false, QUrl(), QStringLiteral("该平台暂未配置 MV"));

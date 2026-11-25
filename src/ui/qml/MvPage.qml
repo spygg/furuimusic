@@ -78,6 +78,8 @@ Rectangle {
 
     // 暗色页固定浅色文字，不随主题明暗变化
     function open(mv) {
+        releaseTimer.stop()
+        if (!videoLoader.active) videoLoader.active = true
         mvTitle = mv.title || ""
         mvArtist = mv.artist || ""
         mvCover = mv.cover || ""
@@ -96,6 +98,8 @@ Rectangle {
         if (videoLoader.item) videoLoader.item.close()
         if (root.isFullscreen) root.setFullscreen(false)
         requestClose()
+        // 桌面端页面淡出后销毁媒体项，真正释放解码器和最后一帧纹理
+        if (Qt.platform.os !== "android") releaseTimer.restart()
     }
 
     function wake() {
@@ -174,6 +178,20 @@ Rectangle {
         }
     }
 
+    // 桌面端退出 MV 后销毁媒体项：close() 只做 pause（Android 上销毁正在渲染的
+    // sink 会 SIGABRT，见 MvMedia6.close 注释），解码器、帧队列和 VideoOutput
+    // 的最后一帧会一直占着内存，1080p/4K 动辄几十上百 MB。桌面没有这个崩溃问题，
+    // 等页面彻底隐藏后把 Loader 置为 inactive 即释放；再次播放时 open() 重新加载。
+    Timer {
+        id: releaseTimer
+        interval: 800
+        onTriggered: {
+            if (Qt.platform.os === "android") return
+            if (root.opacity > 0.05) { restart(); return }
+            videoLoader.active = false
+        }
+    }
+
     // Android 音频焦点被其它应用抢走时（LOSS/LOSS_TRANSIENT），音乐播放器
     // 与 MV 沉浸页一起暂停——不能只停音乐、MV 还在响
     Connections {
@@ -221,7 +239,7 @@ Rectangle {
             // 中央大播放按钮能点），移动端补上。
             singleTap.restart()
         }
-        onDoubleClicked: {
+        onDoubleClicked: function (mouse) {
             root.lastDoubleTap = Date.now()
             singleTap.stop()
             if (mouse.x < root.width * 0.33) root.skipBy(-10000)

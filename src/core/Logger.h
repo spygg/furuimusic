@@ -9,6 +9,8 @@
 #include <QString>
 #include <QStringList>
 
+class QFile;
+
 namespace Furui {
 
 class Logger : public QObject {
@@ -32,12 +34,17 @@ public:
 
 private:
     explicit Logger(QObject *parent = nullptr);
+    ~Logger() override;
     void append(const QString &level, const QString &message);
+    // 关闭并释放写入句柄；调用者必须已持有 m_mutex
+    void closeFile();
 
     mutable QMutex m_mutex;
     QStringList m_ring;
     bool m_fileEnabled = false;
     QString m_path;
+    // 常驻打开的文件句柄：日志量大的会话里逐条 open/close 是纯 IO 浪费
+    QFile *m_file = nullptr;
 };
 
 } // namespace Furui

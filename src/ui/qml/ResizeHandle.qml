@@ -55,7 +55,7 @@ MouseArea {
         }
     }
 
-    onPressed: {
+    onPressed: function (mouse) {
         if (!targetWindow)
             return
         var p = screenPoint(mouse.x, mouse.y)
@@ -70,7 +70,7 @@ MouseArea {
     onReleased: manual = false
     onCanceled: manual = false
 
-    onPositionChanged: {
+    onPositionChanged: function (mouse) {
         if (!manual || !targetWindow || !pressed)
             return
         var p = screenPoint(mouse.x, mouse.y)
