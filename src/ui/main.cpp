@@ -1,5 +1,6 @@
 // 福瑞音乐 - 桌面与移动共用的 QML 入口
 #include "core/QtCompat.h"
+#include <QCryptographicHash>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QGuiApplication>
@@ -59,9 +60,14 @@
 // Android/iOS 由系统保证单实例（再点图标只是把任务切回前台），不参与这段逻辑。
 static QString instanceSocketName()
 {
-    // Linux/macOS 的套接字文件落在 /tmp 这类共享目录，带上用户主目录哈希，
-    // 避免同一台机器的两个用户互相顶掉对方
-    return QStringLiteral("FuruiMusic-%1").arg(qHash(QDir::homePath()));
+    // Linux/macOS 的套接字文件落在 /tmp 这类共享目录，带上用户主目录的摘要，
+    // 避免同一台机器的两个用户互相顶掉对方。
+    // 注意不能用 qHash(QString)：Qt5 与 Qt6 的哈希实现不同，同一台机器上
+    // 两个版本会算出不同的名字，出现「Qt5 和 Qt6 各起一个」的双实例。
+    // SHA-256 截断在版本间稳定，也不会把用户名写进套接字名。
+    const QByteArray digest = QCryptographicHash::hash(QDir::homePath().toUtf8(),
+                                                       QCryptographicHash::Sha256).toHex();
+    return QStringLiteral("FuruiMusic-%1").arg(QString::fromLatin1(digest.left(16)));
 }
 
 // 把已经运行的那个实例的窗口显示出来（最小化则还原）
@@ -122,6 +128,10 @@ int main(int argc, char *argv[])
 {
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QGuiApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+    // Qt 5.15 默认把缩放因子四舍五入到整数档：125% 会被算成 1.0，界面因此
+    // 比 Qt6 版小一圈。改成 PassThrough，保留 1.25 这类非整数比例。
+    QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
+        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 #endif
 
 #if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
