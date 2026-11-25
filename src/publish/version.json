@@ -1,6 +1,6 @@
 {
-  "version": "1.4.52",
-  "desc": "修复\n- 发现榜单大量为空：音源风险确认锁原本拦在统一请求入口，榜单列表 / 榜单详情 / 搜索 / 歌单等只读接口一起被挡，未完成确认的安装点开任何榜单都是空；现在锁只拦音频与 MV 直链（resolveUrl / mv），榜单、搜索、歌词照常浏览\n- 协议弹窗倒计时结束后每秒抛 TypeError（PactDialog 调用了不存在的 stop()），进程存活期间持续刷日志并空耗 CPU\n- 播到中间偶发「突然不动再换源」：看门狗把网络缓冲当成断流，现按媒体状态分档（BufferingMedia 20s / StalledMedia 5s / 其它 10s）\n- 坏链上同一条播放错误 1 秒内被回调上百次，现同一播放代次内的同文本错误 800ms 内只上报一次\n\n优化\n- Android/iOS 启动只预热用户排序最前的 4 个脚本音源，其余首播时按需拉起，冷启动少约 30MB 常驻内存与一轮密集初始化\n- 日志文件改为常驻句柄写入（仍按天 / 8MB 轮转），减少高频 open/close 的磁盘 IO\n- 发现榜单 / 搜索结果网格补充 cacheBuffer，快速滚动更稳\n- 清理播放页遗留的 [swipe-debug] 调试日志；标题栏、拖拽缩放手柄等信号处理器声明参数，消除 Qt 6.11 运行期告警\n- 桌面窗口按钮、曲库刷新按钮补充按下态反馈\n",
+  "version": "1.4.53",
+  "desc": "修复\n- Qt5 与 Qt6 版可以同时启动：单实例套接字名原先用 qHash(QString)，两个版本的哈希实现不同，算出的名字不一致；改用 SHA-256 截断后名字与 Qt 版本无关，双向实测第二个实例 56–58ms 退出并把已有窗口置前\n- Qt5 版界面整体偏小：Qt 5.15 默认把 125% 缩放四舍五入成 1.0，改用 HighDpiScaleFactorRoundingPolicy::PassThrough 后保留 1.25，窗口与 Qt6 一致（逻辑 1280×820，物理 1600×1025）\n- Qt5 桌面版编译失败：BrowserController 用了 qInfo 却未包含 QDebug（Qt6 靠传递包含能过，Qt5 直接报错）\n\n说明\n- 本轮只有桌面端改动，Android 侧行为与资源占用不变\n",
   "history": [
     {
       "version": "1.4.49",
@@ -216,10 +216,10 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.52/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.52/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.52/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.52/FuruiMusic-android-arm64-v8a.apk",
-    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.52/FuruiMusic-carcompat-netease-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.53/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.53/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.53/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.53/FuruiMusic-android-arm64-v8a.apk",
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.53/FuruiMusic-carcompat-netease-arm64-v8a.apk"
   }
 }
