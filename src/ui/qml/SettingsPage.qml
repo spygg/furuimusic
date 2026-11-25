@@ -22,6 +22,8 @@ Item {
     readonly property var sourceFirstKeys: ["platform", "vip", "custom"]
     // 响应式左右留白
     readonly property real sideMargin: Math.max(16, Math.min(36, Math.round(root.width * 0.035)))
+    // 在线解析音源风险确认：输入「我自己承担后果」后连点「导入」的已点次数（满 7 次才初始化）
+    property int unlockClicks: 0
     // 表单最大宽度：横屏手机只有 300dp 高，再让一行下拉框铺满 700dp 宽会非常难读；
     // 大屏（平板横屏/车机）反而要宽一点，免得 900dp 宽度只用到中间一条。
     readonly property real formMaxWidth: root.width >= 1000 ? 900
@@ -507,7 +509,17 @@ Item {
                     radius: 6
                     color: cPrimarySoft
                     Text { anchors.centerIn: parent; text: "发现音源"; color: cPrimary; font.pixelSize: theme.fontSm }
-                    MouseArea { anchors.fill: parent; onClicked: app.rescanScriptSources() }
+                    // 在线解析音源未通过风险确认前，手动重扫仓库同样被拦下
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            if (!app.onlineSourcesUnlocked) {
+                                app.notify("在线解析音源未启用：请在下方输入「我自己承担后果」并连点「导入」完成风险确认", "warning")
+                                return
+                            }
+                            app.rescanScriptSources()
+                        }
+                    }
                 }
                 Rectangle {
                     Layout.preferredWidth: 72
@@ -526,7 +538,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: "在线音源自动从 pdone/lx-music-source 仓库页面动态解析脚本地址（LX 脚本协议），首次启动导入上游未下架的脚本、当日可用的排在前面；也可自行导入其它脚本地址。脚本在内嵌 QuickJS 中运行，无 Node/文件/进程能力，仅开放受限网络请求；上游已下架的恶意脚本（如 LX 独家音源）会被拒绝并自动移除。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方。列表顺序即实际取链优先级（成功升权、失败降权）。"
+                    text: "音源（内置平台与在线解析）默认都不初始化：需在下方输入框输入「我自己承担后果」并连点「导入」7 次完成风险确认，未确认前内置平台（网易云/QQ/酷狗/酷我/咪咕/汽水）的搜索与取链请求全部被拦下、也不会从 pdone/lx-music-source 仓库解析导入脚本。确认后立即解锁内置平台并解析仓库（LX 脚本协议）。脚本在内嵌 QuickJS 中运行，无 Node/文件/进程能力，仅开放受限网络请求；上游已下架的恶意脚本（如 LX 独家音源）会被拒绝并自动移除。多数公开源只提供播放取链、不提供搜索，能力会如实标注在下方。列表顺序即实际取链优先级（成功升权、失败降权）。"
                 color: cSub
                 font.pixelSize: theme.fontSm
                 wrapMode: Text.Wrap
@@ -543,6 +555,8 @@ Item {
                     font.pixelSize: 12
                     leftPadding: 8
                     background: Rectangle { color: cCard; radius: 6; border.color: cLine }
+                    // 文字一变（哪怕改一个字符）就重置连点计数，防止半路粘贴干扰
+                    onTextChanged: if (text.trim() !== "我自己承担后果") root.unlockClicks = 0
                 }
                 Button {
                     id: importScriptBtn
@@ -553,6 +567,27 @@ Item {
                     contentItem: Text { text: importScriptBtn.text; color: "#FFFFFF"; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     onClicked: {
                         var u = scriptUrlField.text.trim()
+                        // 风险确认闸门：在线解析音源（pdone/lx-music-source 仓库自动发现）
+                        // 默认不初始化，必须输入「我自己承担后果」并连点「导入」满 7 次
+                        // 才调用 app.seedOnlineSources() 放开。这不是普通 URL，走专用分支。
+                        if (u === "我自己承担后果") {
+                            if (app.onlineSourcesUnlocked) {
+                                app.notify("在线解析音源已初始化过，无需重复确认", "info")
+                                scriptUrlField.text = ""
+                                root.unlockClicks = 0
+                                return
+                            }
+                            root.unlockClicks++
+                            if (root.unlockClicks >= 7) {
+                                root.unlockClicks = 0
+                                app.seedOnlineSources()
+                                scriptUrlField.text = ""
+                            } else {
+                                app.notify("已确认风险，还需再点击「导入」" + (7 - root.unlockClicks) + " 次", "warning")
+                            }
+                            return
+                        }
+                        root.unlockClicks = 0
                         if (!u) return
                         app.importScriptSource(u)
                         scriptUrlField.text = ""

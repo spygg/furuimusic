@@ -86,8 +86,9 @@ public:
 
     QString mode() const { return m_mode; }
     void setMode(const QString &mode);
-    // 只改本次运行的外观、不写回设置：给截图/自检用（FURUI_THEME）
-    void previewMode(const QString &mode);
+    // 只改本次运行的外观、不写回设置：给截图/自检用（FURUI_THEME），
+    // MV 全屏时也用它临时切深色让系统画深色状态栏。
+    Q_INVOKABLE void previewMode(const QString &mode);
 
     bool isDark() const { return m_mode == QLatin1String("dark")
                               || (m_mode == QLatin1String("system") && m_systemDark); }

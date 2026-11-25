@@ -219,15 +219,17 @@ void ThemeManager::syncStatusBarIcons() const
     // 深色主题（背景黑）用「浅色图标」。全面屏让出状态栏后若图标颜色与背景同色，
     // 时间/信号/电量就看不见。必须在 Android 主线程操作 Window/DecorView。
     // 深色页面（MV 全屏）打开时走 override 强制浅色图标，否则黑底上什么都看不见。
-    const bool lightIcons = m_statusBarOverride >= 0
-                                ? m_statusBarOverride == 1 : !isDark();
-    // 状态栏底色与图标一起切：浅色主题用页面底色，深色主题 / MV 全屏（override=1）
-    // 用与黑底一致的近黑色，否则浅色主题下黑底配白底状态栏会有一条突兀的亮带。
-    const bool darkContent = m_statusBarOverride == 1
-                             || (m_statusBarOverride < 0 && isDark());
-    const QColor statusColor = darkContent ? QColor(QStringLiteral("#0E0E10")) : bg();
-    const jint statusArgb = static_cast<jint>(statusColor.rgb());
-    QNativeInterface::QAndroidApplication::runOnAndroidMainThread([lightIcons, statusArgb] {
+    // 注意：变量含义是「状态栏图标是否需要深色」，APPEARANCE_LIGHT_STATUS_BARS(0x8)
+    // 的语义是「浅色底色 → 用深色图标」。override=1 表示 MV 黑底，要的是浅色图标，
+    // 所以必须传 false；旧代码写成 ==1 导致黑底配深色图标、时间电量全看不见。
+    const bool darkIcons = m_statusBarOverride >= 0
+                               ? m_statusBarOverride == 0 : !isDark();
+    // 参考 legado：状态栏本身透明，底色由 QML 全窗背景（含挖孔区）决定。
+    // 以前这里给 setStatusBarColor 传不透明页面色，ColorOS 会在主题切换时重置
+    // 成白底，播放页/MV 上出现一条割裂亮带；透明后由我们自己的背景铺过去。
+    // 必须显式传 0（Color.TRANSPARENT），Activity 启动时也设为透明，两处一致。
+    const jint statusArgb = 0;
+    QNativeInterface::QAndroidApplication::runOnAndroidMainThread([darkIcons, statusArgb] {
         const QJniObject activity = QJniObject::callStaticObjectMethod(
             "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
         if (!activity.isValid())
@@ -245,20 +247,22 @@ void ThemeManager::syncStatusBarIcons() const
             const QJniObject controller = window.callObjectMethod(
                 "getInsetsController", "()Landroid/view/WindowInsetsController;");
             if (controller.isValid()) {
-                const jint statusBars = QJniObject::callStaticMethod<jint>(
-                    "android/view/WindowInsets$Type", "statusBars", "()I");
+                // WindowInsets.Type.statusBars() 恒为 1。以前用 QJniObject 静态调用
+                // 内部类取该值，部分机型/Qt 版本找不到类会返回 0；mask=0 时
+                // setSystemBarsAppearance 什么都不会设置 —— 亮色主题成了白底白字。
                 controller.callMethod<void>("setSystemBarsAppearance", "(II)V",
-                                            lightIcons ? jint(0x8) : jint(0), statusBars);
-                return;
+                                            darkIcons ? jint(0x8) : jint(0), jint(1));
             }
         }
-        // API < 30 或拿不到 controller：legacy SYSTEM_UI_FLAG_LIGHT_STATUS_BAR = 0x2000
+        // 两条路都走：ColorOS 等 OEM 只认 decor view 的 flag，而且
+        // setStatusBarColor() 有可能重置 controller 的 appearance。
+        // legacy SYSTEM_UI_FLAG_LIGHT_STATUS_BAR = 0x2000
         const QJniObject decor = window.callObjectMethod(
             "getDecorView", "()Landroid/view/View;");
         if (!decor.isValid())
             return;
         const jint cur = decor.callMethod<jint>("getSystemUiVisibility", "()I");
-        const jint flags = lightIcons ? (cur | jint(0x2000)) : (cur & ~jint(0x2000));
+        const jint flags = darkIcons ? (cur | jint(0x2000)) : (cur & ~jint(0x2000));
         decor.callMethod<void>("setSystemUiVisibility", "(I)V", flags);
     });
 #endif

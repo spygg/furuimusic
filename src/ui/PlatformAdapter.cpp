@@ -323,9 +323,13 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
             // 两个来源都是 0 的机型仍会补满 ai.top，不会出现贴住状态栏的回归。
             qreal qtInsetTop = qMax(0.0, static_cast<qreal>(screenH - window->height()));
 #if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
-            const qreal safeTop = static_cast<qreal>(window->safeAreaMargins().top());
+            const QMargins safeArea = window->safeAreaMargins();
+            const qreal safeTop = static_cast<qreal>(safeArea.top());
             qtInsetTop = qMax(qtInsetTop, safeTop);
             m_lastSafeTop = safeTop;
+            // 横屏挖孔在左侧时 Qt 同样把内容区从左边内缩 safeAreaMargins().left()，
+            // 记录下来供窗口级背景反向延伸盖住挖孔那条（与顶部 osSafeTop 同理）。
+            m_lastSafeLeft = static_cast<qreal>(safeArea.left());
 #endif
             const qreal missingTop = ai.top - qtInsetTop;
             if (missingTop > 1.0)
@@ -423,17 +427,22 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
               c ? int(c->width()) : -1, c ? int(c->height()) : -1);
     }
     // 首次或值变化都打一行；原来值恒为 0 时会因 qFuzzyCompare 早退、永远看不到诊断日志。
+    // 横竖屏切换时 l/t/r/b 可能都是 0（Qt 自己内缩了内容区、边距差额为 0），
+    // 但 safeAreaMargins 的原始值变了（顶部↔左侧挖孔），必须继续往下 emit，
+    // QML 的 osSafeTop/osSafeLeft 才能刷新、窗口背景才能反向延伸覆盖新的挖孔边。
     static bool s_firstInsetsLog = true;
     if (!s_firstInsetsLog && qFuzzyCompare(l, m_insetLeft) && qFuzzyCompare(t, m_insetTop)
-        && qFuzzyCompare(r, m_insetRight) && qFuzzyCompare(b, m_insetBottom))
+        && qFuzzyCompare(r, m_insetRight) && qFuzzyCompare(b, m_insetBottom)
+        && qFuzzyCompare(m_lastSafeTop, m_emittedSafeTop)
+        && qFuzzyCompare(m_lastSafeLeft, m_emittedSafeLeft))
         return;
     s_firstInsetsLog = false;
     // 每次安全区变化都留一行：现场排查「界面被挤到顶部 / 留白太大」时，
     // 一眼能看出是窗口被压扁、系统栏占位，还是两套算法给出了不同答案
-    qInfo("insets: win=%dx%d at %d,%d os=%d,%d safeTop=%.0f ime=%d src=%s -> %d,%d,%d,%d",
+    qInfo("insets: win=%dx%d at %d,%d os=%d,%d safeT/L=%.0f/%.0f ime=%d src=%s -> %d,%d,%d,%d",
           window ? int(window->width()) : -1, window ? int(window->height()) : -1,
           window ? window->x() : -1, window ? int(window->y()) : -1,
-          int(m_lastOsLeft), int(m_lastOsTop), m_lastSafeTop,
+          int(m_lastOsLeft), int(m_lastOsTop), m_lastSafeTop, m_lastSafeLeft,
           int(imeVisible),
           fromPlatform ? "os" : "fallback",
           int(l), int(t), int(r), int(b));
@@ -441,6 +450,8 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
     m_insetTop = t;
     m_insetRight = r;
     m_insetBottom = b;
+    m_emittedSafeTop = m_lastSafeTop;
+    m_emittedSafeLeft = m_lastSafeLeft;
     emit insetsChanged();
 }
 

@@ -164,6 +164,17 @@ QUrl MusicSource::buildUrl(const Endpoint &ep, const QVariantMap &vars, QVariant
 
 void MusicSource::call(const Endpoint &ep, const QVariantMap &vars, ReplyCallback cb)
 {
+    // 内置平台音源与脚本音源共用同一把风险确认锁：未在设置页完成
+    // 「我自己承担后果」+ 连点导入的确认（AppController::seedOnlineSources 置
+    // onlineSourcesUnlocked）前，所有取链请求（搜索/歌单/播放地址/歌词/MV）
+    // 一律不发出，保证全新安装时整个音源层都处于未初始化状态。
+    // 登录接口走 callLogin 的放行通道，账号功能不受影响。
+    if (!m_loginCall && !Settings::get(QStringLiteral("onlineSourcesUnlocked")).toBool()) {
+        HttpClient::Reply r;
+        r.error = QStringLiteral("音源未初始化：请先在设置页完成风险确认（输入「我自己承担后果」并连点导入）");
+        if (cb) cb(r);
+        return;
+    }
     if (!ep.valid()) {
         HttpClient::Reply r;
         r.error = QStringLiteral("该平台未配置此接口");
@@ -193,7 +204,10 @@ void MusicSource::callLogin(const QString &name, const QVariantMap &vars, ReplyC
     else if (name == QLatin1String("playlists")) ep = m_desc.login.playlists;
     else if (name == QLatin1String("favorites")) ep = m_desc.login.favorites;
     else if (name == QLatin1String("playlistDetail")) ep = m_desc.login.playlistDetail;
+    // 登录通道放行标记：只包住这一次 call，同步派发完即复位
+    m_loginCall = true;
     call(ep, vars, cb);
+    m_loginCall = false;
 }
 
 void MusicSource::requestSongs(const Endpoint &ep, const QVariantMap &vars, SongsCallback cb)

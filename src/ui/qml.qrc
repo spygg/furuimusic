@@ -26,6 +26,7 @@
         <file alias="AlbumCard.qml">qml/AlbumCard.qml</file>
         <file alias="SoftShadow.qml">qml/SoftShadow.qml</file>
         <file alias="Toast.qml">qml/Toast.qml</file>
+        <file alias="PactDialog.qml">qml/PactDialog.qml</file>
         <file alias="EmptyState.qml">qml/EmptyState.qml</file>
         <file alias="art/default_cover.jpg">art/default_cover.jpg</file>
     </qresource>

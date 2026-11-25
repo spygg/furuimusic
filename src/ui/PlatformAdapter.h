@@ -48,6 +48,13 @@ class PlatformAdapter : public QObject {
     Q_PROPERTY(qreal insetTop READ insetTop NOTIFY insetsChanged)
     Q_PROPERTY(qreal insetRight READ insetRight NOTIFY insetsChanged)
     Q_PROPERTY(qreal insetBottom READ insetBottom NOTIFY insetsChanged)
+    // Qt 自行对窗口内容区做的安全区内缩量（safeAreaMargins.top，钳制前原值）。
+    // insetTop 是「还差多少要由 QML 补」的差额，窗口铺满整屏且 Qt 已内缩时为 0；
+    // 但状态栏区域实际被 Qt 从内容区里切掉了这么多，QML 想让背景铺过去必须知道它。
+    Q_PROPERTY(qreal osSafeTop READ osSafeTop NOTIFY insetsChanged)
+    // 同 osSafeTop，只是横屏挖孔在左侧时 Qt 对内容区做的横向内缩量
+    // （safeAreaMargins.left）。窗口级背景要盖住挖孔那条必须知道它。
+    Q_PROPERTY(qreal osSafeLeft READ osSafeLeft NOTIFY insetsChanged)
     // 触控优先：车机即使跑桌面壳也是手指操作，hover 才有的入口必须常驻可见。
     // 桌面端按系统上报的输入设备自动判断（有触摸屏即为真），不再提供手开关。
     Q_PROPERTY(bool touchPrimary READ touchPrimary NOTIFY touchPrimaryChanged)
@@ -95,6 +102,8 @@ public:
     bool touchPrimary() const;
     qreal insetLeft() const { return m_insetLeft; }
     qreal insetTop() const { return m_insetTop; }
+    qreal osSafeTop() const { return m_lastSafeTop; }
+    qreal osSafeLeft() const { return m_lastSafeLeft; }
     qreal insetRight() const { return m_insetRight; }
     qreal insetBottom() const { return m_insetBottom; }
 
@@ -135,8 +144,13 @@ private:
     // 最近一次系统上报的原始 insets（扣掉 Qt 已让出的部分之前），只用于日志排查
     qreal m_lastOsLeft = 0;
     qreal m_lastOsTop = 0;
-    // Qt safeAreaMargins().top() 的原始值（钳制前），仅日志排查用
+    // Qt safeAreaMargins().top()/left() 的原始值（钳制前），供窗口背景反向延伸覆盖状态栏/挖孔
     qreal m_lastSafeTop = 0;
+    qreal m_lastSafeLeft = 0;
+    // 上次 emit insetsChanged 时的 safeArea 快照：横竖屏 l/t/r/b 都是 0 时
+    // 靠它判断原始安全区是否已变，避免 osSafeLeft/osSafeTop 绑定刷新不到。
+    qreal m_emittedSafeTop = 0;
+    qreal m_emittedSafeLeft = 0;
     // 窗口矩形变化时打一行几何日志（旋转/分屏/上下分屏切换时定位问题用）
     QRect m_lastGeom;
 };

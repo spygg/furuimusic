@@ -823,6 +823,17 @@ bool AppController::qishuiRoam() const
 { return Settings::boolean(QStringLiteral("qishuiRoam"), true); }   // 设置页已隐藏该开关，默认保持开启
 bool AppController::keepScreenOn() const
 { return Settings::boolean(QStringLiteral("keepScreenOn"), true); }
+
+void AppController::setMvScreenOn(bool on)
+{
+    if (m_mvScreenOn == on)
+        return;
+    m_mvScreenOn = on;
+    Logger::write(QStringLiteral("I"),
+                  QStringLiteral("[MV] 屏幕常亮 %1（与音乐播放态取或）").arg(on ? "开" : "关"));
+    emit mvScreenOnChanged();
+}
+
 QString AppController::searchType() const { return d->searchType; }
 bool AppController::openApiEnabled() const { return OpenApiServer::instance()->running(); }
 QString AppController::openApiAddress() const { return OpenApiServer::instance()->address(); }
@@ -846,6 +857,8 @@ bool AppController::qrActive() const { return AuthManager::instance()->qrActive(
 QString AppController::captchaImagePath() const { return AuthManager::instance()->captchaImagePath(); }
 QString AppController::accountApiBase() const
 { return Settings::string(QStringLiteral("accountApiBase")); }
+bool AppController::onlineSourcesUnlocked() const
+{ return Settings::get(QStringLiteral("onlineSourcesUnlocked")).toBool(); }
 void AppController::setAccountApiBase(const QString &value)
 { setSetting(QStringLiteral("accountApiBase"), value.trimmed()); }
 QString AppController::accountApiStatus(const QString &sourceId) const
@@ -2506,8 +2519,26 @@ void AppController::checkAllScriptSources()
 
 void AppController::rescanScriptSources()
 {
+    // 未通过风险确认闸门（输入「我自己承担后果」+ 连点导入）不允许解析仓库
+    if (!onlineSourcesUnlocked()) {
+        emit notify(QStringLiteral("在线解析音源未启用：请在下方输入框输入确认文字「我自己承担后果」并连点「导入」完成风险确认"),
+                    QStringLiteral("warning"));
+        return;
+    }
     ScriptSourceManager::instance()->rescanRepository();
     emit toast(QStringLiteral("正在从仓库页面发现音源…"));
+}
+
+void AppController::seedOnlineSources()
+{
+    if (!Settings::get(QStringLiteral("onlineSourcesUnlocked")).toBool()) {
+        Settings::set(QStringLiteral("onlineSourcesUnlocked"), true);
+        emit onlineSourcesUnlockedChanged();
+    }
+    // 解锁同时覆盖两层：内置平台取链（MusicSource::call 的锁）+ 仓库脚本发现。
+    // 走 rescanRepository 绕过每日节流，保证首次确认后立即真正初始化。
+    ScriptSourceManager::instance()->rescanRepository();
+    emit toast(QStringLiteral("已确认自行承担风险：内置平台音源已解锁，正在解析仓库页面初始化脚本音源…"));
 }
 
 } // namespace Furui

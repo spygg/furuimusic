@@ -184,6 +184,7 @@ set(UI_FILES
     ui/qml/MvMedia6.qml
     ui/qml/SoftShadow.qml
     ui/qml/Toast.qml
+    ui/qml/PactDialog.qml
     ui/qml/PlayerPage.qml
     ui/qml/SettingsPage.qml
     ui/qml/PlayBar.qml

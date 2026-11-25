@@ -224,9 +224,9 @@ Item {
             z: 30
             anchors.left: parent.left
             anchors.top: parent.top
-            // 只收顶部：安全区已由外壳内缩，22dp 的顶部下移让浅色背景下顶部显空（旧值 22）
+            // 只收顶部：安全区已由外壳内缩，顶部尽量贴上去（旧值 22 → 10 → 4）
             anchors.leftMargin: 22
-            anchors.topMargin: 10
+            anchors.topMargin: 4
             width: theme.touchMin
             height: theme.touchMin
 
@@ -256,7 +256,7 @@ Item {
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.rightMargin: 22
-            anchors.topMargin: 10
+            anchors.topMargin: 4
             spacing: 8
 
             // 队列 / MV / 设置：与参考项目右上角一样是小的半透明方按钮
@@ -465,6 +465,8 @@ Item {
                     Layout.minimumHeight: 80
                     visible: !root.compactTiny
                     clip: true
+                    // 横向手势让给「左滑返回上一页」，封面↔歌词改为点击切换
+                    interactive: false
 
                     // 第 1 页：封面保持正方形，整体略上移，封面下方显示当前一两句歌词，
                     // 填掉高屏上封面与页底之间的空白（封面边长封顶 300）
@@ -488,6 +490,36 @@ Item {
                             width: compactCoverPage.coverSide
                             height: compactCoverPage.coverSide
                             Loader { anchors.fill: parent; sourceComponent: coverComp }
+                        }
+                        // 封面区：点一下切到歌词页；横向左/右滑都 = 返回上一页
+                        // （右滑是 Android 后退手势习惯，左滑保留旧习惯，两个方向都能退）。
+                        // 用 MouseArea 手算位移（Qt6 上 DragHandler 会导致 surface
+                        // 提交卡死整页白屏，实测），不依赖 PointerHandler。
+                        // 注意 MouseArea 拖拽松手仍会派发 clicked：任何方向位移
+                        // 超出点击容差都要先置 swiped，否则左右滑都会误触切页。
+                        MouseArea {
+                            anchors.fill: parent
+                            z: 2
+                            property real pressX: 0
+                            property real pressY: 0
+                            property bool swiped: false
+                            onPressed: {
+                                pressX = mouse.x; pressY = mouse.y; swiped = false
+                            }
+                            onPositionChanged: {
+                                if (!pressed) return
+                                const dx = mouse.x - pressX
+                                const dy = mouse.y - pressY
+                                if (Math.abs(dx) > 24 || Math.abs(dy) > 24)
+                                    swiped = true
+                                if (Math.abs(dx) > Math.min(80, root.width * 0.18)
+                                        && Math.abs(dx) > Math.abs(dy) * 1.2)
+                                    root.requestClose()
+                            }
+                            onClicked: {
+                                if (!swiped)
+                                    pager.setCurrentIndex(1)
+                            }
                         }
                         // 封面下方歌词速览：跟随播放进度显示「上一句 / 当前句 / 下一句」三行。
                         // 数据直接取 app.lyricLines + app.currentLyricIndex（QML 侧索引），
@@ -565,6 +597,39 @@ Item {
                             anchors.fill: parent
                             sourceComponent: lyricComp
                         }
+                        // 歌词页空白：点一下回封面；横向左/右滑都 = 返回上一页。
+                        // z 更低，纵向滚动仍由上层 ListView 处理。
+                        // 任何方向位移超出点击容差先置 swiped，抑制松手误触点击。
+                        MouseArea {
+                            anchors.fill: parent
+                            z: -1
+                            property real pressX: 0
+                            property real pressY: 0
+                            property bool swiped: false
+                            onPressed: {
+                                pressX = mouse.x; pressY = mouse.y; swiped = false
+                                console.log("[swipe-debug] bg onPressed", mouse.x, mouse.y)
+                            }
+                            onPositionChanged: {
+                                if (!pressed) return
+                                const dx = mouse.x - pressX
+                                const dy = mouse.y - pressY
+                                if (Math.abs(dx) > 30 || Math.abs(dy) > 30)
+                                    console.log("[swipe-debug] bg move dx=", dx.toFixed(1), "dy=", dy.toFixed(1))
+                                if (Math.abs(dx) > 24 || Math.abs(dy) > 24)
+                                    swiped = true
+                                if (Math.abs(dx) > Math.min(80, root.width * 0.18)
+                                        && Math.abs(dx) > Math.abs(dy) * 1.2) {
+                                    console.log("[swipe-debug] bg requestClose")
+                                    root.requestClose()
+                                }
+                            }
+                            onClicked: {
+                                console.log("[swipe-debug] bg clicked swiped=", swiped)
+                                if (!swiped)
+                                    pager.setCurrentIndex(0)
+                            }
+                        }
                     }
                 }
 
@@ -578,15 +643,24 @@ Item {
                         spacing: 6
                         Repeater {
                             model: 2
-                            Rectangle {
-                                width: 6
-                                height: 6
-                                radius: 3
-                                color: pager.currentIndex === index
-                                       ? root.cPrimary
-                                       : (root.isDark ? Qt.rgba(1, 1, 1, 0.25)
-                                                      : Qt.rgba(0, 0, 0, 0.18))
-                                Behavior on color { ColorAnimation { duration: 150 } }
+                            Item {
+                                width: 34
+                                height: 22
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: 6
+                                    height: 6
+                                    radius: 3
+                                    color: pager.currentIndex === index
+                                           ? root.cPrimary
+                                           : (root.isDark ? Qt.rgba(1, 1, 1, 0.25)
+                                                          : Qt.rgba(0, 0, 0, 0.18))
+                                    Behavior on color { ColorAnimation { duration: 150 } }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: pager.setCurrentIndex(index)
+                                }
                             }
                         }
                     }
@@ -944,20 +1018,33 @@ Item {
             // 控制行是 5 枚触控按钮 + 1 个主按钮。360dp 手机按 48dp 触控位 + 12 间距
             // 需要 358dp，扣掉页面左右留白后放不下，最右的音量按钮会被裁掉。
             // 这里按可用宽度反推按钮尺寸与间距，窄屏自动收小，宽屏保持 48dp。
-            readonly property int ctrlPlayW: root.wide ? 64 : (root.ultraTiny ? 46 : 58)
+            readonly property int ctrlPlayW: root.wide ? 66 : (root.ultraTiny ? 46 : 60)
+            // 三档尺寸：主按钮(ctrlPlayW) > 切歌键(ctrlSkipW) > 功能键(ctrlBtn)。
+            // 切歌键比功能键大 skipExtra，先从可用宽度扣掉这 2 个增量再均分，保证窄屏不溢出。
+            readonly property int skipExtra: 8
             readonly property int ctrlBtn: {
                 var avail = Math.max(0, width - ctrlPlayW)
                 var gapTarget = root.wide ? 18 : 12
-                var byWidth = Math.floor((avail - gapTarget * 5) / 5)
+                var byWidth = Math.floor((avail - gapTarget * 5 - skipExtra * 2) / 5)
                 // 触屏优先的车机/手机不能为了塞下 5 枚按钮缩到 34dp，
                 // 间距会自动收到 2dp；桌面鼠标保持旧行为。
                 var floorSize = platform.touchPrimary ? theme.touchMin : 34
                 return Math.max(floorSize, Math.min(theme.touchMin, byWidth))
             }
+            // 切歌键：介于功能键与主按钮之间，窄屏至少比功能键大 4dp，宽屏主按钮仍最大
+            readonly property int ctrlSkipW: Math.max(ctrlBtn + 4,
+                                                     Math.min(ctrlBtn + skipExtra, ctrlPlayW - 4))
             readonly property int ctrlGap: {
-                var avail = Math.max(0, width - ctrlPlayW - ctrlBtn * 5)
+                var avail = Math.max(0, width - ctrlPlayW - ctrlBtn * 3 - ctrlSkipW * 2)
                 return Math.max(2, Math.min(root.wide ? 18 : 12, Math.floor(avail / 5)))
             }
+            // 所有按钮共用统一行高（=主按钮直径）。Row 只做横向排列、顶边对齐，
+            // 子项同高才能保证各图标中心在同一水平线上（旧代码主按钮 58、其余 48 差 5px）。
+            readonly property int ctrlRowH: ctrlPlayW
+            // 切歌键图标再放大一档，与主按钮形成清晰的大小层级
+            readonly property int ctrlSkipIcon: ctrlBtn >= 44 ? 30 : 26
+            // Android 有实体音量键，工具条不显示音量按钮；桌面保留
+            readonly property bool showVolumeBtn: Qt.platform.os !== "android"
 
             Row {
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -965,9 +1052,10 @@ Item {
 
                 // 收藏
                 Item {
-                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
+                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlRowH
                     Rectangle {
-                        anchors.fill: parent
+                        width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
+                        anchors.centerIn: parent
                         radius: height / 2
                         color: likeArea.containsMouse ? root.chipBg : "transparent"
                         Behavior on color { ColorAnimation { duration: 150 } }
@@ -990,11 +1078,11 @@ Item {
                 }
 
                 Item {
-                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
+                    width: controlsCol.ctrlSkipW; height: controlsCol.ctrlRowH
                     GlyphIcon {
                         anchors.centerIn: parent
                         name: "prev"
-                        size: 19
+                        size: controlsCol.ctrlSkipIcon
                         color: root.ink
                         opacity: prevArea.pressed ? 0.5 : 0.92
                     }
@@ -1018,7 +1106,7 @@ Item {
                     GlyphIcon {
                         anchors.centerIn: parent
                         name: app.playing ? "pause" : "play"
-                        size: 22
+                        size: 30
                         color: root.isDark ? "#101216" : "#FFFFFF"
                     }
                     MouseArea {
@@ -1031,11 +1119,11 @@ Item {
                 }
 
                 Item {
-                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
+                    width: controlsCol.ctrlSkipW; height: controlsCol.ctrlRowH
                     GlyphIcon {
                         anchors.centerIn: parent
                         name: "next"
-                        size: 19
+                        size: controlsCol.ctrlSkipIcon
                         color: root.ink
                         opacity: nextArea.pressed ? 0.5 : 0.92
                     }
@@ -1049,9 +1137,10 @@ Item {
 
                 // 播放模式：图标随模式变化（顺序 / 循环 / 单曲 / 随机）
                 Item {
-                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
+                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlRowH
                     Rectangle {
-                        anchors.fill: parent
+                        width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
+                        anchors.centerIn: parent
                         radius: height / 2
                         color: modeArea.containsMouse ? root.chipBg : "transparent"
                         Behavior on color { ColorAnimation { duration: 150 } }
@@ -1074,10 +1163,14 @@ Item {
 
                 // 音量：点开垂直滑块弹层（竖屏浮在控制行上方、宽屏浮在控件块上方，
                 // 同一个 volPopupComp；不再用宽屏常驻横条）
+                // Android 用实体音量键，隐藏此按钮；width 归零让它不占 Row 空间。
                 Item {
-                    width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
+                    width: controlsCol.showVolumeBtn ? controlsCol.ctrlBtn : 0
+                    height: controlsCol.ctrlRowH
+                    visible: controlsCol.showVolumeBtn
                     Rectangle {
-                        anchors.fill: parent
+                        width: controlsCol.ctrlBtn; height: controlsCol.ctrlBtn
+                        anchors.centerIn: parent
                         radius: height / 2
                         color: (compactVolArea.containsMouse || root.volumePopupOpen)
                                ? root.chipBg : "transparent"
@@ -1342,25 +1435,40 @@ Item {
                             }
                         }
 
-                        // 单击歌词行直接跳到该行时间（参考洛雪 PlayLine 的点行定位）。
-                        // 用按下/松开的位移区分「点击」与「拖动列表」，滚动歌词时不会误触 seek。
+                        // 单击歌词行：切回封面页（不再点行跳进度，打断播放体验差）。
+                        // 纵向拖动由上层 ListView 接管滚动；横向左/右滑 = 返回上一页
+                        //（行铺满整页，横滑手势必须在这里处理，空白区那层 z:-1 收不到）。
                         MouseArea {
                             z: 2
                             anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
+                            property real pressX: -1
                             property real pressY: -1
-                            onPressed: pressY = mouseY
+                            onPressed: {
+                                pressX = mouse.x; pressY = mouse.y
+                                console.log("[swipe-debug] row onPressed", mouse.x, mouse.y)
+                            }
+                            onPositionChanged: {
+                                if (pressX < 0) return
+                                const dx = mouse.x - pressX
+                                const dy = mouse.y - pressY
+                                if (Math.abs(dx) > 30 || Math.abs(dy) > 30)
+                                    console.log("[swipe-debug] row move dx=", dx.toFixed(1), "dy=", dy.toFixed(1))
+                                if (Math.abs(dx) > Math.min(80, root.width * 0.18)
+                                        && Math.abs(dx) > Math.abs(dy) * 1.2) {
+                                    pressX = -1   // 防止一次拖动重复触发
+                                    console.log("[swipe-debug] row requestClose")
+                                    root.requestClose()
+                                }
+                            }
                             onReleased: {
-                                if (pressY < 0 || Math.abs(mouseY - pressY) > 10)
+                                console.log("[swipe-debug] row released dx=", (mouseX - pressX).toFixed(1), "dy=", (mouseY - pressY).toFixed(1))
+                                if (pressX < 0 || pressY < 0) return
+                                // 松手位置离按下位置很近才算点击；拖动列表/横滑都不切换
+                                if (Math.abs(mouseX - pressX) > 10
+                                        || Math.abs(mouseY - pressY) > 10)
                                     return
-                                if (!lyricView.timed || index >= app.lyricTimes.length)
-                                    return
-                                const t = Number(app.lyricTimes[index])
-                                if (!isFinite(t)) return
-                                lyricView.userScrolling = false
-                                lyricView.dragRow = -1
-                                app.seek(t)
-                                lyricView.centerOn(index)
+                                pressX = -1
+                                pager.setCurrentIndex(0)
                             }
                         }
                     }

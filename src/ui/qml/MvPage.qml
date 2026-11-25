@@ -17,16 +17,35 @@ Rectangle {
     // MV 全屏恒黑：亮色主题下状态栏是深色图标，压在黑底上时间/电量全都看不见。
     // 外壳用 opacity+enabled 控制 MV 显隐（不能动 visible，Android 会销毁 video
     // sink），所以监听 enabled：进 MV 强制浅色图标，退出恢复跟随主题。
-    onEnabledChanged: theme.statusBarOverride = enabled ? 1 : -1
+    // MV 期间临时预览深色主题：ColorOS 在浅色主题下会持续强制
+    // LIGHT_STATUS_BARS（白底深字），App 侧 setSystemBarsAppearance 会被系统改回，
+    // 导致白状态栏压在黑色 MV 上割裂。MV 页本来全黑，切深色用户无感；
+    // 退出时用 previewMode 恢复原主题（不写持久化设置）。
+    property string savedThemeMode: ""
+
+    function syncScreenState(on) {
+        if (on) {
+            savedThemeMode = theme.mode
+            if (theme.mode !== "dark")
+                theme.previewMode("dark")
+        } else if (savedThemeMode.length > 0) {
+            theme.previewMode(savedThemeMode)
+            savedThemeMode = ""
+        }
+        theme.statusBarOverride = on ? 1 : -1
+        // 进 MV 会暂停音乐，屏幕常亮不能只跟着音乐播放态；单独告知原生侧。
+        app.mvScreenOn = on
+    }
+    onEnabledChanged: syncScreenState(enabled)
     // 外壳重建/页面销毁时可能来不及走 enabled→false，留下全局 override；
     // 只在仍由本页置位时才复位，避免误伤另一个 MV 实例。
     Component.onDestruction: {
         if (theme.statusBarOverride === 1)
-            theme.statusBarOverride = -1
+            syncScreenState(false)
     }
     onVisibleChanged: {
         if (!visible && theme.statusBarOverride === 1)
-            theme.statusBarOverride = -1
+            syncScreenState(false)
     }
 
     signal requestClose()

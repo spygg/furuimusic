@@ -79,6 +79,8 @@ public:
     QVariantMap songVars(const Song &song, const QString &quality) const;
 
 private:
+    // 登录接口放行标记：callLogin 置位，绕过风险确认锁（账号功能不依赖音源初始化）
+    bool m_loginCall = false;
     QUrl buildUrl(const Endpoint &ep, const QVariantMap &vars, QVariantMap *headers,
                   QByteArray *body) const;
     void requestSongs(const Endpoint &ep, const QVariantMap &vars, SongsCallback cb);

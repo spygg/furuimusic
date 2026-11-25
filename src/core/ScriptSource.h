@@ -149,6 +149,14 @@ private:
     QHash<QString, QPointer<ScriptEngine>> m_engines;
     QHash<QString, QVector<std::function<void(bool)>>> m_waiters;
     QSet<QString> m_starting;
+    // ensureEngine 失败冷却：启动 warmUp/首次取链检查过一次后，运行期失败
+    // 不再反复拉起引擎（每次初始化都要跑脚本自检，失败源反复重试只会刷错误提示）。
+    // value = 上次失败的 epoch ms；成功即移除。用户手动「检查」走 check()，不受冷却限制。
+    QHash<QString, qint64> m_engineFailAt;
+    // 「脚本×平台」本会话累计取链/播放失败次数（key 同 m_score）。
+    // ≥2 的候选在换源时直接跳过：用户要求「播放每次尝试切换音源自动跳过失败的音源」。
+    // 成功一次即清零恢复；会话级不持久化，重启后重新给机会。
+    QHash<QString, int> m_candidateFails;
 };
 
 } // namespace Furui

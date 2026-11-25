@@ -1,134 +1,87 @@
 import QtQuick 2.15
-import QtQuick.Layouts 1.15
 
-// 全局轻提示：替代原来 44px 白底描边的裸矩形。
-// 设计要点：语义色图标 + 主题卡片 + 三层伪投影 + 下方滑入淡出；
-// 纯 QML Rectangle 实现，不依赖 QtGraphicalEffects / MultiEffect，
-// Qt5 桌面与 Qt6 Android 表现一致。
+// 全局轻提示 —— Android Material snackbar 风格：
+// 深色半透明胶囊 + 语义色圆点 + 白字，底部居中上滑淡入。
+// 亮暗主题统一用深底白字（toast 是浮层，固定深底在任何页面背景上都清晰、不突兀）；
+// 纯 QML Rectangle 实现，Qt5 桌面与 Qt6 Android 表现一致。
 Item {
     id: root
 
     property string message: ""
     // info / success / error / warning
     property string kind: "info"
-    property int autoHideMs: 2400
+    property int autoHideMs: 2200
     property bool opened: false
 
-    // 上限放宽到 560，短文案不必再被挤成两行；同时保留 200 下限与 32px 边距
-    width: Math.min(560, Math.max(200, (parent ? parent.width : 560) - 32))
-    height: card.height + 12
+    // 文案最大宽度：窗口宽 - 胶囊内边距，超长换行（最多两行）
+    readonly property real maxLabelW: (parent ? parent.width : 560) - 96
+    readonly property bool twoLines: label.lineCount > 1
+
+    width: Math.min((parent ? parent.width : 560) - 48,
+                    Math.max(160, label.implicitWidth + 56))
+    height: twoLines ? 68 : 44
     opacity: root.opened ? 1 : 0
     // opacity 归零后不再接收鼠标事件，避免挡住底部播放栏
     visible: root.opened || root.opacity > 0.01
+    scale: root.opened ? 1.0 : 0.94
 
-    Behavior on opacity { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+    Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+    Behavior on scale { NumberAnimation { duration: 220; easing.type: Easing.OutBack } }
+    Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+    Behavior on height { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
 
     transform: Translate {
         id: slide
-        y: root.opened ? 0 : 18
-        Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+        y: root.opened ? 0 : 26
+        Behavior on y { NumberAnimation { duration: 240; easing.type: Easing.OutCubic } }
     }
 
-    readonly property color tone: root.kind === "success" ? theme.success
-                                : root.kind === "error" ? theme.danger
-                                : root.kind === "warning" ? theme.vip
-                                : theme.accent
-    readonly property string glyph: root.kind === "success" ? "check"
-                                  : root.kind === "error" ? "close"
-                                  : root.kind === "warning" ? "refresh"
-                                  : "music"
+    readonly property color tone: root.kind === "success" ? "#4ADE80"
+                                : root.kind === "error" ? "#F87171"
+                                : root.kind === "warning" ? "#FBBF24"
+                                : "#60A5FA"
 
-    // 三层错位圆角矩形模拟柔和落影：浅色用带冷调的深灰，深色用极低透明度黑
-    Repeater {
-        model: 3
-        delegate: Rectangle {
-            readonly property int level: index + 1
-            x: -level * 3
-            y: level * 3
-            width: card.width + level * 6
-            height: card.height + level * 6
-            radius: card.radius + level * 3
-            color: Qt.rgba(theme.shadowTint.r, theme.shadowTint.g, theme.shadowTint.b,
-                           (theme.dark ? 0.10 : 0.055) / level)
-            z: -level
-        }
+    // 单层柔和落影：半透明胶囊下压一片更淡的同形矩形即可，多层投影反而显重
+    Rectangle {
+        x: 2; y: 4
+        width: pill.width; height: pill.height
+        radius: pill.radius
+        color: Qt.rgba(0, 0, 0, 0.18)
+        z: -1
     }
 
     Rectangle {
-        id: card
-        width: root.width
-        height: Math.max(58, body.implicitHeight + 22)
-        radius: theme.radiusMd
-        color: theme.card
-        border.color: theme.line
+        id: pill
+        anchors.fill: parent
+        radius: height / 2
+        // 深色磨砂底：固定深底白字，亮暗主题、任何页面背景上都清晰
+        color: Qt.rgba(0.10, 0.11, 0.14, 0.92)
+        border.color: Qt.rgba(1, 1, 1, 0.08)
         border.width: 1
 
-        // 左侧 3px 语义色条：一眼区分成功 / 失败 / 警告 / 普通信息
-        Rectangle {
-            anchors.left: parent.left
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            anchors.margins: 1
-            width: 3
-            radius: 2
-            color: root.tone
-            opacity: 0.9
-        }
+        Row {
+            anchors.centerIn: parent
+            spacing: 10
 
-        RowLayout {
-            id: body
-            anchors.fill: parent
-            anchors.leftMargin: 18
-            anchors.rightMargin: 10
-            spacing: 12
-
+            // 语义色圆点：一眼区分成功 / 失败 / 警告 / 信息，比大图标轻盈
             Rectangle {
-                Layout.preferredWidth: 34
-                Layout.preferredHeight: 34
-                Layout.alignment: Qt.AlignVCenter
-                radius: 17
-                color: Qt.rgba(root.tone.r, root.tone.g, root.tone.b, 0.14)
-                GlyphIcon {
-                    anchors.centerIn: parent
-                    name: root.glyph
-                    size: 16
-                    color: root.tone
-                }
+                width: 8; height: 8
+                anchors.verticalCenter: parent.verticalCenter
+                radius: 4
+                color: root.tone
             }
 
             Text {
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignVCenter
+                id: label
+                anchors.verticalCenter: parent.verticalCenter
                 text: root.message
-                color: theme.text
-                font.pixelSize: theme.fontMd
+                color: "#F4F6FA"
+                font.pixelSize: theme.fontSm
+                lineHeight: 1.15
                 wrapMode: Text.Wrap
-                // 参考洛雪的轻提示：最多两行，长文案截断。整段异常（HTTP 错误、
-                // 脚本报错）留给状态栏与设置页，不该糊在屏幕上
                 maximumLineCount: 2
                 elide: Text.ElideRight
-                verticalAlignment: Text.AlignVCenter
-            }
-
-            Rectangle {
-                Layout.preferredWidth: 26
-                Layout.preferredHeight: 26
-                Layout.alignment: Qt.AlignVCenter
-                radius: 13
-                color: closeArea.containsMouse ? theme.cardHover : "transparent"
-                GlyphIcon {
-                    anchors.centerIn: parent
-                    name: "close"
-                    size: 11
-                    color: theme.subText
-                }
-                MouseArea {
-                    id: closeArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: root.hide()
-                }
+                width: Math.min(implicitWidth, root.maxLabelW)
             }
         }
     }

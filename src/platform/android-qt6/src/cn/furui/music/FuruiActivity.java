@@ -1,10 +1,15 @@
-// 福瑞音乐 - 自定义 Activity：只在 QtActivity 之上加返回键埋点日志，
-// 用于诊断 ColorOS Android16 上「MV 页返回键不进 QML、Activity 被 finish、
-// hwuiTask 线程 SIGABRT」的问题。不改任何行为，只打日志。
+// 福瑞音乐 - 自定义 Activity：在 QtActivity 之上做两件事：
+//  1) 返回键/媒体键埋点与车机媒体键转派（诊断 ColorOS Android16 的返回键问题）；
+//  2) 参考 legado 设置透明状态栏 + LAYOUT_FULLSCREEN，让 QML 背景铺到挖孔区。
 package cn.furui.music;
 
+import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.KeyEvent;
+import android.view.View;
+import android.view.Window;
+import android.view.WindowManager;
 import android.util.Log;
 
 public class FuruiActivity extends org.qtproject.qt.android.bindings.QtActivity
@@ -12,6 +17,10 @@ public class FuruiActivity extends org.qtproject.qt.android.bindings.QtActivity
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // 参考 legado 的 fullScreen()+透明状态栏：让 QML 窗口铺到状态栏/挖孔区下方，
+        // 由 QML 自己画背景，状态栏透明，避免 ColorOS 强绘白底造成割裂。
+        // 只用平台标准 API，不做 OEM 反射；Qt 侧 PlatformAdapter 会按 insets 内缩内容。
+        setupTransparentStatusBar();
         // 车机兼容版挂钩：该变体（包名 com.netease.cloudmusic.iot，车机上须先卸载
         // 官方网易云）在 dex 里额外包含 BydVoiceHelper，用于向比亚迪小迪语音登记；
         // 主流版不含此类，Class.forName 落空 → no-op，两个版本共用这份源码。
@@ -24,6 +33,27 @@ public class FuruiActivity extends org.qtproject.qt.android.bindings.QtActivity
         } catch (Throwable t) {
             Log.w("FuruiBack", "car compat hook failed", t);
         }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void setupTransparentStatusBar() {
+        Window window = getWindow();
+        if (window == null)
+            return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+ 的官方开关：decor 不自动为系统栏留白，由 View 的 insets 处理。
+            window.setDecorFitsSystemWindows(true);
+        }
+        View decor = window.getDecorView();
+        // LAYOUT_FULLSCREEN + LAYOUT_STABLE：内容可以画到状态栏下，且旋转/切主题时
+        // insets 高度稳定。这是 legado ActivityExtensions.fullScreen() 的核心两行。
+        decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
+                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP)
+            window.setStatusBarColor(Color.TRANSPARENT);
     }
 
     @Override

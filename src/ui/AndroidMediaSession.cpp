@@ -142,17 +142,21 @@ void requestNotificationPermission()
     });
 }
 
-// 前台播放时保持屏幕常亮：用官方推荐的 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON，
-// 无需 WAKE_LOCK 权限，系统会在窗口销毁时自动清理。关闭开关或暂停播放时清掉 flag。
-// playing 由调用方传入，是否启用读设置（keepScreenOn，默认开）。
+// 前台播放 / MV 沉浸页保持屏幕常亮：用官方推荐的 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON，
+// 无需 WAKE_LOCK 权限，系统会在窗口销毁时自动清理。关闭开关且音乐与 MV 都停时清掉 flag。
+// playing 由调用方传入；MV 打开时 AppController::mvScreenOn 为 true（进 MV 会暂停音乐，
+// 但视频仍在播，不能跟着音乐状态把屏关掉）。MV 常亮不依赖「播放时常亮」设置项：
+// 视频看完前熄屏属于异常体验；音乐侧仍读设置（keepScreenOn，默认开）。
 //
 // 注意：Qt 的事件循环跑在 qtMainLoopThread，不是 Android 的 UI 线程；Window.addFlags()
 // 会触发 view layout 更新，必须从 Android UI 线程调用，否则抛 CalledFromWrongThreadException
 // 且 flag 不生效。这里用 runOnAndroidMainThread 把 JNI 操作切到 UI 线程。
 void applyKeepScreenOn(bool playing)
 {
-    const bool enabled = playing
-                         && Settings::boolean(QStringLiteral("keepScreenOn"), true);
+    AppController *app = AppController::instance();
+    const bool mvActive = app && app->mvScreenOn();
+    const bool enabled = mvActive
+                         || (playing && Settings::boolean(QStringLiteral("keepScreenOn"), true));
     QNativeInterface::QAndroidApplication::runOnAndroidMainThread([enabled]() {
         QJniObject activity = QJniObject::callStaticObjectMethod(
             "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
@@ -302,6 +306,12 @@ AndroidMediaSession::AndroidMediaSession(QObject *parent) : QObject(parent)
 
     // 设置页切换「播放时常亮」后立即生效（不必等下一次播放/暂停）
     connect(AppController::instance(), &AppController::settingsChanged, this, [this] {
+        applyKeepScreenOn(PlayerController::instance()->playing());
+    });
+
+    // MV 页开关独立驱动常亮：进 MV 时音乐会被暂停，若只听 PlayerController 的
+    // stateChanged 就会把 FLAG_KEEP_SCREEN_ON 清掉，视频播着播着屏幕就熄了。
+    connect(AppController::instance(), &AppController::mvScreenOnChanged, this, [this] {
         applyKeepScreenOn(PlayerController::instance()->playing());
     });
 }

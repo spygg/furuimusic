@@ -22,6 +22,27 @@ ApplicationWindow {
     color: theme.bg
     Behavior on color { ColorAnimation { duration: theme.durationBase } }
 
+    // 全窗封面氛围底（仅移动端）：铺满整个窗口，含状态栏/挖孔区。
+    // Android 上状态栏已设为透明，透出的必须是这张图本身；若背景留在外壳
+    // （被安全区 topMargin 内缩），状态栏那条就只剩窗口纯色，和下面封面背景
+    // 之间出现明显分界。参考 legado：窗口级铺图，状态栏与页面共用同一张底图。
+    // 桌面端外壳有自己的背景，这里不启用；账号/设置页仍用纯主题底。
+    Backdrop {
+        // Qt 把内容区按安全区内缩了 osSafeTop（状态栏/挖孔高度），insetTop 此时为 0。
+        // 背景要盖住状态栏那条，必须反向延伸回去：topMargin = -osSafeTop。
+        anchors.fill: parent
+        anchors.topMargin: -platform.osSafeTop
+        // 横屏挖孔在左侧：Qt 把内容区从左边内缩 osSafeLeft，背景反向延伸盖住那条白边
+        anchors.leftMargin: -platform.osSafeLeft
+        visible: platform.isMobile && theme.coverLyricBackground
+                 && shell.item && shell.item.pageIndex !== 2 && shell.item.pageIndex !== 3
+        source: app.currentCover.length > 0 ? app.currentCover
+                                            : "qrc:/qml/art/default_cover.jpg"
+        dark: theme.dark
+        veil: shell.item && shell.item.pageIndex === 1 ? 0.62 : 0.90
+        Behavior on veil { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+    }
+
     // ---- Android 返回键主通道（onClosing）----
     // Keys.onReleased（见下方 Loader）依赖 activeFocusItem 的焦点链，实测在部分
     // 机型/页面状态下收不到返回键（ColorOS Android16 上 MV 页 100% 收不到）；
@@ -148,7 +169,10 @@ ApplicationWindow {
         property int swaps: 0
         anchors.fill: parent
         // 安全区：状态栏/导航栏/刘海占掉的边距，直接内缩内容区，页面无需各自猜
-        anchors.leftMargin: platform.insetLeft
+        // 左侧：横屏挖孔在左侧时 Qt 已把 contentItem 内缩 osSafeLeft，这里反向减掉，
+        // 让内容顶到屏幕最左、左侧不留那条 margin。竖屏 osSafeLeft=0 不受影响
+        // （竖屏顶部仍保留安全区，按钮要避开挖孔）；桌面恒 0。
+        anchors.leftMargin: platform.insetLeft - platform.osSafeLeft
         anchors.rightMargin: platform.insetRight
         anchors.topMargin: platform.insetTop
         anchors.bottomMargin: platform.insetBottom
@@ -293,6 +317,9 @@ ApplicationWindow {
     onScreenChanged: formFactorTimer.restart()
 
     Component.onCompleted: {
+        // 首次运行许可协议：未签署就全屏弹出（在 showPlayerOnStart 之前，
+        // 协议未接受时不该直接进播放页）
+        pact.init()
         // 车机冷启动时窗口尺寸可能要到 show 之后才落到真实值，先按当前尺寸定一次形态
         win.evaluateFormFactor()
         formFactorTimer.restart()
@@ -434,6 +461,17 @@ ApplicationWindow {
         anchors.bottom: parent.bottom
         anchors.bottomMargin: Math.round(theme.spaceLg * 5)
         z: 10000
+    }
+
+    // 首次运行许可协议（参照 lx-music-mobile 的 PactModal）：
+    // 未签署前全屏盖住整个应用，「不接受」直接退出；签署状态持久化 pactAccepted。
+    PactDialog {
+        id: pact
+        z: 10050
+        visible: false
+        afterAccept: function() {
+            toast.show("本软件完全免费且开源，如果你是花钱购买的，请直接给差评！", "info")
+        }
     }
 
     // ---- 点 ✕ 时的行为询问（托盘可用且没记住过选择时才弹）----

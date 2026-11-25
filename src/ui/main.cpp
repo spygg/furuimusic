@@ -489,21 +489,29 @@ int main(int argc, char *argv[])
             if (auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0))) {
                 // FURUI_CAPTURE_PAGE 可在截图前直接切到指定页面（0 曲库 / 1 播放 /
                 // 2 账号 / 3 设置，4 是 MV 覆盖页），免得为了截播放页去模拟点击侧栏
+                // FURUI_CAPTURE_SOURCES=1：同时展开设置页「在线音源」分组（配合 PAGE=3）
+                const bool wantSources = qEnvironmentVariableIntValue("FURUI_CAPTURE_SOURCES") > 0;
                 const QString page = qEnvironmentVariable("FURUI_CAPTURE_PAGE");
-                if (!page.isEmpty() && window->contentItem()) {
+                if ((!page.isEmpty() || wantSources) && window->contentItem()) {
                     // 页面索引在 MainDesktop / MainMobile 里，外壳是经 Loader 载入的，
-                    // 所以要递归找带 pageIndex 属性的节点，只扫第一层是找不到的
-                    std::function<bool(QQuickItem *)> seek = [&seek, page](QQuickItem *it) {
-                        if (it->property("pageIndex").isValid()) {
-                            it->setProperty("pageIndex", page.toInt());
+                    // 所以要递归找带 pageIndex 属性的节点，只扫第一层是找不到的。
+                    // 两个目标属性挂在不同的节点上（pageIndex 在外壳、sourcesExpanded
+                    // 在 SettingsPage 根部），各自独立递归查找、找到即停。
+                    std::function<bool(QQuickItem *, const char *, const QVariant &)>
+                            seekProp = [&seekProp](QQuickItem *it, const char *name,
+                                                   const QVariant &value) -> bool {
+                        if (it->property(name).isValid()) {
+                            it->setProperty(name, value);
                             return true;
                         }
                         for (QQuickItem *c : it->childItems())
-                            if (seek(c)) return true;
+                            if (seekProp(c, name, value)) return true;
                         return false;
                     };
-                    for (QQuickItem *child : window->contentItem()->childItems())
-                        if (seek(child)) break;
+                    if (!page.isEmpty())
+                        seekProp(window->contentItem(), "pageIndex", page.toInt());
+                    if (wantSources)
+                        seekProp(window->contentItem(), "sourcesExpanded", true);
                 }
                 // FURUI_CAPTURE_TAB 可在截图前把音乐库切到指定 Tab（4 = 发现榜单）
                 const QString tab = qEnvironmentVariable("FURUI_CAPTURE_TAB");

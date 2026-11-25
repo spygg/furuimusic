@@ -108,29 +108,9 @@ Item {
     // 横屏手机（高度 < 420dp）内容区只有 300dp 上下，底部两栏必须进一步收薄
     readonly property bool shortViewport: root.height < 420
 
-    // 兜底色：封面还没解码出来时先铺主题底，避免首帧透明
-    Rectangle {
-        anchors.fill: parent
-        color: cBg
-    }
-
-    // 封面氛围底：铺满整个窗口，包括左侧导航栏与状态栏区域。
-    // 背景归外壳统一负责之后，横屏才不会出现「左边一条白色侧栏、右边是封面」的割裂感
-    // （这正是以前看着像没铺到屏幕左边缘的原因）。页面只负责内容，不再各自画背景。
-    Backdrop {
-        anchors.fill: parent
-        // 设置页关掉「封面作为歌词背景」后整窗退回纯主题底色。
-        // 账号 / 设置页以裸文字、分组标题和表单为主，封面氛围底即使压到 0.9 的纱，
-        // 浅色主题下的灰色说明文字仍会被封面大字穿透；这两页直接用纯主题底，
-        // 曲库（卡片承载内容）和播放页保留氛围。
-        visible: theme.coverLyricBackground && root.pageIndex !== 2 && root.pageIndex !== 3
-        source: app.currentCover.length > 0 ? app.currentCover
-                                            : "qrc:/qml/art/default_cover.jpg"
-        dark: theme.dark
-        // 播放页纱薄一些（要能看出封面色彩），其它页纱厚一些（列表与表单要压得住背景）
-        veil: root.pageIndex === 1 ? 0.62 : 0.90
-        Behavior on veil { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-    }
+    // 背景已提到窗口级（Main.qml 的 Backdrop），铺满整窗含状态栏/挖孔区，
+    // 让透明状态栏透出的是同一张模糊封面，与页面内容区上下连成一片。
+    // 这里不再画外壳背景或兜底实色，否则会盖住窗口底图、在状态栏下沿留出接缝。
 
     // 页面区：填满顶部到底部栏之间的区域。不用 ColumnLayout 流式堆叠——Android
     // adjustResize 弹起软键盘时窗口高度被压扁，ColumnLayout 会先把 fillHeight 的

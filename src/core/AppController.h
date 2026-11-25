@@ -165,6 +165,9 @@ class AppController : public QObject {
     Q_PROPERTY(bool qishuiRoam READ qishuiRoam NOTIFY settingsChanged)
     // 播放时常亮（仅 Android 有效）：前台播放时锁屏不熄灭
     Q_PROPERTY(bool keepScreenOn READ keepScreenOn NOTIFY settingsChanged)
+    // MV 沉浸页常亮：进 MV 会暂停音乐，但视频仍在播，屏幕不能跟着音乐状态熄掉。
+    // MV 常亮不受「播放时常亮」设置影响，由 AndroidMediaSession 统一落地到窗口 flag。
+    Q_PROPERTY(bool mvScreenOn READ mvScreenOn WRITE setMvScreenOn NOTIFY mvScreenOnChanged)
     // 搜索态（曲库页有关键词）：外壳据此隐藏播放栏，给搜索结果/软键盘让出空间
     Q_PROPERTY(bool searchActive READ searchActive WRITE setSearchActive NOTIFY searchActiveChanged)
     // 冷启动时若有播放历史或续播状态，外壳直接进播放页
@@ -195,6 +198,9 @@ class AppController : public QObject {
     // 自建账号 API 服务地址（未配置时只有网易云是内置真实实现）
     Q_PROPERTY(QString accountApiBase READ accountApiBase WRITE setAccountApiBase NOTIFY settingsChanged)
     Q_PROPERTY(QVariantList scriptSources READ scriptSources NOTIFY scriptSourcesChanged)
+    // 在线解析音源（pdone/lx-music-source 仓库自动发现）默认不初始化：
+    // 需在设置页 scriptUrlField 输入「我自己承担后果」并连点「导入」确认后才放开
+    Q_PROPERTY(bool onlineSourcesUnlocked READ onlineSourcesUnlocked NOTIFY onlineSourcesUnlockedChanged)
     // ---- MV 榜单 / 播放上下文 ----
     // 榜单是扁平的 QVariantList（id/title/artist/cover/playCount/duration/source），
     // GridView 直接拿它当 model；播放上下文只记索引，切上下曲由 C++ 重新解析地址
@@ -255,6 +261,8 @@ public:
     QString sourceFirstOrder() const;
     bool qishuiRoam() const;
     bool keepScreenOn() const;
+    bool mvScreenOn() const { return m_mvScreenOn; }
+    void setMvScreenOn(bool on);
     bool searchActive() const;
     Q_INVOKABLE void setSearchActive(bool value);
     bool showPlayerOnStart() const;
@@ -270,6 +278,7 @@ public:
     QStringList customSourceIds() const;
     QStringList customSourceNames() const;
     QVariantList scriptSources() const;
+    bool onlineSourcesUnlocked() const;
     QString customLocalDirectory() const;
     QString qrImagePath() const;
     QString qrHint() const;
@@ -424,6 +433,9 @@ public:
     Q_INVOKABLE void checkAllScriptSources();
     // 忽略每日节流，立即重新解析 pdone/lx-music-source 仓库页面发现音源
     Q_INVOKABLE void rescanScriptSources();
+    // 风险确认闸门：scriptUrlField 输入「我自己承担后果」并连点「导入」满 7 次后
+    // 由 QML 调用，置解锁标记（持久化）并立即解析仓库初始化在线解析音源
+    Q_INVOKABLE void seedOnlineSources();
     Q_INVOKABLE void openExternal(const QString &url);
     Q_INVOKABLE void quitApp();   // Android：从设置页「退出应用」直接退出
 
@@ -441,8 +453,10 @@ signals:
     void lyricsChanged();
     void settingsChanged();
     void searchActiveChanged();
+    void mvScreenOnChanged();
     void customSourcesChanged();
     void scriptSourcesChanged();
+    void onlineSourcesUnlockedChanged();
     void scriptSourceMessage(const QString &id, bool ok, const QString &message);
     void searchStarted();
     // kind: "song"（歌曲结果）/ "playlist"（歌单结果）/ ""（打开歌单、榜单等）；
@@ -523,6 +537,8 @@ private:
     quint64 m_mvOpenGen = 0;
     // 进入 MV 前音乐在播 → 暂停，关闭 MV 后恢复续播；解析失败则不会置位
     bool m_mvResumeOnClose = false;
+    // MV 沉浸页是否打开（用于把屏幕常亮与音乐播放状态解耦）
+    bool m_mvScreenOn = false;
     // 评论分页状态
     QVariantList m_comments;
     int m_commentPage = 1;

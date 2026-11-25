@@ -410,40 +410,70 @@ void SourceManager::tryCrossSource(const Song &song, const QString &quality,
 {
     const QString keyword = (song.title + QLatin1Char(' ') + song.artist).trimmed();
     // search() 会多次回调（700ms 软刷新 / 8s 硬超时收尾 / 全部返回的最终结果）：
-    // 一旦已经拿到匹配并开始取链，后续回调一律丢弃，否则会对同一首歌重复取链甚至重复 playUrl。
+    // 一旦已经拿到匹配并开始逐个取链，后续回调一律丢弃，否则会对同一首歌重复取链甚至重复 playUrl。
     const auto started = std::make_shared<bool>(false);
     search(keyword, QString(), 25, [this, song, quality, original, cb, started, quiet](const QVector<Song> &list) {
         if (*started) return;
-        qreal best = 0.55;
-        Song matched;
+        // 收集所有达标候选按分数降序，逐个尝试取链。旧实现只试最佳一个：一旦那一家
+        // 平台拿不到链接（VIP / 限流 / 无地址）就直接判死整首——《如愿》这种热门歌
+        // 也会报「所有音源播放失败」。多试几个平台，命中任何一个即可。
+        QVector<QPair<qreal, Song>> cands;
         for (const Song &c : list) {
             const qreal score = candidateScore(song, c);
-            if (score > best) { best = score; matched = c; }
+            if (score > 0.55) cands.append(qMakePair(score, c));
         }
-        qInfo().noquote() << QStringLiteral("[取链] 内置跨源搜索「%1 %2」→ %3 条，最佳：%4 - %5（%6）")
-                                 .arg(song.title, song.artist).arg(int(list.size()))
-                                 .arg(matched.title, matched.artist).arg(best, 0, 'f', 2);
-        MusicSource *target = matched.title.isEmpty() ? nullptr : source(matched.source);
-        if (!target) {
+        if (cands.isEmpty()) {
             // 本轮没匹配上：软刷新批次里可能只是结果不全，等下一个批次；最终批次自然收尾
             return;
         }
+        std::stable_sort(cands.begin(), cands.end(),
+                         [](const QPair<qreal, Song> &a, const QPair<qreal, Song> &b) {
+                             return a.first > b.first;
+                         });
+        if (cands.size() > 5) cands.resize(5);
         *started = true;
-        target->resolveUrl(matched, quality, [this, matched, original, cb, quiet](const Playable &p) {
-            if (p.ok) {
-                Playable r = p;
-                r.substituted = true;
-                r.needSubstitute = false;
-                r.source = matched.source;
-                r.substituteSource = SourceConfig::instance()->nameOf(matched.source) + QStringLiteral("（自动换源）");
-                r.message = QStringLiteral("原曲不可播放，已自动换源到 %1").arg(r.substituteSource);
-                if (!quiet) promoteSource(matched.source);   // 解析阶段换源成功也置顶，保持"成功源第一位"
-                if (cb) cb(r);
-            } else {
-                if (!quiet) demoteSource(matched.source);    // 换源候选也取链失败 → 降权
+        qInfo().noquote() << QStringLiteral("[取链] 内置跨源搜索「%1 %2」→ %3 条，候选 %4 个")
+                                 .arg(song.title, song.artist).arg(int(list.size())).arg(cands.size());
+
+        const auto candsPtr = std::make_shared<QVector<QPair<qreal, Song>>>(cands);
+        auto tryAt = std::make_shared<std::function<void(int)>>();
+        *tryAt = [this, song, quality, original, cb, quiet, candsPtr, tryAt](int idx) {
+            if (idx >= candsPtr->size()) {
+                if (!quiet)
+                    qWarning().noquote() << QStringLiteral("[取链] 内置跨源 %1 个候选全部取链失败，放弃换源").arg(candsPtr->size());
                 if (cb) cb(original);
+                return;
             }
-        });
+            const Song matched = candsPtr->at(idx).second;
+            const qreal score = candsPtr->at(idx).first;
+            qInfo().noquote() << QStringLiteral("[取链] 尝试候选 %1/%2：%3 - %4（%5，%6 分）")
+                                     .arg(idx + 1).arg(candsPtr->size())
+                                     .arg(matched.title, matched.artist, matched.source)
+                                     .arg(score, 0, 'f', 2);
+            MusicSource *target = source(matched.source);
+            if (!target) { (*tryAt)(idx + 1); return; }
+            target->resolveUrl(matched, quality, [this, matched, score, original, cb, quiet, candsPtr, tryAt, idx](const Playable &p) {
+                if (p.ok) {
+                    Playable r = p;
+                    r.substituted = true;
+                    r.needSubstitute = false;
+                    r.source = matched.source;
+                    r.substituteSource = SourceConfig::instance()->nameOf(matched.source) + QStringLiteral("（自动换源）");
+                    r.message = QStringLiteral("原曲不可播放，已自动换源到 %1").arg(r.substituteSource);
+                    if (!quiet) promoteSource(matched.source);   // 解析阶段换源成功也置顶，保持"成功源第一位"
+                    if (cb) cb(r);
+                    return;
+                }
+                // 失败必须留日志：以前这里完全静默，根本无法区分 VIP / 限流 / 无地址
+                if (!quiet)
+                    qWarning().noquote() << QStringLiteral("[取链] 候选 %1/%2「%3 - %4」（%5）取链失败：%6")
+                                                .arg(idx + 1).arg(candsPtr->size())
+                                                .arg(matched.title, matched.artist, matched.source, p.message);
+                if (!quiet) demoteSource(matched.source);    // 换源候选也取链失败 → 降权
+                (*tryAt)(idx + 1);
+            });
+        };
+        (*tryAt)(0);
     });
     // 兜底收尾：search 的多次交付里始终没有匹配（小众歌）或一个批次都没触发
     // （聚合被硬超时提前掐断且 collected 为空）时，按「跨源失败」回调，避免取链流程挂起。

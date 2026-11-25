@@ -260,8 +260,13 @@ ScriptSourceManager::ScriptSourceManager(QObject *parent)
 {
     load();
     // 重启后不自动联网，先用落库状态展示；用户点「检查」或真正用到时再初始化。
-    // 例外：内置在线音源只在缺失时补齐（首次启动/新版本追加），补齐动作入事件循环。
-    QTimer::singleShot(0, this, [this] { seedBuiltinSources(); });
+    // 在线解析音源（pdone/lx-music-source 仓库自动发现）默认完全不做初始化：
+    // 必须在设置页输入「我自己承担后果」并连点「导入」确认（AppController::seedOnlineSources）
+    // 置解锁标记后才放开预置；已确认过的用户重启时才补齐缺失源。
+    QTimer::singleShot(0, this, [this] {
+        if (Settings::get(QStringLiteral("onlineSourcesUnlocked")).toBool())
+            seedBuiltinSources();
+    });
 }
 
 void ScriptSourceManager::load()
@@ -404,6 +409,12 @@ void ScriptSourceManager::reportResult(const QString &id, const QString &lxKey, 
     const int delta = weight != 0 ? weight : (ok ? 2 : -2);
     m_score.insert(key, qBound(-6, now + delta, 12));
     saveScores();
+    // 会话级失败计数：连续/累计失败 2 次的候选，后续换源直接跳过（成功一次即恢复）。
+    // 只记「失败」这一极性：weight 为正但 ok=false（如播放失败 -4/-8）也计入。
+    if (ok)
+        m_candidateFails.remove(key);
+    else
+        ++m_candidateFails[key];
 }
 
 void ScriptSourceManager::notePlaybackFailure(const QString &id, const QString &lxKey,
@@ -965,6 +976,11 @@ void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistR
             if (persistResult) mgr->persist(item);
             mgr->m_items.insert(id, item);
         }
+        // 引擎初始化成败记录：失败进冷却（运行期不再反复拉起），成功移除冷却
+        if (r.ok)
+            mgr->m_engineFailAt.remove(id);
+        else
+            mgr->m_engineFailAt.insert(id, QDateTime::currentMSecsSinceEpoch());
         if (!r.ok) {
             // 初始化回调可能正运行在 QuickJS 内部（脚本同步 send(inited) 触发），
             // 不能在这里立刻 stop/free 上下文，否则等于在 JS 执行中途销毁宿主。
@@ -1015,6 +1031,14 @@ void ScriptSourceManager::ensureEngine(const QString &id, std::function<void(boo
     QPointer<ScriptEngine> engine = m_engines.value(id);
     if (engine && engine->ready()) {
         if (cb) cb(true);
+        return;
+    }
+    // 失败冷却：初始化失败过的引擎 10 分钟内不再反复拉起（音源只在启动时检查一次，
+    // 运行期每次取链都重试只会拖慢换源、反复报同样的错误）。冷却期内直接判失败，
+    // 让换源链路立刻跳到下一个候选。用户在设置页手动「检查」走 check()，不受此限制。
+    const qint64 lastFail = m_engineFailAt.value(id, 0);
+    if (lastFail > 0 && QDateTime::currentMSecsSinceEpoch() - lastFail < 10 * 60 * 1000) {
+        if (cb) cb(false);
         return;
     }
     if (m_starting.contains(id)) {
@@ -1643,6 +1667,24 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
         p.message = QStringLiteral("这首歌的在线音源都试过了，拿到的地址都播不出来");
         if (cb) cb(p);
         return;
+    }
+    // 会话级跳过：本会话内已累计失败 ≥2 次的「脚本×平台」候选直接剔除，
+    // 避免每首歌都先撞一遍已知失败的源再层层回落（用户看到的就是反复报失败）。
+    // 全部候选都被剔除时保留原列表兜底——宁可再试一次，也不让取链无源可用。
+    {
+        QVector<Candidate> healthy;
+        healthy.reserve(candidates.size());
+        for (const Candidate &c : candidates) {
+            if (m_candidateFails.value(c.engineId + QLatin1Char('|') + c.lxKey, 0) >= 2)
+                continue;
+            healthy << c;
+        }
+        if (!healthy.isEmpty() && healthy.size() != candidates.size()) {
+            qInfo().noquote() << QStringLiteral("[换源] 会话内失败≥2次，跳过 %1 个候选，剩 %2 个")
+                                     .arg(int(candidates.size() - healthy.size()))
+                                     .arg(int(healthy.size()));
+            candidates = healthy;
+        }
     }
     if (candidates.size() > 14)
         candidates.resize(14);
