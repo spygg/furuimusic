@@ -1065,7 +1065,60 @@ void MusicSource::comments(const Song &song, int page, CommentCallback cb)
         return;
     }
 
-    // 其它平台（QQ/酷狗/汽水）暂未配置评论解析，明确回空，UI 显示「该平台暂无评论」
+    if (plat == QLatin1String("qishui")) {
+        // 汽水评论：App 的 /luna/comments 需要签名头（X-Tt-Token / bd-ticket-guard 等），
+        // 第三方无法直接复现；但免签的 H5 /luna/h5/seo_track 会内嵌该歌曲的热门评论
+        // （comments.comments，通常 5 条，comments.count 为总数）。实测桌面/浏览器直接
+        // 带 Web UA 即可拿到，切歌用 sourceId（track_id）查询。
+        if (page > 1) { done(QVector<Comment>(), -1); return; }
+        const QUrl url(QStringLiteral("%1/luna/h5/seo_track?track_id=%2&device_platform=web")
+                           .arg(m_desc.base, id));
+        QVariantMap h;
+        h.insert(QStringLiteral("User-Agent"),
+                 QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"));
+        h.insert(QStringLiteral("Accept"), QStringLiteral("application/json, text/plain, */*"));
+        HttpClient::instance()->request(QStringLiteral("GET"), url, h, QByteArray(),
+            [done](const HttpClient::Reply &r) {
+                QVector<Comment> out;
+                if (r.ok) {
+                    const QJsonValue root = Json::rootOf(r.json);
+                    const QJsonValue box = Json::valueAt(root, QStringLiteral("comments"));
+                    const QJsonArray arr = Json::arrayAt(box, QStringLiteral("comments"));
+                    for (const QJsonValue &v : arr) {
+                        Comment c;
+                        c.source = QStringLiteral("qishui");
+                        c.id = Json::stringAt(v, QStringLiteral("id"));
+                        c.text = Json::stringAt(v, QStringLiteral("content"));
+                        const QJsonValue u = Json::valueAt(v, QStringLiteral("user"));
+                        c.userName = Json::firstString(u, {QStringLiteral("nickname"),
+                                                           QStringLiteral("public_name")});
+                        // 头像 urls 是完整 http 链接，取第一个；medium/thumb 任选其一
+                        auto firstAvatar = [&u](const QString &path) {
+                            const QJsonValue av = Json::valueAt(u, path);
+                            if (av.isArray() && !av.toArray().isEmpty())
+                                return av.toArray().at(0).toString();
+                            return QString();
+                        };
+                        c.avatar = firstAvatar(QStringLiteral("thumb_avatar_url.urls"));
+                        if (c.avatar.isEmpty())
+                            c.avatar = firstAvatar(QStringLiteral("medium_avatar_url.urls"));
+                        const qint64 sec = Json::stringAt(v, QStringLiteral("time_created")).toLongLong();
+                        c.time = sec > 0 ? sec * 1000 : 0;
+                        c.timeText = commentTimeText(c.time);
+                        c.likedCount = Json::stringAt(v, QStringLiteral("count_digged")).toInt();
+                        c.replyCount = Json::stringAt(v, QStringLiteral("count_reply")).toInt();
+                        if (!c.text.isEmpty()) out << c;
+                    }
+                }
+                // seo_track 固定只给热评，没有游标；把 total 设为实际条数，
+                // 避免 QML 误以为还有下一页而反复追加同一批评论。
+                done(out, out.size());
+            });
+        return;
+    }
+
+    // 其它平台暂未配置评论解析，明确回空，UI 显示「该平台暂无评论」
     done(QVector<Comment>(), -1);
 }
 

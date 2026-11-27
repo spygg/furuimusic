@@ -14,8 +14,10 @@
 #include <QtCore/qcoreapplication_platform.h>
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QJniEnvironment>
 #include <QJniObject>
 #include <QMetaObject>
@@ -143,10 +145,10 @@ void requestNotificationPermission()
 }
 
 // 前台播放 / MV 沉浸页保持屏幕常亮：用官方推荐的 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON，
-// 无需 WAKE_LOCK 权限，系统会在窗口销毁时自动清理。关闭开关且音乐与 MV 都停时清掉 flag。
+// 无需 WAKE_LOCK 权限，系统会在窗口销毁时自动清理。设置项已移除：只要 App 在前台
+// （QGuiApplication::ApplicationActive）且音乐在播或 MV 在播就保持，退到后台/暂停立即清掉。
 // playing 由调用方传入；MV 打开时 AppController::mvScreenOn 为 true（进 MV 会暂停音乐，
-// 但视频仍在播，不能跟着音乐状态把屏关掉）。MV 常亮不依赖「播放时常亮」设置项：
-// 视频看完前熄屏属于异常体验；音乐侧仍读设置（keepScreenOn，默认开）。
+// 但视频仍在播，不能跟着音乐状态把屏关掉）。
 //
 // 注意：Qt 的事件循环跑在 qtMainLoopThread，不是 Android 的 UI 线程；Window.addFlags()
 // 会触发 view layout 更新，必须从 Android UI 线程调用，否则抛 CalledFromWrongThreadException
@@ -155,8 +157,8 @@ void applyKeepScreenOn(bool playing)
 {
     AppController *app = AppController::instance();
     const bool mvActive = app && app->mvScreenOn();
-    const bool enabled = mvActive
-                         || (playing && Settings::boolean(QStringLiteral("keepScreenOn"), true));
+    const bool foreground = qGuiApp && qGuiApp->applicationState() == Qt::ApplicationActive;
+    const bool enabled = foreground && (mvActive || playing);
     QNativeInterface::QAndroidApplication::runOnAndroidMainThread([enabled]() {
         QJniObject activity = QJniObject::callStaticObjectMethod(
             "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
@@ -233,6 +235,23 @@ void jniSearchEx(JNIEnv *env, jclass, jstring keyword, jstring artist)
     AndroidMediaSession::handleVoiceSearch(jniString(env, keyword), jniString(env, artist));
 }
 
+// FuruiActivity.onDestroy 在真正销毁时调用：从 Android 主线程向 Qt 事件循环队列
+// 投递 quit。QtActivityBase.onDestroy 会阻塞等 Qt 退出的事件循环；background_running
+// 打开后 Qt 收到销毁时并不会自己 quit（真机取证见 FuruiActivity 注释），不补这一
+// 下主线程就会 ANR。重复/提前调用都无害：quit 只对正在运行的循环生效。
+void jniPrepareQtExit(JNIEnv *, jclass)
+{
+    QCoreApplication *app = QCoreApplication::instance();
+    if (!app)
+        return;
+    // 必须用 exit(0) 而不是 quit()：quit 在 QGuiApplication 里先逐个 close 顶层窗口，
+    // Android 上窗口关闭被拒时会直接忽略这次退出（真机 16:12 取证：quit 已投递到
+    // Qt 主线程、事件循环继续跑 → onDestroy 依旧 ANR）。exit 无条件退出所有事件循环，
+    // 并触发 aboutToQuit 把设置落盘。
+    qInfo("[退出] onDestroy 请求退出 Qt 事件循环");
+    QMetaObject::invokeMethod(app, [] { QCoreApplication::exit(0); }, Qt::QueuedConnection);
+}
+
 } // namespace
 
 void AndroidMediaSession::install()
@@ -258,6 +277,18 @@ void AndroidMediaSession::install()
             };
             env.jniEnv()->RegisterNatives(clazz, methods, 3);
             env.jniEnv()->DeleteLocalRef(clazz);
+        }
+
+        // Activity 销毁时的退出请求（见 jniPrepareQtExit / FuruiActivity.onDestroy）。
+        // 与上面的服务类分开注册：Activity 在进程启动阶段就已加载，能找到类。
+        jclass activityClazz = env.jniEnv()->FindClass("cn/furui/music/FuruiActivity");
+        if (activityClazz) {
+            static const JNINativeMethod activityMethods[] = {
+                { const_cast<char *>("nativePrepareQtExit"), const_cast<char *>("()V"),
+                  reinterpret_cast<void *>(&jniPrepareQtExit) }
+            };
+            env.jniEnv()->RegisterNatives(activityClazz, activityMethods, 1);
+            env.jniEnv()->DeleteLocalRef(activityClazz);
         }
     }
 
@@ -304,8 +335,14 @@ AndroidMediaSession::AndroidMediaSession(QObject *parent) : QObject(parent)
         }
     });
 
-    // 设置页切换「播放时常亮」后立即生效（不必等下一次播放/暂停）
+    // 设置页切换「音源并行竞速」等选项时顺带刷新一次（不必等下一次播放/暂停）
     connect(AppController::instance(), &AppController::settingsChanged, this, [this] {
+        applyKeepScreenOn(PlayerController::instance()->playing());
+    });
+
+    // 前台/后台切换：退到后台立刻清掉 FLAG_KEEP_SCREEN_ON（否则后台播放会一直亮屏），
+    // 回到前台且仍在播放时重新加上。
+    connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [](Qt::ApplicationState) {
         applyKeepScreenOn(PlayerController::instance()->playing());
     });
 

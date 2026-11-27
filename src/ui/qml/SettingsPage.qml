@@ -18,8 +18,8 @@ Item {
     readonly property color cPrimaryHover: Qt.lighter(theme.accent, 1.1)
 
     readonly property var qualityKeys: ["standard", "high", "lossless", "hires"]
-    // 取链顺序：与后端 Settings 的 sourceFirst 取值一一对应
-    readonly property var sourceFirstKeys: ["platform", "vip", "custom"]
+    // 取链顺序：与后端 Settings 的 sourceFirst 取值一一对应（旧值 platform 已下线）
+    readonly property var sourceFirstKeys: ["vip", "custom"]
     // 响应式左右留白
     readonly property real sideMargin: Math.max(16, Math.min(36, Math.round(root.width * 0.035)))
     // 在线解析音源风险确认：输入「我自己承担后果」后连点「导入」的已点次数（满 7 次才初始化）
@@ -353,7 +353,7 @@ Item {
                     id: orderCombo
                     Layout.preferredWidth: 168
                     Layout.preferredHeight: theme.touchMin
-                    model: ["平台优先", "VIP 优先", "全部自定义"]
+                    model: ["VIP 优先", "全部自定义"]
                     currentIndex: Math.max(0, root.sourceFirstKeys.indexOf(app.sourceFirstOrder))
                     background: Rectangle { color: cCard; radius: 6; border.color: cLine }
                     contentItem: Text {
@@ -369,7 +369,6 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                visible: app.sourceFirstOrder !== "platform"
                 text: app.sourceFirstOrder === "custom"
                       ? "所有歌曲都先向自定义/在线音源取链，取不到再回落原平台直链。自定义音源失败少、起播快，但音质取决于音源本身。"
                       : "VIP / 平台判定不可播的歌曲跳过原平台直链，直接从自定义/在线音源取链，省掉一次注定失败的请求；普通歌曲仍走平台正版直链。"
@@ -378,25 +377,7 @@ Item {
                 wrapMode: Text.WordWrap
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text { Layout.fillWidth: true; text: "VIP 替代音源"; color: cText; font.pixelSize: 13 }
-                Switch {
-                    checked: app.vipSubstituteEnabled
-                    onToggled: app.setSetting("vipSubstitute", checked)
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text { Layout.fillWidth: true; text: "自动跨源换源"; color: cText; font.pixelSize: 13 }
-                Switch {
-                    checked: app.autoToggleSource
-                    onToggled: app.setSetting("autoToggleSource", checked)
-                }
-            }
+            // 「VIP 替代音源」「自动跨源换源」固定开启，不再暴露开关
 
             RowLayout {
                 Layout.fillWidth: true
@@ -416,16 +397,7 @@ Item {
                 wrapMode: Text.WordWrap
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                visible: platform.isMobile
-                Text { Layout.fillWidth: true; text: "播放时屏幕常亮"; color: cText; font.pixelSize: 13 }
-                Switch {
-                    checked: app.keepScreenOn
-                    onToggled: app.setSetting("keepScreenOn", checked)
-                }
-            }
+            // 前台播放时自动屏幕常亮，不再暴露开关
 
             RowLayout {
                 Layout.fillWidth: true

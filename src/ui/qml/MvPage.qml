@@ -167,6 +167,10 @@ Rectangle {
     Loader {
         id: videoLoader
         anchors.fill: parent
+        // 懒加载：MvPage 在外壳里常驻（不能靠 visible 隐藏），若 Loader 一开始就
+        // active，整个 App 启动就白建一个 QMediaPlayer + VideoOutput 解码管线，
+        // 占内存也拖慢首屏。open() 时会先置 active=true 再交地址。
+        active: false
         source: platform.qtMajor >= 6 ? "MvMedia6.qml"
               : platform.ffmpegBackend ? "MvMedia5Ffmpeg.qml"
               : "MvMedia5.qml"

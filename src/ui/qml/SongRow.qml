@@ -19,6 +19,9 @@ Rectangle {
     property int duration: 0
     property bool vip: false
     property bool favorite: false
+    // 该行就是当前曲目：高亮（行号 ▶、红色标题、胶囊描边）只看它，暂停时也保持
+    property bool current: false
+    // 当前曲目正在出声：只有它为真才显示「❚❚」，暂停后与工具条一致显示「▶」
     property bool playing: false
     // 该歌是否已在播放队列：搜索结果行据此把「＋」切成「✓」（见 LibraryPage 的 model.inQueue）
     property bool inQueue: false
@@ -136,7 +139,8 @@ Rectangle {
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton
-        onClicked: root.playRequested()
+        // 点当前行（暂停时）就是继续，而不是从头重播；要重播可点进度条/上一首
+        onClicked: root.current ? app.togglePause() : root.playRequested()
     }
 
     RowLayout {
@@ -148,9 +152,9 @@ Rectangle {
         Text {
             visible: root.rowNumber >= 0
             Layout.preferredWidth: 24
-            text: root.playing ? "▶" : (root.rowNumber + 1 < 10
+            text: root.current ? "▶" : (root.rowNumber + 1 < 10
                                         ? "0" + (root.rowNumber + 1) : (root.rowNumber + 1))
-            color: root.playing ? accent : cSub
+            color: root.current ? accent : cSub
             font.pixelSize: 13
             font.italic: true
             font.bold: true
@@ -196,7 +200,7 @@ Rectangle {
                 Text {
                     Layout.fillWidth: true
                     text: root.title.length > 0 ? root.title : "未知曲目"
-                    color: root.playing ? accent : cText
+                    color: root.current ? accent : cText
                     font.pixelSize: 14
                     elide: Text.ElideRight
                     Behavior on color { ColorAnimation { duration: 140 } }
@@ -259,11 +263,11 @@ Rectangle {
             Layout.preferredHeight: theme.touchMin
             Layout.preferredWidth: capsuleRow.implicitWidth + 8
             radius: height / 2
-            color: root.playing ? cSoft : theme.dark ? Qt.rgba(1, 1, 1, 0.05) : "#FFFFFF"
-            border.color: root.playing ? Qt.rgba(accent.r, accent.g, accent.b, 0.4) : cLine
+            color: root.current ? cSoft : theme.dark ? Qt.rgba(1, 1, 1, 0.05) : "#FFFFFF"
+            border.color: root.current ? Qt.rgba(accent.r, accent.g, accent.b, 0.4) : cLine
             border.width: 1
             // 触屏没有 hover 事件：胶囊必须常驻，否则整行所有操作都点不到
-            opacity: root.touchMode || hover.containsMouse || root.playing ? 1 : 0
+            opacity: root.touchMode || hover.containsMouse || root.current ? 1 : 0
             // 隐藏时不能再吃掉点击：否则整行右侧有一块看不见但仍可点的热区
             enabled: opacity > 0.01
             Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
@@ -377,8 +381,8 @@ Rectangle {
                                ? accent
                                : rowPlayHover.containsMouse
                                  ? Qt.rgba(accent.r, accent.g, accent.b, 0.16) : cChip
-                        border.color: root.playing ? accent : cLine
-                        border.width: root.playing ? 0 : 1
+                        border.color: root.current ? accent : cLine
+                        border.width: root.current && !root.playing ? 1 : 0
                         Behavior on color { ColorAnimation { duration: 140 } }
                     }
                     contentItem: Item {
@@ -394,8 +398,9 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        Accessible.name: root.playing ? "暂停" : "播放"
-                        onClicked: root.playRequested()
+                        Accessible.name: root.current ? (root.playing ? "暂停" : "继续播放") : "播放"
+                        // 当前曲目上这枚键就是暂停/继续；其他行才是「播放这首」
+                        onClicked: root.current ? app.togglePause() : root.playRequested()
                     }
                 }
 

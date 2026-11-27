@@ -416,7 +416,6 @@ struct AppController::Impl {
     QString quality;
     // 默认歌单优先：与构造函数里 Settings 默认值保持一致
     QString searchType = QStringLiteral("songlist");
-    bool vipSubstitute = true;
     QString lastResolvedUrl;
     QVariantMap lastPlayableHeaders;
     QStringList customIds;
@@ -520,7 +519,6 @@ AppController::AppController(QObject *parent)
     // 全局搜索默认「歌单」优先：搜索结果先列匹配歌单，点进去即可浏览该歌单全部曲目，
     // 替代原来每个歌单内的独立搜索框（歌单内搜索框已移除）。
     d->searchType = Settings::string(QStringLiteral("searchType"), QStringLiteral("songlist"));
-    d->vipSubstitute = Settings::boolean(QStringLiteral("vipSubstitute"), true);
 
     OpenApiServer *api = OpenApiServer::instance();
     connect(api, &OpenApiServer::toast, this, [this](const QString &msg) { emit toast(msg); });
@@ -819,19 +817,19 @@ QString AppController::currentLyricLine() const { return PlayerController::insta
 int AppController::currentLyricIndex() const { return PlayerController::instance()->currentLyricIndex(); }
 QString AppController::statusMessage() const { return d->status; }
 QString AppController::quality() const { return d->quality; }
-bool AppController::vipSubstituteEnabled() const { return d->vipSubstitute; }
-bool AppController::autoToggleSource() const
-{ return Settings::boolean(QStringLiteral("autoToggleSource"), true); }
+// 「VIP 替代音源」「自动跨源换源」开关已下线，行为固定为开启（与旧版勾选态一致）
+bool AppController::vipSubstituteEnabled() const { return true; }
+bool AppController::autoToggleSource() const { return true; }
 bool AppController::sourceRaceEnabled() const
 { return Settings::boolean(QStringLiteral("sourceRace"), true); }
 QString AppController::sourceFirstOrder() const
-{ return Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip")); }
+{ return Settings::sourceFirstOrder(); }
 bool AppController::qishuiRoam() const
 { return Settings::boolean(QStringLiteral("qishuiRoam"), true); }   // 设置页已隐藏该开关，默认保持开启
 bool AppController::roamMode() const
 { return Settings::boolean(QStringLiteral("roamMode"), false); }   // 默认关闭：开启后非歌单队列播完自动按汽水推荐续播
-bool AppController::keepScreenOn() const
-{ return Settings::boolean(QStringLiteral("keepScreenOn"), true); }
+// 「播放时屏幕常亮」开关已下线：前台播放时自动保持，恒返回 true 供旧 UI 兼容
+bool AppController::keepScreenOn() const { return true; }
 
 void AppController::setMvScreenOn(bool on)
 {
@@ -2512,9 +2510,16 @@ QVariant AppController::setting(const QString &key, const QVariant &fallback) co
 
 void AppController::setSetting(const QString &key, const QVariant &value)
 {
-    Settings::set(key, value);
+    // 这两个开关已从设置页移除、行为固定开启：忽略外部/旧 UI 的写入，
+    // 也不让历史 settings.ini 里的 false 影响实际取链。
+    if (key == QLatin1String("vipSubstitute") || key == QLatin1String("autoToggleSource")
+        || key == QLatin1String("keepScreenOn"))
+        return;
+    // 「平台优先」选项已下线：外部脚本/旧配置若仍写入 platform，直接归一到默认值
+    Settings::set(key, key == QLatin1String("sourceFirst")
+                           && value.toString() == QLatin1String("platform")
+                       ? QVariant(QStringLiteral("vip")) : value);
     if (key == QLatin1String("quality")) d->quality = value.toString();
-    else if (key == QLatin1String("vipSubstitute")) d->vipSubstitute = value.toBool();
     else if (key == QLatin1String("searchType")) d->searchType = value.toString();
     else if (key == QLatin1String("proxy")) HttpClient::instance()->setProxyFromSettings();
     else if (key == QLatin1String("logToFile")) Logger::instance()->setFileEnabled(value.toBool());
@@ -2527,8 +2532,7 @@ void AppController::setSetting(const QString &key, const QVariant &value)
         else api->stop();
     }
     // 取链策略/音质变了：已缓存的直链与歌词不再可信，全部作废
-    if (key == QLatin1String("quality") || key == QLatin1String("sourceFirst")
-        || key == QLatin1String("vipSubstitute") || key == QLatin1String("autoToggleSource"))
+    if (key == QLatin1String("quality") || key == QLatin1String("sourceFirst"))
         clearPreloadCache();
     emit settingsChanged();
 }

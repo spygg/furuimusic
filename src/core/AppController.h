@@ -160,7 +160,7 @@ class AppController : public QObject {
     Q_PROPERTY(bool vipSubstituteEnabled READ vipSubstituteEnabled NOTIFY settingsChanged)
     Q_PROPERTY(bool autoToggleSource READ autoToggleSource NOTIFY settingsChanged)
     Q_PROPERTY(bool sourceRaceEnabled READ sourceRaceEnabled NOTIFY settingsChanged)
-    // 取链顺序：platform（平台优先）/ vip（VIP 歌先走自定义，默认）/ custom（全部先走自定义）
+    // 取链顺序：vip（VIP 歌先走自定义，默认）/ custom（全部先走自定义）；旧值 platform 按 vip 处理
     Q_PROPERTY(QString sourceFirstOrder READ sourceFirstOrder NOTIFY settingsChanged)
     // 汽水漫游：开启后播到汽水果时，下一首由汽水推荐流决定（队列只作兜底）
     Q_PROPERTY(bool qishuiRoam READ qishuiRoam NOTIFY settingsChanged)

@@ -86,7 +86,14 @@ Item {
     // 任何后台自动同步都不能再写 keyword.text，否则退格/删除时后台把旧词写回，
     // 看起来像「删不掉、还剩字」。提交搜索后复位，才允许外部清空。
     property bool keywordEditing: false
-    onVisibleChanged: { if (!visible) root.keywordEditing = false }
+    onVisibleChanged: {
+        if (!visible) {
+            root.keywordEditing = false
+            // 带着搜索词切到别的 Tab/页面：搜索态只属于本页，否则迷你播放条
+            // 会因 searchActive 残留而在全 App 一直藏着不回来。
+            app.searchActive = false
+        }
+    }
     // 搜索态变化时通知外壳：搜索时隐藏迷你播放条，给结果区和软键盘腾出空间，
     // 避免播放栏压住搜索内容（矮屏/键盘弹出时尤其明显）。输入框持有焦点（键盘开着）
     // 同样算搜索态，与 keyword.onActiveFocusChanged 双向对齐。
@@ -1278,7 +1285,8 @@ Item {
                                 vip: model.vip
                                 favorite: model.favorite
                                 inQueue: model.inQueue
-                                playing: model.uid === app.currentSongUid
+                                current: model.uid === app.currentSongUid
+                                playing: current && app.playing
                                 showMv: model.source === "netease"
                                 onPlayRequested: app.playResult(index)
                                 onFavoriteRequested: app.toggleFavoriteResult(index)
@@ -1325,6 +1333,8 @@ Item {
                             vip: model.vip
                             favorite: model.favorite
                             inQueue: model.inQueue
+                            current: model.uid === app.currentSongUid
+                            playing: current && app.playing
                             showMv: model.source === "netease"
                             onPlayRequested: app.playResult(index)
                             onFavoriteRequested: app.toggleFavoriteResult(index)
@@ -1365,6 +1375,8 @@ Item {
                             vip: model.vip
                             favorite: model.favorite
                             inQueue: model.inQueue
+                            current: model.uid === app.currentSongUid
+                            playing: current && app.playing
                             showMv: model.source === "netease"
                             onPlayRequested: app.playResult(index)
                             onFavoriteRequested: app.toggleFavoriteResult(index)
@@ -1404,7 +1416,8 @@ Item {
                             duration: model.duration
                             vip: model.vip
                             favorite: model.favorite
-                            playing: index === app.currentQueueIndex
+                            current: index === app.currentQueueIndex
+                            playing: current && app.playing
                             showAdd: false
                             showRemove: true
                             onPlayRequested: app.playQueue(index)
@@ -1613,6 +1626,8 @@ Item {
                                     vip: model.vip
                                     favorite: model.favorite
                                     inQueue: model.inQueue
+                                    current: model.uid === app.currentSongUid
+                                    playing: current && app.playing
                                     showMv: false
                                     onPlayRequested: app.playResult(index)
                                     onFavoriteRequested: app.toggleFavoriteResult(index)
@@ -1879,6 +1894,8 @@ Item {
                                 vip: model.vip
                                 favorite: model.favorite
                                 inQueue: model.inQueue
+                                current: model.uid === app.currentSongUid
+                                playing: current && app.playing
                                 showMv: model.source === "netease"
                                 onPlayRequested: app.playResult(index)
                                 onFavoriteRequested: app.toggleFavoriteResult(index)
@@ -2251,6 +2268,8 @@ Item {
                                     vip: model.vip
                                     favorite: model.favorite
                                     inQueue: model.inQueue
+                                    current: model.uid === app.currentSongUid
+                                    playing: current && app.playing
                                     showMv: model.source === "netease"
                                     showDownload: true
                                     onPlayRequested: app.playResult(index)

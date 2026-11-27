@@ -14,6 +14,48 @@ import android.util.Log;
 
 public class FuruiActivity extends org.qtproject.qt.android.bindings.QtActivity
 {
+    // 由 C++ 侧（AndroidMediaSession::install）注册：请求 Qt 事件循环退出。
+    // 后台连播要求事件循环不冻结（background_running=true），于是从多任务划掉
+    // 任务时 Qt 不再自动 quit，QtActivityBase.onDestroy 会无限等 Qt 退出，
+    // 主线程 20s 后 ANR，同进程再次启动也一起卡死（2026-11-27 真机取证）。
+    private static native void nativePrepareQtExit();
+
+    @Override
+    protected void onDestroy() {
+        // 配置变更（旋转/分屏等）会走同一条 onDestroy 但 Qt 会保留实例重建，
+        // 那里绝不能退，交回 Qt 原生流程。
+        if (isChangingConfigurations()) {
+            super.onDestroy();
+            return;
+        }
+        // 真正销毁（划掉任务/系统回收）：先请求 Qt 退出事件循环（exit(0)），
+        // 然后立刻返回，由后台线程兜底结束进程。
+        //
+        // 为什么不调用 super.onDestroy()：QtActivityBase.onDestroy 会在主线程
+        // sem_wait 等 Qt 主线程退出；而 Qt 退出时的 QtMultimedia 音频设备清理
+        // （QtAudioDeviceManager.qAndroidAudioDevicesDestroyed）把清理任务 post
+        // 到主线程 looper 并 latch.await()。主线程此时正阻塞在 sem_wait 上，
+        // 两边互等死锁 → 20s 后 destroy timeout + ANR（真机 16:15 取证：
+        // qtMainLoopThread 卡在 CountDownLatch.await）。
+        // 进程照常退出（与 Qt 自己 onDestroy 最后的 System.exit(0) 等价），
+        // 只是不再等 Qt 的握手；退出前 exit(0) 已触发 aboutToQuit 落盘设置。
+        try {
+            nativePrepareQtExit();
+        } catch (Throwable t) {
+            // native 尚未注册（启动瞬间就被销毁）：保持静默，直接走兜底退出
+            Log.w("FuruiBack", "prepare qt exit failed", t);
+        }
+        Thread killer = new Thread(() -> {
+            try {
+                Thread.sleep(1200);
+            } catch (InterruptedException ignored) {
+            }
+            android.os.Process.killProcess(android.os.Process.myPid());
+        }, "furui-exit");
+        killer.setDaemon(true);
+        killer.start();
+    }
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);

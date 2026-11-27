@@ -62,6 +62,14 @@ public:
     static QString string(const QString &key, const QString &fallback = QString())
     { return get(key, fallback).toString(); }
 
+    // 取链顺序：设置页已移除「平台优先」，旧配置里的 platform 一律按 VIP 优先处理，
+    // 避免升级后仍在偷偷走已下线的策略。只保留 vip（默认）/ custom 两个有效值。
+    static QString sourceFirstOrder()
+    {
+        const QString v = string(QStringLiteral("sourceFirst"), QStringLiteral("vip"));
+        return v == QLatin1String("custom") ? v : QStringLiteral("vip");
+    }
+
     static bool boolean(const QString &key, bool fallback = false)
     { return get(key, fallback).toBool(); }
 

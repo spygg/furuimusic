@@ -70,6 +70,14 @@ AndroidInsets queryAndroidInsets(qreal devicePixelRatio)
             r = gi.getField<jint>("right");
             b = gi.getField<jint>("bottom");
         }
+        // 导航栏（三键/手势条）单独问 Type.navigationBars()(2)：statusBars 的 bottom 在
+        // edge-to-edge 下恒为 0，而 targetSdk 35 起系统强制 edge-to-edge、Qt 也不再让出
+        // 导航栏高度，底部不补就会让三键导航条盖住播放页底部那排控制键（真机截图）。
+        // 只取 bottom；横屏侧边导航的 left/right 涉及左右差额算法，暂不参与。
+        QJniObject nav = insets.callObjectMethod("getInsets", "(I)Landroid/graphics/Insets;",
+                                                 jint(2));
+        if (nav.isValid())
+            b = qMax(b, nav.getField<jint>("bottom"));
     }
     if (l == 0 && t == 0 && r == 0 && b == 0) {
         // Android 10 及更早只有这组（已废弃但仍在）的逐边接口
@@ -336,6 +344,20 @@ void PlatformAdapter::refreshInsets(QQuickWindow *window)
             const qreal missingTop = ai.top - qtInsetTop;
             if (missingTop > 1.0)
                 t = qMin(missingTop, ai.top);   // 钳制，防挖孔并集偏高补过头
+
+            // 底部同理（原来 Android 路径从不给 b 赋值）：targetSdk 35 强制
+            // edge-to-edge 时 Qt 不让出导航栏、availableGeometry 也等于整屏，
+            // 底部边距恒 0 —— 三键导航条直接盖住播放页底部那排控制键（真机截图）。
+            // 差额 = 导航栏高度 − Qt 已让出/已内缩的高度；IME 弹出时后面会清零。
+            qreal qtInsetBottom = qMax(0.0, static_cast<qreal>(screenH - window->y()
+                                                                - window->height()));
+#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+            qtInsetBottom = qMax(qtInsetBottom,
+                                 static_cast<qreal>(window->safeAreaMargins().bottom()));
+#endif
+            const qreal missingBottom = ai.bottom - qtInsetBottom;
+            if (missingBottom > 1.0)
+                b = qMin(missingBottom, ai.bottom);
         }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
         // 安全区异步上报（旋转、系统栏显隐），每个窗口只接一次监听触发重算。

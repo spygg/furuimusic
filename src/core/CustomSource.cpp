@@ -161,6 +161,10 @@ void CustomSourceManager::resolve(const Song &song, const QString &quality, Play
     auto fallback = [this, state, song, quality]() {
         if (state->done || state->fallbackStarted) return;
         state->fallbackStarted = true;
+        // 交给脚本层后，本次竞速就结束了：还在途的 HTTP 结果必须丢弃。
+        // 否则本地源先失败触发回退、随后迟到的 HTTP 成功再调一次 cb，
+        // 同一次换源会回调两次（重复 playUrl / 历史插重）。
+        state->done = true;
         tryScriptSources(song, quality, state->cb);
     };
     auto finishOne = [state, fallback]() {

@@ -1599,9 +1599,8 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
     addByKey(platformToLx(song.source), false);
 
     // ---- 跨平台兜底：同一首歌去别的平台找 ----
-    // 只在用户开着「自动跨源换源」时启用；只追加同平台候选之后的备选，命中即停。
-    if (Settings::boolean(QStringLiteral("autoToggleSource"), true) && hasSearch()
-        && !song.title.trimmed().isEmpty()) {
+    // 「自动跨源换源」开关已下线、固定开启；只追加同平台候选之后的备选，命中即停。
+    if (hasSearch() && !song.title.trimmed().isEmpty()) {
         QStringList keys{QStringLiteral("tx"), QStringLiteral("kg"), QStringLiteral("kw"),
                          QStringLiteral("mg"), QStringLiteral("wy")};
         // 平台顺序 = 该平台上所有脚本的平均成绩：先搜最靠谱的平台，
@@ -1719,6 +1718,11 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
         int running = 0;        // 在途竞速请求数
         bool done = false;      // 已有赢家 / 全部失败，迟到结果一律丢弃
         bool launching = false; // 防止同步回调重入 launch
+        // 补位泵：竞速里每个请求结束（成功/失败/超时）后由 finishOne 调用，
+        // 在还有候选时继续发下一批。必须挂在 state 上——早先用 weak_ptr
+        // 指向 resolve() 栈上的 shared_ptr，函数返回后强引用就没了，异步失败
+        // 后的补位全部失效，回调永远不来，上层「正在切换音源」卡死（真机复现）。
+        std::function<void()> pump;
     };
     auto state = std::make_shared<ResolveState>();
     state->cb = cb;
@@ -1809,6 +1813,8 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
             ? QStringLiteral("原平台不可播放，已由在线音源「%1」跨平台提供").arg(cand.name)
             : QStringLiteral("已由在线音源「%1」提供").arg(cand.name);
         if (state->cb) state->cb(p);
+        // 补位泵持有 state 的强引用，结果出来后必须断开，否则每次换源泄漏一份状态
+        QTimer::singleShot(0, this, [state] { state->pump = nullptr; });
     };
     // 一次取链失败：记成绩；只有同一「脚本 × 平台」累计到两次失败才动全局顺序，
     // 免得一次版权/网络抖动把一个在别的平台上很稳的脚本整体沉下去
@@ -1833,28 +1839,27 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
     const int concurrency = Settings::boolean(QStringLiteral("sourceRace"), true) ? 3 : 1;
     qInfo().noquote() << QStringLiteral("[换源] 竞速启动：并发 %1，候选 %2")
                              .arg(concurrency).arg(int(state->candidates.size()));
-    auto launch = std::make_shared<std::function<void()>>();
-    std::weak_ptr<std::function<void()>> weakLaunch = launch;
-    auto finishOne = [state, weakLaunch]() {
+    auto finishOne = [state]() {
         --state->running;
         if (state->done) return;
-        if (auto l = weakLaunch.lock()) (*l)();
+        if (state->pump) state->pump();
     };
     auto finishAll = [this, state]() {
         if (state->done) return;
         state->done = true;
         Playable p;
         p.reason = QStringLiteral("script-failed");
-        p.message = state->failures.isEmpty()
-            ? QStringLiteral("所有在线音源均未能取到音频地址")
-            : QStringLiteral("在线音源取链失败：%1")
-                  .arg(state->failures.join(QStringLiteral("；")));
+        if (state->failures.isEmpty())
+            p.message = QStringLiteral("所有在线音源均未能取到音频地址");
+        else
+            p.message = QStringLiteral("在线音源取链失败：%1")
+                            .arg(state->failures.join(QStringLiteral("；")));
         if (state->cb) state->cb(p);
+        QTimer::singleShot(0, this, [state] { state->pump = nullptr; });
     };
-    *launch = [this, state, weakLaunch, finishOne, finishAll, succeed, failed, bestMatch,
-               concurrency]() {
-        auto keepAlive = weakLaunch.lock();
-        if (!keepAlive || state->launching) return;
+    state->pump = [this, state, finishOne, finishAll, succeed, failed, bestMatch,
+                   concurrency]() {
+        if (state->launching) return;
         state->launching = true;
         while (!state->done && state->running < concurrency
                && state->index < state->candidates.size()) {
@@ -1959,7 +1964,7 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
         if (!state->done && state->running == 0 && state->index >= state->candidates.size())
             finishAll();
     };
-    (*launch)();
+    state->pump();
 }
 
 void ScriptSourceManager::lyric(const Song &song, LyricCallback cb)

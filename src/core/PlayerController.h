@@ -194,6 +194,9 @@ private:
     bool m_ended = false;
     // 正在切歌取链：旧源已停止但新地址还没到，期间的播放命令一律忽略。
     bool m_switching = false;
+    // 换源总超时：取链链路任何一环没回调（脚本竞速丢失回调 / 下载卡死）都会让
+    // m_switching 永久为 true，播放键从此无响应。beginSwitch 起表，playUrl/stop 停表。
+    QTimer *m_switchTimer = nullptr;
     QTimer *m_saveTimer = nullptr;
     // 队列/状态变化的落盘防抖：整队列序列化成 JSON 在千首队列上并不便宜，
     // 连续 addQueue/removeQueue 时没必要每次都做，攒一小段再写。

@@ -474,9 +474,11 @@ Item {
                         id: compactCoverPage
                         // 封面边长：不超过页宽 92%、页高扣除歌词行，封顶 300，保持正方形。
                         // 分屏单栏没有下方歌词 peek，把预留高度还给封面。
-                        // 竖屏封面下方显示「上一句/当前句/下一句」三行歌词，预留 106dp
-                        //（旧版单行只留 64dp，封面下方大片空白浪费了）。
-                        readonly property real peekH: root.splitSingle ? 0 : 106
+                        // 竖屏封面下方显示「上一句/当前句/下一句」三行歌词，预留
+                        // 间距 + 歌词块高度（旧版只留 6dp，歌词贴着封面太挤）。
+                        readonly property real peekGap: 30
+                        readonly property real peekBlockH: 96
+                        readonly property real peekH: root.splitSingle ? 0 : peekGap + peekBlockH
                         readonly property real coverSide: Math.max(0, Math.min(parent.width * 0.92,
                                                                                parent.height - peekH, 300))
                         Item {
@@ -529,9 +531,9 @@ Item {
                             id: lyricPeek
                             anchors.horizontalCenter: parent.horizontalCenter
                             anchors.top: compactCoverSlot.bottom
-                            anchors.topMargin: 6
+                            anchors.topMargin: compactCoverPage.peekGap
                             width: parent.width * 0.88
-                            height: 96
+                            height: compactCoverPage.peekBlockH
                             visible: !root.splitSingle
                                      && (app.lyricsTimed || app.lyricsText.length > 0)
 

@@ -116,7 +116,8 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         acceptedButtons: Qt.LeftButton
-                        onClicked: app.playQueue(index)
+                        // 点当前这首 = 暂停/继续；点别的才是切歌，避免误以为点播放却从头重播
+                        onClicked: index === app.currentQueueIndex ? app.togglePause() : app.playQueue(index)
                     }
 
                     RowLayout {
@@ -137,7 +138,9 @@ Item {
                             spacing: 2
                             Text {
                                 Layout.fillWidth: true
-                                text: (index === app.currentQueueIndex ? "正在播放 · " : "") + title
+                                // 状态词跟工具条走：暂停时不能还标「正在播放」
+                                text: (index === app.currentQueueIndex
+                                       ? (app.playing ? "正在播放 · " : "已暂停 · ") : "") + title
                                 color: index === app.currentQueueIndex ? cPrimary : cText
                                 font.pixelSize: 12
                                 elide: Text.ElideRight

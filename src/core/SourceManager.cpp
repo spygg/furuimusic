@@ -293,15 +293,15 @@ void SourceManager::resolve(const Song &song, const QString &quality, PlayableCa
     MusicSource *s = source(song.source);
     if (!s) { CustomSourceManager::instance()->resolve(song, quality, cb); return; }
 
-    // 取链顺序（设置项 sourceFirst）：
-    //   platform —— 先原平台直链，失败才换源（老行为）
-    //   vip      —— VIP / 平台已判定不可播的歌先走自定义音源（默认）
-    //   custom   —— 所有歌曲都先走自定义音源
-    // 走原平台直链的意义是「正版 + 最高音质」；但 VIP / 独家歌它必然回一句
-    // 「需要会员或暂不可播放」，白等一个来回还把它降权一次，所以默认让这类歌
-    // 直接从自定义音源起步。
-    const bool substituteOn = Settings::boolean(QStringLiteral("vipSubstitute"), true);
-    const QString order = Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip"));
+    // 取链顺序（设置项 sourceFirst，设置页只暴露两项）：
+    //   vip    —— VIP / 平台已判定不可播的歌先走自定义音源（默认）
+    //   custom —— 所有歌曲都先走自定义音源
+    // 旧配置里的 platform 已下线，由 Settings::sourceFirstOrder() 归一到 vip。
+    // VIP / 独家歌走原平台直链只会得到「需要会员」，白等一个来回还被降权一次，
+    // 所以让这类歌直接从自定义音源起步；普通歌仍走平台正版直链。
+    // 「VIP 替代音源」开关已下线、固定开启
+    const bool substituteOn = true;
+    const QString order = Settings::sourceFirstOrder();
     // 汽水已实现可用的原生两段式取链，所以普通汽水歌在默认 vip 策略下直接走原生，
     // 不再白搜一圈自定义音源；但 VIP / 已判定不可播的歌（含汽水）仍先走自定义音源，
     // 用户显式选「全部自定义」时所有歌（含汽水）都只走自定义音源。
@@ -328,10 +328,9 @@ void SourceManager::resolve(const Song &song, const QString &quality, PlayableCa
         if (!r.message.isEmpty()) r.message += QStringLiteral("。");
         r.message += QStringLiteral("可在「设置 → 在线音源」检查状态或换用其它音源");
         // 「全部自定义」模式下不做内置跨源：用户明确要求所有取链只走自定义音源
-        const bool customOnly = Settings::boolean(QStringLiteral("vipSubstitute"), true)
-                && Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip"))
-                   == QLatin1String("custom");
-        if (!customOnly && Settings::boolean(QStringLiteral("autoToggleSource"), true))
+        const bool customOnly = Settings::sourceFirstOrder() == QLatin1String("custom");
+        // 「自动跨源换源」开关已下线、固定开启
+        if (!customOnly)
             tryCrossSource(song, quality, r, cb, quiet);
         else if (cb)
             cb(r);
@@ -347,10 +346,6 @@ void SourceManager::resolve(const Song &song, const QString &quality, PlayableCa
                                     .arg(song.source, original.message.isEmpty()
                                              ? original.reason : original.message);
         if (!quiet) demoteSource(song.source);   // 原平台取链失败 → 动态降权（后台预取不改排名）
-        if (!Settings::boolean(QStringLiteral("vipSubstitute"), true)) {
-            if (cb) cb(original);
-            return;
-        }
         CustomSourceManager::instance()->resolve(song, quality,
             [cb, bothFailed, original](const Playable &sub) {
                 if (sub.ok) {
@@ -565,10 +560,9 @@ void SourceManager::resolveAlternate(const Song &song, const QStringList &exclud
     // 自定义/在线音源。此前换源只读 sourceOrder、无视该设置，导致断流后仍跨到咪咕等
     // 内置平台——与设置字面含义冲突，也是「设了全部自定义却还跨源」的根因。
     // 这里让换源在该模式下严格只试自定义音源；自定义全失败则回调失败，由上层提示用户，
-    // 不再偷偷回落到内置平台。vip / platform 模式保持原有跨源行为不变。
-    const QString firstOrder = Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip"));
-    const bool customOnly = Settings::boolean(QStringLiteral("vipSubstitute"), true)
-                            && firstOrder == QLatin1String("custom");
+    // 不再偷偷回落到内置平台。vip 模式保持原有跨源行为不变。
+    const QString firstOrder = Settings::sourceFirstOrder();
+    const bool customOnly = firstOrder == QLatin1String("custom");
     if (customOnly) {
         qInfo().noquote() << QStringLiteral("[换源] 取链顺序=全部自定义，仅尝试自定义音源，不跨内置平台");
         if (candidates.isEmpty()) { if (cb) cb(Playable()); return; }
@@ -653,15 +647,14 @@ void SourceManager::lyric(const Song &song, LyricCallback cb)
     MusicSource *s = source(song.source);
 
     // 取词渠道顺序跟随「取链顺序」设置（sourceFirst）：
-    //   custom / vip —— 优先自定义（在线）音源取词，其次原平台，最后跨源匹配；
-    //   platform     —— 先原平台，其次自定义，最后跨源。
+    //   custom / vip（VIP 歌）—— 优先自定义（在线）音源取词，其次原平台，最后跨源匹配；
+    //   普通歌在 vip 模式下 —— 先原平台，其次自定义，最后跨源。
     // 这一点很关键：播放走自定义音源替代时，原平台歌词接口（如咪咕）常被反爬返回
     // HTML 页，若仍按 song.source 先取原平台歌词就会拿到「乱码」。自定义优先能从
     // 根源避开；任何一层拿到有效歌词即止，无效则自动进入下一层。
-    const QString order = Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip"));
-    const bool customFirst = Settings::boolean(QStringLiteral("vipSubstitute"), true)
-                             && (order == QLatin1String("custom")
-                                 || (order == QLatin1String("vip") && song.vip));
+    const QString order = Settings::sourceFirstOrder();
+    const bool customFirst = order == QLatin1String("custom")
+                             || (order == QLatin1String("vip") && song.vip);
     QVector<QString> steps;
     if (customFirst) {
         steps << QStringLiteral("custom");

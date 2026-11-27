@@ -283,15 +283,19 @@ Item {
                                 elide: Text.ElideRight
                             }
                             RowLayout {
+                                id: miniSubRow
                                 spacing: theme.spaceXs
                                 Text {
-                                    Layout.maximumWidth: 130
+                                    // 艺人名吃满剩余宽度（省略号截断）；原来固定 130 + 右侧
+                                    // 平台名不受限，窄屏上两段一起超宽、把整行撑出屏幕。
+                                    Layout.fillWidth: true
                                     text: app.currentArtist.length > 0 ? app.currentArtist : "选择一首歌开始"
                                     color: cSub
                                     font.pixelSize: theme.fontSm
                                     elide: Text.ElideRight
                                 }
                                 Text {
+                                    Layout.maximumWidth: miniSubRow.width * 0.45
                                     text: app.currentSourceLabel
                                     color: cPrimary
                                     font.pixelSize: theme.fontSm

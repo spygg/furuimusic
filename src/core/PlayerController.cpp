@@ -284,6 +284,21 @@ PlayerController::PlayerController(QObject *parent)
     m_resumeSeekTimer = new QTimer(this);
     m_resumeSeekTimer->setInterval(200);
     connect(m_resumeSeekTimer, &QTimer::timeout, this, &PlayerController::applyPendingSeek);
+    // 换源总超时：beginSwitch 之后取链链路（脚本竞速 / 自定义源 / 搜索引擎）只要
+    // 有一环既不回调也不报错，「正在切换音源」就会永久生效，播放键从此无响应
+    // （真机 15:35 复现：划走前点播放全部被忽略）。到点强制失败，交给上层的
+    // 换源/切歌阶梯兜底。
+    m_switchTimer = new QTimer(this);
+    m_switchTimer->setSingleShot(true);
+    m_switchTimer->setInterval(25000);
+    connect(m_switchTimer, &QTimer::timeout, this, [this] {
+        if (!m_switching)
+            return;
+        m_switching = false;
+        qWarning("[换源] 取链超时（25s 无结果），放弃本次解析：%s",
+                 qUtf8Printable(current().title));
+        emit errorOccurred(QStringLiteral("音源解析超时，请重试或更换音源"));
+    });
     // 队列/播放状态变化走防抖：千首队列每次 add/remove 都完整序列化一遍 JSON
     // 会占住 UI 线程。真正落盘由 5s 定时器与 aboutToQuit 兜底，1.2s 只是让
     // 「刚加的队列」尽快可恢复。
@@ -361,6 +376,8 @@ void PlayerController::applyPendingSeek()
 void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers, qint64 resumeMs)
 {
     if (!url.isValid()) {
+        m_switching = false;
+        if (m_switchTimer) m_switchTimer->stop();
         emit errorOccurred(QStringLiteral("无效的播放地址"));
         return;
     }
@@ -397,6 +414,7 @@ void PlayerController::playUrl(const QUrl &url, const QVariantMap &headers, qint
     m_advancing = false;
     m_ended = false;
     m_switching = false;
+    if (m_switchTimer) m_switchTimer->stop();
     // 新源加载完成（LoadedMedia/BufferedMedia）前，忽略旧曲残留的结束信号
     m_suppressEnd = true;
     // 重置看门狗读数：本次源重新计起播超时与停滞
@@ -450,11 +468,13 @@ void PlayerController::fetchWithHeaders()
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
                         + QStringLiteral("/playback");
     QDir().mkpath(dir);
-    // 缓存目录只服务于「带防盗链头的直链」这一条兜底路径：每次启动只保留最近 20 首，
-    // 否则长期使用会把手机存储慢慢吃满（系统清理缓存前不一定会通知到我们）。
-    static bool cachePruned = false;
-    if (!cachePruned) {
-        cachePruned = true;
+    // 缓存目录只服务于「带防盗链头的直链」这一条兜底路径：只保留最近 20 首。
+    // 原来用 static bool 只剪一次，但 Android 进程可以活好几天，持续使用会把它
+    // 慢慢吃满（系统清理缓存前不一定会通知到我们）；改成最多每 10 分钟剪一次。
+    static qint64 lastPruneAt = 0;
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (nowMs - lastPruneAt > 10 * 60 * 1000) {
+        lastPruneAt = nowMs;
         const QFileInfoList cached = QDir(dir).entryInfoList(
             QDir::Files | QDir::NoDotAndDotDot, QDir::Time);
         for (int i = 20; i < cached.size(); ++i)
@@ -563,6 +583,7 @@ void PlayerController::stop()
     m_everPlayed = false;
     m_ended = false;
     m_switching = false;
+    if (m_switchTimer) m_switchTimer->stop();
     m_player->stop();
     emit stateChanged();
 }
@@ -571,6 +592,7 @@ void PlayerController::beginSwitch()
 {
     stop();              // stop() 会清掉 m_switching，所以在它之后再置位
     m_switching = true;
+    if (m_switchTimer) m_switchTimer->start();
 }
 
 void PlayerController::pauseWatchdog()
@@ -810,11 +832,23 @@ void PlayerController::saveState()
                       QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
         m_queueJsonDirty = false;
     }
-    Settings::set(QStringLiteral("resumeIndex"), m_currentIndex);
     // 恢复位置还没真正应用（媒体未加载完成）前，保留待跳转点，别被 0 覆盖掉
     const qint64 pos = m_pendingSeek > 0 ? m_pendingSeek : position();
+    // 暂停/停止时位置不动：5s 快照与上次完全一致就跳过，别让 settings.ini
+    // （含整份队列 JSON）在后台被无意义地整文件重写。播放中位置每 tick 都变，照常写。
+    static int sLastIndex = -2;
+    static qint64 sLastPos = -2;
+    static bool sLastPlaying = false;
+    const bool isPlaying = playing();
+    if (!m_queueJsonDirty && m_currentIndex == sLastIndex && pos == sLastPos
+        && isPlaying == sLastPlaying)
+        return;
+    sLastIndex = m_currentIndex;
+    sLastPos = pos;
+    sLastPlaying = isPlaying;
+    Settings::set(QStringLiteral("resumeIndex"), m_currentIndex);
     Settings::set(QStringLiteral("resumePosition"), pos);
-    Settings::set(QStringLiteral("resumePlaying"), playing());
+    Settings::set(QStringLiteral("resumePlaying"), isPlaying);
 }
 
 // 修复历史坏数据：Qt5 构建曾把 Qt6 写的裸 UTF-8 ini 按 Latin-1 读花再存回，
