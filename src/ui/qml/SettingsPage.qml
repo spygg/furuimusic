@@ -932,11 +932,13 @@ Item {
                         id: updateBtn
                         Layout.fillWidth: true
                         Layout.preferredHeight: theme.touchMin
-                        text: updater.downloading ? "下载中…"
-                              : updater.downloadedPath.length > 0 ? "安装更新"
+                        // 下载中不再是禁用的「下载中…」：卡死/断网时用户必须能自救，
+                        // 按钮改为可点的「重新下载」——C++ downloadUpdate() 在下载中
+                        // 再调用会取消旧请求、重新探测镜像并从头下载。
+                        text: updater.downloadedPath.length > 0 ? "安装更新"
+                              : updater.downloading ? "重新下载"
                               : "下载更新"
-                        enabled: !updater.downloading
-                                 && (updater.hasUpdate || updater.downloadedPath.length > 0)
+                        enabled: updater.hasUpdate || updater.downloadedPath.length > 0
                         background: Rectangle { radius: 6; color: updateBtn.down ? cPrimaryPress : cPrimary }
                         contentItem: Text { text: updateBtn.text; color: "#FFFFFF"; font.pixelSize: theme.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                         onClicked: {
@@ -947,12 +949,14 @@ Item {
                                 updater.downloadUpdate()
                         }
                     }
+                    // 下载转入后台：关掉弹层继续下，进度在设置页更新入口那行实时显示，
+                    // 完成/失败分别走自动拉起安装器与全局 Toast，不需要守着这个弹层。
                     Button {
                         id: laterBtn
                         Layout.preferredWidth: Math.max(72, theme.touchMin)
                         Layout.preferredHeight: theme.touchMin
                         text: "稍后"
-                        enabled: !updater.downloading
+                        enabled: true
                         background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
                         contentItem: Text { text: laterBtn.text; color: cPrimary; font.pixelSize: theme.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                         onClicked: updateOverlay.show = false
@@ -1008,11 +1012,15 @@ Item {
             }
         }
         function onDownloadFinished(path) {
-            // 下载完成即自动拉起安装器（Android）或打开所在文件夹（桌面）
+            // 下载完成即自动拉起安装器（Android）或打开所在文件夹（桌面）；
+            // 弹层可能早已被「稍后」关掉（后台下载），自动拉起就是完成信号
             updater.installUpdate()
         }
         function onDownloadFailed(error) {
             updateOverlay.errorText = error
+            // 弹层关着（后台下载）时错误只写在这里没人看得见，补一条全局 Toast
+            if (!updateOverlay.show)
+                app.notify("更新包下载失败：" + error + "（可回设置页重新下载）", "error")
         }
     }
 }

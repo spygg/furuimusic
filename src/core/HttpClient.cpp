@@ -221,7 +221,7 @@ void HttpClient::request(const QString &method, const QUrl &url, const QVariantM
     });
 }
 
-void HttpClient::download(const QUrl &url, const QVariantMap &headers,
+QNetworkReply *HttpClient::download(const QUrl &url, const QVariantMap &headers,
                           const QString &destPath, const DownloadCallback &cb,
                           int timeoutMs, const DownloadProgressCallback &progress)
 {
@@ -247,7 +247,7 @@ void HttpClient::download(const QUrl &url, const QVariantMap &headers,
     if (!file->open(QIODevice::WriteOnly)) {
         if (cb)
             cb(false, QStringLiteral("无法写入下载文件"));
-        return;
+        return nullptr;
     }
 
     QNetworkReply *reply = m_nam.get(req);
@@ -307,6 +307,7 @@ void HttpClient::download(const QUrl &url, const QVariantMap &headers,
         reply->deleteLater();
         finish(ok, error);
     });
+    return reply;
 }
 
 QNetworkReply *HttpClient::openStream(const QNetworkRequest &req)

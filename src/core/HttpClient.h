@@ -48,9 +48,11 @@ public:
                  const QByteArray &body, const Callback &cb, int timeoutMs = -1,
                  bool followRedirects = true, const QString &peerVerifyName = QString(),
                  qint64 bodyLimit = -1);
-    void download(const QUrl &url, const QVariantMap &headers, const QString &destPath,
-                  const DownloadCallback &cb, int timeoutMs = -1,
-                  const DownloadProgressCallback &progress = DownloadProgressCallback());
+    // 返回本次下载的 QNetworkReply，调用方可在「重新下载」时 abort 旧请求；
+    // 忽略返回值不影响原有调用点。
+    QNetworkReply *download(const QUrl &url, const QVariantMap &headers, const QString &destPath,
+                            const DownloadCallback &cb, int timeoutMs = -1,
+                            const DownloadProgressCallback &progress = DownloadProgressCallback());
     // 流式打开（开放 API /stream 音频代理用）：复用本客户端的代理配置，返回裸 reply，
     // 由调用方负责读数据、abort 与 deleteLater。不缓存 body、不设超时（长音频流可能
     // 远超默认 12s；断连由调用方在 socket disconnected 时 abort）。

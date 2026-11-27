@@ -1,6 +1,7 @@
 #include "PlatformAdapter.h"
 
 #include "../core/Settings.h"
+#include "core/Logger.h"
 #include "core/QtCompat.h"
 
 #include <QGuiApplication>
@@ -44,6 +45,29 @@ AndroidInsets queryAndroidInsets(qreal devicePixelRatio)
     QJniObject activity = QNativeInterface::QAndroidApplication::context();
     if (!activity.isValid())
         return out;
+    // 导航模式（0=三键传统，1=二键，2=全面屏手势）：两类机型的窗口几何行为截然不同——
+    // 手势机强制 edge-to-edge、Qt 不内缩内容区（safeArea.top=0，QML 差额算法补边距）；
+    // 传统机 Qt 会把 contentItem 往下推 safeArea.top。排查「顶部空白/背景没盖住」时
+    // 先看这行日志就知道是哪一类行为。只作日志诊断，不参与判定。
+    {
+        QJniObject res = activity.callObjectMethod("getResources",
+                                                   "()Landroid/content/res/Resources;");
+        if (res.isValid()) {
+            QJniObject cfg = res.callObjectMethod("getConfiguration",
+                                                  "()Landroid/content/res/Configuration;");
+            if (cfg.isValid()) {
+                const jint navMode = cfg.getField<jint>("navigationMode");
+                // refreshInsets 会随 IME/旋转反复触发，导航模式不变，只打一次
+                static qint64 s_navLogged = -1;
+                if (s_navLogged != navMode) {
+                    s_navLogged = navMode;
+                    Furui::Logger::write(QStringLiteral("I"),
+                                         QStringLiteral("[安全区] 导航模式=%1（0=三键 2=手势）")
+                                             .arg(int(navMode)));
+                }
+            }
+        }
+    }
     QJniObject window = activity.callObjectMethod("getWindow", "()Landroid/view/Window;");
     if (!window.isValid())
         return out;

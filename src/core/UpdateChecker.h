@@ -9,7 +9,9 @@
 //      不跳转外部网页；
 //   4) 下载完成后 Android 拉起系统安装器（FileProvider），桌面打开安装包所在文件夹。
 #include <QJsonObject>
+#include <QNetworkReply>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -57,8 +59,10 @@ public:
 
     // 拉取 version.json 并与本地版本比较；结果经 checkFinished 通知
     Q_INVOKABLE void checkForUpdates();
-    // 下载当前平台的更新包；进度经 stateChanged 展示，结果经 downloadFinished/downloadFailed 通知
+    // 下载当前平台的更新包；下载中再调用会取消旧请求并重新探测/下载（「重新下载」）
     Q_INVOKABLE void downloadUpdate();
+    // 取消当前下载并复位状态（关闭更新弹层时可调用）
+    Q_INVOKABLE void cancelDownload();
     // 下载完成后触发：Android 拉起系统安装器；桌面打开安装包所在文件夹
     Q_INVOKABLE void installUpdate();
     // 打开下载结果所在目录（系统文件管理器），供车机等「只允许系统文件管理安装」的环境手动安装
@@ -90,8 +94,8 @@ private:
     QString downloadUrlForKey(const QString &version, const QString &key,
                               const QString &fallbackAsset) const;
     QStringList downloadCandidates(const QString &version) const;
-    void probeAndDownload(const QStringList &candidates);
-    void startDownload(const QString &url);
+    void probeAndDownload(const QStringList &candidates, quint64 gen);
+    void startDownload(const QString &url, quint64 gen);
     void downloadNextCandidate(bool previousFailed);
     QString targetPath() const;
 
@@ -101,6 +105,9 @@ private:
     QVariantMap m_downloads;   // manifest 里的 downloads 映射（平台 -> 直链，可远程改镜像）
     QStringList m_downloadQueue;  // 探测后按耗时排序的可用线路，失败时依次回退
     int m_downloadIndex = 0;
+    // 「重新下载」时递增：让旧探测/旧下载的异步回调全部作废，避免旧请求抢答或写同一个文件
+    quint64 m_downloadGen = 0;
+    QPointer<QNetworkReply> m_downloadReply;
     bool m_checking = false;
     bool m_downloading = false;
     int m_progress = 0;

@@ -45,10 +45,15 @@ ApplicationWindow {
     }
 
     // 修复 Qt 6.11 部分 GSI 机型：软键盘收起后 safeArea.top 卡在 80dp
-    // （IME 高度 56dp 被算进状态栏 24dp），且不发 safeAreaMarginsChanged，
-    // ApplicationWindow 的 contentItem 被误推到 y=80，整页下移 56dp
+    // （IME 高度 56dp 被算进状态栏），且不发 safeAreaMarginsChanged，
+    // ApplicationWindow 的 contentItem 被误推下去，整页下移
     // （搜索框离顶部一大截）。键盘显示时的内缩合理，只在他收起后拉回纯状态栏高度。
-    // platform.statusBarTop 来自 JNI 状态栏高度，不受 IME 影响（实测恒 24dp）。
+    // platform.statusBarTop 来自 JNI 状态栏高度，不受 IME 影响。
+    // 触发条件必须是「Qt 真的把 IME 高度卡进了 safeArea.top」
+    // （osSafeTop 明显大于纯状态栏高度）——另一类 edge-to-edge 机型 Qt 不内缩
+    // 内容区（contentItem.y 恒 0、osSafeTop=0），由 C++ 差额算法给 QML 补
+    // insetTop，这种机型绝不能动 contentItem，否则整页多下移一个状态栏高度、
+    // 窗口背景跟着露不出顶条（v1.4.55 在差额机型上的回归）。
     Timer {
         id: imeSafeFix
         interval: 400
@@ -56,12 +61,14 @@ ApplicationWindow {
         repeat: true
         onTriggered: {
             if (Qt.inputMethod && Qt.inputMethod.visible) return
+            if (platform.osSafeTop <= platform.statusBarTop + 1) return
             const ci = win.contentItem
             if (!ci || platform.statusBarTop <= 0) return
             const expected = platform.statusBarTop
             if (Math.abs(ci.y - expected) <= 1) return
             const delta = ci.y - expected
             console.log("IMEFIX ci.y=" + ci.y + "->" + expected
+                        + " safeTop=" + platform.osSafeTop
                         + " h=" + ci.height + "+" + delta)
             ci.y = expected
             ci.height = ci.height + delta
@@ -201,10 +208,13 @@ ApplicationWindow {
         // 不能用负值：anchors.fill + 负 topMargin 在本机把 Loader 高度从 1612 算成 321，
         // 视频和控制条全挤在顶部一小条。margin=0 既铺满又不会触发塌缩。
         // 桌面 osSafeTop=0，两值相同无影响。
+        // 顶部再回收 4dp：OS 给的 inset 含挖孔缓冲，实际观感偏大（用户反馈
+        // 「各页顶部 padding 再小几个像素」）；40-4=36 仍高于状态栏 24，不遮挡。
+        // 内缩型机型/桌面 insetTop=0，Math.max 钳住不受影响。
         anchors.leftMargin: platform.insetLeft - platform.osSafeLeft
         anchors.rightMargin: platform.insetRight
         anchors.topMargin: shell.item && shell.item.pageIndex === 4
-                           ? 0 : platform.insetTop
+                           ? 0 : Math.max(0, platform.insetTop - 4)
         anchors.bottomMargin: platform.insetBottom
     source: win.shellSource
 

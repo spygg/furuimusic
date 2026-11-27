@@ -1,7 +1,11 @@
 {
-  "version": "1.4.55",
-  "desc": "新增\n- 汽水音乐评论：通过免签 H5 接口读取歌曲热门评论（头像/昵称/时间/点赞/回复数），播放页评论抽屉不再误报「暂无评论」。\n\n修复\n- 换源卡死（播放键永久无响应）：新增 25 秒换源总超时；修复脚本竞速补位泵持有已销毁对象导致回调丢失，以及自定义源回退后迟到的 HTTP 结果重复回调造成重复播放/历史插入。\n- Android 划掉任务后的 ANR 死锁：onDestroy 改为向 Qt 事件循环投递退出并后台延时收尾，旋转/分屏等配置变更仍走原生流程。\n- targetSdk 35 强制 edge-to-edge 下三键导航条遮挡播放页底部按钮：单独读取导航栏 inset 并补齐底部差额。\n- 搜索态残留：切页时重置搜索激活状态，迷你播放条不再一直隐藏。\n- 列表行当前曲目状态统一：高亮与播放/暂停图标与实际状态一致，点击当前曲目改为暂停/继续而非从头重播；修复迷你播放条窄屏溢出和竖屏歌词贴封面过挤。\n\n优化\n- 精简设置项：移除「平台优先」选项及「VIP 替代音源」「自动跨源换源」「播放时屏幕常亮」开关，后端固定为原先勾选/推荐行为；旧配置中的 platform 自动按 VIP 优先处理。\n- 前台播放（或 MV 播放）时自动保持屏幕常亮，退到后台或暂停立即恢复系统锁屏策略。\n- 播放缓存清理改为最多每 10 分钟一次，避免 Android 长驻进程逐渐占满存储；播放状态无变化时跳过整份设置文件重写。\n- MV 播放器改为懒加载，减少启动时的解码管线开销。\n",
+  "version": "1.4.56",
+  "desc": "新增\n- 更新下载支持后台进行：下载中可点「重新下载」作废旧请求重新拉取；点「稍后」关闭弹层后继续后台下载，失败时全局提示，不再卡死在「下载中」。\n\n修复\n- 回退 bug：全面屏手势机型整页下移、挖孔区封面背景未覆盖（v1.4.54 引入的键盘收起复位逻辑误伤「差额算法」机型），现仅在键盘高度被卡进安全区时才复位，两台真机已验证。\n\n优化\n- 挖孔屏各页面顶部留白收紧 4dp，控件更贴近状态栏。\n- 安全区日志新增导航模式诊断（0=三键导航 2=全面屏手势），便于区分机型。",
   "history": [
+    {
+      "version": "1.4.55",
+      "desc": "新增\n- 汽水音乐评论：通过免签 H5 接口读取歌曲热门评论（头像/昵称/时间/点赞/回复数），播放页评论抽屉不再误报「暂无评论」。\n\n修复\n- 换源卡死（播放键永久无响应）：新增 25 秒换源总超时；修复脚本竞速补位泵持有已销毁对象导致回调丢失，以及自定义源回退后迟到的 HTTP 结果重复回调造成重复播放/历史插入。\n- Android 划掉任务后的 ANR 死锁：onDestroy 改为向 Qt 事件循环投递退出并后台延时收尾，旋转/分屏等配置变更仍走原生流程。\n- targetSdk 35 强制 edge-to-edge 下三键导航条遮挡播放页底部按钮：单独读取导航栏 inset 并补齐底部差额。\n- 搜索态残留：切页时重置搜索激活状态，迷你播放条不再一直隐藏。\n- 列表行当前曲目状态统一：高亮与播放/暂停图标与实际状态一致，点击当前曲目改为暂停/继续而非从头重播；修复迷你播放条窄屏溢出和竖屏歌词贴封面过挤。\n\n优化\n- 精简设置项：移除「平台优先」选项及「VIP 替代音源」「自动跨源换源」「播放时屏幕常亮」开关，后端固定为原先勾选/推荐行为；旧配置中的 platform 自动按 VIP 优先处理。\n- 前台播放（或 MV 播放）时自动保持屏幕常亮，退到后台或暂停立即恢复系统锁屏策略。\n- 播放缓存清理改为最多每 10 分钟一次，避免 Android 长驻进程逐渐占满存储；播放状态无变化时跳过整份设置文件重写。\n- MV 播放器改为懒加载，减少启动时的解码管线开销。\n"
+    },
     {
       "version": "1.4.54",
       "desc": "新增\n- 汽水音乐「发现 → 模式探索」歌单墙：选择汽水平台后直接展示 45 个场景模式 + 24 个模式电台 + 官方推荐歌单，竖向网格可一直向上滑；点开即按汽水电台接口出歌。\n- 汽水歌单播完自动按最后一首继续推荐（与官方 App 一致）：不受「漫游模式」和歌单上下文限制，推荐歌播完会再次续推，形成连续播放流。\n- 音源并行竞速（设置页新开关，默认开启）：最多同时向 3 个在线音源取链，谁先返回可用地址就用谁，慢源不再拖住快源；关闭后按成绩从高到低串行尝试。\n- 自建 HTTP 音源与本地音乐目录也并行尝试，全部失败才进入在线脚本层。\n\n修复\n- 汽水歌曲点播一直失败：原生取链只拿到 VOD 签名地址，现补第二次请求换取真实音频直链，真机可正常播放并正常续播下一首。\n- 《恋曲1990》等名曲「所有源都找不到」：跨源候选门槛放宽并纳入 DJ/Live 等版本、按平台轮转去重、上限 5→12，实测酷狗 DJ 版可播、自定义源拿到酷我直链。\n- 「取链顺序 = 全部自定义」对汽水歌失效：现对所有歌曲（含汽水）生效；「VIP 优先」下 VIP/不可播的汽水歌也先走自定义音源。\n- 扫码刷新误报「已扫码」；MV 全屏顶部挖孔留白与信箱模式黑边；键盘收起后整页下移 56dp；未完成风险确认时播放无限跳下一首。\n\n优化\n- 歌词/封面等只读元数据不受音源锁拦截，锁定态也能看歌词。\n- Android 构建固化低堆 gradle.properties，避免 Gradle daemon 因页面文件不足崩溃。\n"
@@ -224,10 +228,10 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.55/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.55/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.55/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.55/FuruiMusic-android-arm64-v8a.apk",
-    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.55/FuruiMusic-carcompat-netease-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.56/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.56/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.56/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.56/FuruiMusic-android-arm64-v8a.apk",
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.56/FuruiMusic-carcompat-netease-arm64-v8a.apk"
   }
 }

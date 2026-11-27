@@ -505,7 +505,7 @@ static bool looksLikeReleaseAsset(const QByteArray &head)
 // 并行探测所有候选：Range 取前 2KB，HTTP 2xx 且文件头匹配才可用。
 // 探测超时 6s（只是取 2KB，6s 还没回包的线路对整包下载也没意义）。
 // 探测期间 progress=-1，UI 显示不确定进度；选出最快可用地址后开始真正下载。
-void UpdateChecker::probeAndDownload(const QStringList &candidates)
+void UpdateChecker::probeAndDownload(const QStringList &candidates, quint64 gen)
 {
     auto state = std::make_shared<DownloadProbeState>();
     state->pending = candidates.size();
@@ -522,7 +522,8 @@ void UpdateChecker::probeAndDownload(const QStringList &candidates)
         clock->start();
         HttpClient::instance()->request(
             QStringLiteral("GET"), QUrl(url), headers, QByteArray(),
-            [this, state, url, clock, candidates](const HttpClient::Reply &r) {
+            [this, state, url, clock, candidates, gen](const HttpClient::Reply &r) {
+                if (gen != m_downloadGen) return;   // 已被「重新下载」作废
                 DownloadProbeState::Candidate c;
                 c.url = url;
                 c.valid = r.ok && (r.status == 200 || r.status == 206)
@@ -566,13 +567,14 @@ void UpdateChecker::probeAndDownload(const QStringList &candidates)
                 Logger::write(QStringLiteral("I"),
                               QStringLiteral("[更新探测] 线路优先级: %1").arg(m_downloadQueue.join(QStringLiteral(" | "))));
                 m_downloadIndex = 0;
-                startDownload(m_downloadQueue.first());
+                startDownload(m_downloadQueue.first(), gen);
             }, 6000, true, QString(), 2048);   // 只要 2KB 文件头；截断了也不会 whole-file 进内存
     }
 }
 
-void UpdateChecker::startDownload(const QString &urlString)
+void UpdateChecker::startDownload(const QString &urlString, quint64 gen)
 {
+    if (gen != m_downloadGen) return;   // 旧请求迟到，别再写文件/回调
     const QUrl url(urlString);
     if (!url.isValid() || url.scheme() != QLatin1String("https")) {
         m_downloading = false;
@@ -584,8 +586,9 @@ void UpdateChecker::startDownload(const QString &urlString)
     const QString path = targetPath();
     Logger::write(QStringLiteral("I"), QStringLiteral("[更新下载] 使用线路: %1").arg(urlString));
     // APK/zip 体积大且用户网络可能较慢：超时放宽到 30 分钟（HttpClient 的超时是整请求硬超时）
-    HttpClient::instance()->download(url, QVariantMap(), path,
-                                     [this, path](bool ok, const QString &error) {
+    m_downloadReply = HttpClient::instance()->download(url, QVariantMap(), path,
+                                     [this, path, gen](bool ok, const QString &error) {
+        if (gen != m_downloadGen) return;   // 「重新下载」已开启新请求，丢弃旧结果
         if (!ok) {
             Logger::write(QStringLiteral("W"),
                           QStringLiteral("[更新下载] 线路失败: %1，尝试下一条").arg(error));
@@ -596,7 +599,8 @@ void UpdateChecker::startDownload(const QString &urlString)
         m_downloadedPath = path;
         emit stateChanged();
         emit downloadFinished(path);
-    }, 30 * 60 * 1000, [this](qint64 received, qint64 total) {
+    }, 30 * 60 * 1000, [this, gen](qint64 received, qint64 total) {
+        if (gen != m_downloadGen) return;
         const int p = total > 0 ? int(received * 100 / total) : -1;
         if (p != m_progress) {
             m_progress = p;
@@ -613,7 +617,7 @@ void UpdateChecker::downloadNextCandidate(bool previousFailed)
         ++m_downloadIndex;
         m_progress = -1;
         emit stateChanged();
-        startDownload(m_downloadQueue.at(m_downloadIndex));
+        startDownload(m_downloadQueue.at(m_downloadIndex), m_downloadGen);
         return;
     }
     m_downloading = false;
@@ -650,8 +654,18 @@ QString UpdateChecker::targetPath() const
 
 void UpdateChecker::downloadUpdate()
 {
-    if (m_downloading || m_checking || m_remoteVersion.isEmpty())
+    if (m_checking || m_remoteVersion.isEmpty())
         return;
+    // 下载中再点＝「重新下载」：递增 gen 让旧探测/旧下载的异步回调全部作废，
+    // abort 在途连接，然后照常重新探测镜像并从头下载。
+    // 没有这条路径时，断网/镜像卡死会把按钮锁死在「下载中」，用户只能干等。
+    if (m_downloading) {
+        ++m_downloadGen;
+        if (m_downloadReply)
+            m_downloadReply->abort();   // 迟到的失败回调被 gen 闸门丢弃
+        Logger::write(QStringLiteral("I"),
+                      QStringLiteral("[更新] 用户触发重新下载，作废在途请求"));
+    }
     m_downloading = true;
     m_progress = -1;
     m_downloadedPath.clear();
@@ -662,7 +676,26 @@ void UpdateChecker::downloadUpdate()
     const QStringList candidates = downloadCandidates(m_remoteVersion);
     Logger::write(QStringLiteral("I"),
                   QStringLiteral("[更新探测] 开始，%1 条候选").arg(candidates.size()));
-    probeAndDownload(candidates);
+    probeAndDownload(candidates, m_downloadGen);
+}
+
+// 取消当前下载并复位状态：gen 递增作废一切迟到回调（成功/失败/进度都不再落地），
+// abort 在途连接。「稍后」关闭弹层时 QML 不调用它（下载转后台继续）；
+// 它只留给将来需要真正中止的场景（如退出应用前的清理）。
+void UpdateChecker::cancelDownload()
+{
+    ++m_downloadGen;
+    if (m_downloadReply) {
+        m_downloadReply->abort();   // 迟到的回调被 gen 闸门丢弃
+        m_downloadReply.clear();
+    }
+    if (!m_downloading)
+        return;
+    m_downloading = false;
+    m_progress = 0;
+    m_downloadedPath.clear();
+    emit stateChanged();
+    Logger::write(QStringLiteral("I"), QStringLiteral("[更新] 已取消下载"));
 }
 
 void UpdateChecker::installUpdate()
