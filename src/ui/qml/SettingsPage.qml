@@ -401,12 +401,49 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
+                Text { Layout.fillWidth: true; text: "音源并行竞速"; color: cText; font.pixelSize: 13 }
+                Switch {
+                    checked: app.sourceRaceEnabled
+                    onToggled: app.setSetting("sourceRace", checked)
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: "开启后最多同时向 3 个在线音源取链，谁先返回可用地址就用谁，慢源不会拖住其他源；关闭则按成绩从高到低逐个尝试。"
+                color: cSub
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
                 visible: platform.isMobile
                 Text { Layout.fillWidth: true; text: "播放时屏幕常亮"; color: cText; font.pixelSize: 13 }
                 Switch {
                     checked: app.keepScreenOn
                     onToggled: app.setSetting("keepScreenOn", checked)
                 }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Text { Layout.fillWidth: true; text: "漫游模式"; color: cText; font.pixelSize: 13 }
+                Switch {
+                    checked: app.roamMode
+                    onToggled: app.setSetting("roamMode", checked)
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: "开启后，从搜索/单曲/推荐进入的队列播完会自动按当前歌曲推荐相似歌曲继续播放；"
+                      + "从歌单/榜单/收藏/历史进入的队列仍按歌单顺序播完。推荐取自汽水音乐公开接口，需联网。"
+                color: cSub
+                font.pixelSize: theme.fontSm
+                wrapMode: Text.Wrap
             }
 
             RowLayout {

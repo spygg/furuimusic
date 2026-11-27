@@ -2,6 +2,7 @@
 #include "SourceManager.h"
 
 #include <QDebug>
+#include <QHash>
 #include <QSet>
 #include <QPair>
 #include <QTimer>
@@ -247,7 +248,11 @@ void SourceManager::playlistDetail(const Playlist &playlist, SongsCallback cb)
         finish(QVector<Song>());
         return;
     }
-    if (playlist.type == QLatin1String("user"))
+    // 汽水「模式探索」电台不是普通歌单：详情走 /luna/feed/radio/tracks。
+    // 用 extra.kind 标记而不是 sourceId 前缀，避免和真实歌单 id 混淆。
+    if (playlist.extra.value(QStringLiteral("kind")).toString() == QLatin1String("radio"))
+        s->radioDetail(id, detailSongLimit(playlist, s), finish);
+    else if (playlist.type == QLatin1String("user"))
         s->userPlaylistDetail(id, finish);
     else if (playlist.type == QLatin1String("rank"))
         s->rankDetail(id, detailSongLimit(playlist, s), 0, finish);
@@ -297,6 +302,9 @@ void SourceManager::resolve(const Song &song, const QString &quality, PlayableCa
     // 直接从自定义音源起步。
     const bool substituteOn = Settings::boolean(QStringLiteral("vipSubstitute"), true);
     const QString order = Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip"));
+    // 汽水已实现可用的原生两段式取链，所以普通汽水歌在默认 vip 策略下直接走原生，
+    // 不再白搜一圈自定义音源；但 VIP / 已判定不可播的歌（含汽水）仍先走自定义音源，
+    // 用户显式选「全部自定义」时所有歌（含汽水）都只走自定义音源。
     const bool customFirst = substituteOn
             && (order == QLatin1String("custom")
                 || (order == QLatin1String("vip")
@@ -417,20 +425,39 @@ void SourceManager::tryCrossSource(const Song &song, const QString &quality,
         // 收集所有达标候选按分数降序，逐个尝试取链。旧实现只试最佳一个：一旦那一家
         // 平台拿不到链接（VIP / 限流 / 无地址）就直接判死整首——《如愿》这种热门歌
         // 也会报「所有音源播放失败」。多试几个平台，命中任何一个即可。
-        QVector<QPair<qreal, Song>> cands;
+        QVector<QPair<qreal, Song>> ranked;
+        QSet<QString> seenKeys;
         for (const Song &c : list) {
             const qreal score = candidateScore(song, c);
-            if (score > 0.55) cands.append(qMakePair(score, c));
+            // 放宽到 0.5：同名不同版本（Live / DJ / 伴奏）也保留，热门老歌的
+            // 原版在各平台常是 VIP，能播的往往是这些版本。
+            if (score <= 0.5) continue;
+            const QString key = c.source + QLatin1Char(':') + c.sourceId;
+            if (seenKeys.contains(key)) continue;
+            seenKeys.insert(key);
+            ranked.append(qMakePair(score, c));
         }
-        if (cands.isEmpty()) {
+        if (ranked.isEmpty()) {
             // 本轮没匹配上：软刷新批次里可能只是结果不全，等下一个批次；最终批次自然收尾
             return;
         }
-        std::stable_sort(cands.begin(), cands.end(),
+        std::stable_sort(ranked.begin(), ranked.end(),
                          [](const QPair<qreal, Song> &a, const QPair<qreal, Song> &b) {
                              return a.first > b.first;
                          });
-        if (cands.size() > 5) cands.resize(5);
+        // 按平台轮转挑候选：同一平台最多先拿 2 首，避免 5 个名额全被
+        // 网易云的 VIP 版本占满，酷狗的 DJ 版等真正可播版本根本排不上。
+        QVector<QPair<qreal, Song>> cands;
+        QHash<QString, int> perPlatform;
+        for (int round = 0; round < 2 && cands.size() < 12; ++round) {
+            for (const auto &item : ranked) {
+                if (cands.size() >= 12) break;
+                const QString src = item.second.source;
+                if (perPlatform.value(src, 0) >= round + 1) continue;
+                perPlatform.insert(src, perPlatform.value(src, 0) + 1);
+                cands.append(item);
+            }
+        }
         *started = true;
         qInfo().noquote() << QStringLiteral("[取链] 内置跨源搜索「%1 %2」→ %3 条，候选 %4 个")
                                  .arg(song.title, song.artist).arg(int(list.size())).arg(cands.size());

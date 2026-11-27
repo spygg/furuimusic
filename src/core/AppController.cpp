@@ -481,6 +481,9 @@ struct AppController::Impl {
     qint64 recoverPos = 0;
     // 推荐请求在途：连点下一首时只允许有一个 /luna/track/related 请求
     bool recommendPending = false;
+    // 结果区上下文：playlist（歌单/榜单/收藏/历史）→ playResult 入队时按歌单播；
+    // 空或 single（搜索/汽水推荐）→ 漫游模式下播完走推荐续播。
+    QString resultsContext;
     // 曲库页搜索框是否有内容：外壳据此隐藏播放栏，给搜索结果/软键盘让位
     bool searchActive = false;
     // 汽水推荐面板当前选择（QML 侧 ComboBox 与这里双向同步）
@@ -819,10 +822,14 @@ QString AppController::quality() const { return d->quality; }
 bool AppController::vipSubstituteEnabled() const { return d->vipSubstitute; }
 bool AppController::autoToggleSource() const
 { return Settings::boolean(QStringLiteral("autoToggleSource"), true); }
+bool AppController::sourceRaceEnabled() const
+{ return Settings::boolean(QStringLiteral("sourceRace"), true); }
 QString AppController::sourceFirstOrder() const
 { return Settings::string(QStringLiteral("sourceFirst"), QStringLiteral("vip")); }
 bool AppController::qishuiRoam() const
 { return Settings::boolean(QStringLiteral("qishuiRoam"), true); }   // 设置页已隐藏该开关，默认保持开启
+bool AppController::roamMode() const
+{ return Settings::boolean(QStringLiteral("roamMode"), false); }   // 默认关闭：开启后非歌单队列播完自动按汽水推荐续播
 bool AppController::keepScreenOn() const
 { return Settings::boolean(QStringLiteral("keepScreenOn"), true); }
 
@@ -947,6 +954,7 @@ void AppController::search(const QString &keyword, const QString &sourceId)
     SourceManager::instance()->search(keyword.trimmed(), sourceId, limit,
         [this, keyword, req](const QVector<Song> &songs) {
             if (req != d->searchRequestId) return;
+            d->resultsContext.clear();   // 搜索结果：单曲上下文，漫游模式播完走推荐
             m_results->setSongs(songs);
             d->searching = false;
             d->searchKind.clear();
@@ -1022,6 +1030,7 @@ void AppController::loadQishuiRecommend(const QString &mode, const QString &cate
     const auto done = [this, gen](const QVector<Song> &songs, const QString &label) {
         if (gen != d->qishuiGen) return;
         d->discoveryLoading = false;
+        d->resultsContext.clear();   // 汽水推荐页：单曲上下文，本身就是推荐流
         m_results->setSongs(songs);
         setStatus(songs.isEmpty()
                       ? QStringLiteral("%1暂无可用内容，请检查网络后重试").arg(label)
@@ -1203,6 +1212,7 @@ void AppController::openDiscoveryPlaylist(const QString &playlistUid)
     SourceManager::instance()->playlistDetail(target,
         [this, target, gen](const QVector<Song> &songs) {
             if (gen != d->searchRequestId) return;
+            d->resultsContext = QStringLiteral("playlist");
             m_results->setSongs(songs);
             setStatus(songs.isEmpty()
                           ? QStringLiteral("榜单「%1」暂未读到歌曲（该平台公共接口可能不可用）")
@@ -1258,6 +1268,7 @@ void AppController::loadPlaylist(const QString &playlistUid)
     const bool cacheComplete = !cached.isEmpty()
         && (target.count > 0 ? cached.size() >= target.count : cached.size() >= 100);
     if (cacheComplete) {
+        d->resultsContext = QStringLiteral("playlist");
         m_results->setSongs(cached);
         setStatus(QStringLiteral("歌单「%1」共 %2 首（本地已同步）").arg(target.title).arg(cached.size()));
         emit searchFinished(cached.size(), QString());
@@ -1279,6 +1290,7 @@ void AppController::loadPlaylist(const QString &playlistUid)
                         Library::instance()->saveSongs(songs);
                         Library::instance()->setPlaylistSongs(target.uid, songs);
                     }
+                    d->resultsContext = QStringLiteral("playlist");
                     m_results->setSongs(songs);
                     setStatus(songs.isEmpty()
                         ? QStringLiteral("歌单「%1」未读到歌曲，请检查 Cookie 或先同步账号歌单").arg(target.title)
@@ -1293,6 +1305,7 @@ void AppController::loadPlaylist(const QString &playlistUid)
     setStatus(QStringLiteral("正在加载歌单「%1」…").arg(target.title));
     SourceManager::instance()->playlistDetail(target, [this, target, gen](const QVector<Song> &songs) {
         if (gen != d->searchRequestId) return;
+        d->resultsContext = QStringLiteral("playlist");
         m_results->setSongs(songs);
         setStatus(QStringLiteral("歌单「%1」共 %2 首").arg(target.title).arg(songs.size()));
         emit searchFinished(songs.size(), QString());
@@ -1312,6 +1325,7 @@ void AppController::loadFavoritesBySource(const QString &sourceId)
     QVector<Song> list;
     for (const Song &s : Library::instance()->favorites())
         if (id.isEmpty() || s.source == id) list << s;
+    d->resultsContext = QStringLiteral("playlist");
     m_results->setSongs(list);
     setStatus(id.isEmpty()
         ? QStringLiteral("全部平台收藏共 %1 首").arg(list.size())
@@ -1327,6 +1341,7 @@ void AppController::loadHistoryBySource(const QString &sourceId)
     QVector<Song> list;
     for (const Song &s : Library::instance()->history())
         if (id.isEmpty() || s.source == id) list << s;
+    d->resultsContext = QStringLiteral("playlist");
     m_results->setSongs(list);
     setStatus(id.isEmpty()
         ? QStringLiteral("全部平台播放历史共 %1 首").arg(list.size())
@@ -1461,16 +1476,18 @@ void AppController::setMvFullscreen(bool on)
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     Logger::write(QStringLiteral("I"),
                   QStringLiteral("[MV] 全屏 %1 → 横屏锁定 + 沉浸式系统栏").arg(on ? "进入" : "退出"));
-    // ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE = 6：随设备两向横屏自适应；
-    // 退出回 SCREEN_ORIENTATION_UNSPECIFIED = -1，交还系统跟随 Manifest/用户习惯。
-    // Manifest 已声明 configChanges 含 orientation，旋转不会重建 Activity。
+    // 不请求固定横屏：本机（MTK + TrebleDroid GSI / Android 14）的物理屏不随
+    // orientation 请求旋转，setRequestedOrientation(LANDSCAPE/SENSOR_LANDSCAPE)
+    // 都会触发 Android 的 letterbox：Activity 配置变 land，但窗口被压到 720x322
+    // （letterboxReason=FIXED_ORIENTATION），视频缩成顶部一小条、控制条被挤出可视区。
+    // 保持 UNSPECIFIED 让窗口吃满 720x1612，视频 PreserveAspectFit 按宽度铺满居中，
+    // 沉浸式隐藏系统栏照常执行。桌面仍由 QML showFullScreen 处理。
     QNativeInterface::QAndroidApplication::runOnAndroidMainThread([on] {
         const QJniObject activity = QJniObject::callStaticObjectMethod(
             "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
         if (!activity.isValid())
             return;
-        activity.callMethod<void>("setRequestedOrientation", "(I)V",
-                                  on ? jint(6) : jint(-1));
+        activity.callMethod<void>("setRequestedOrientation", "(I)V", jint(-1));
 
         // 沉浸式：隐藏状态栏 + 导航栏，边缘滑动只临时浮现（BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE）
         const QJniObject window = activity.callObjectMethod(
@@ -1587,6 +1604,22 @@ void AppController::resolveAndPlay(const Song &song)
             m_queue->setCover(uid, url);
             emit playerChanged();
         });
+    }
+
+    // 风险确认闸门：未签署「我自己承担后果」时，内置平台取链全部被拦。
+    // 若照常发起 resolve，会一首首失败并自动跳下一首，把整个队列跳空
+    // （实测日志出现过「连续失败 99」）。歌词/封面预取放在闸门之前——
+    // 它们是只读文本/图片元数据（走 callMeta 放行），锁定态仍照常可用。
+    // 音频取链在这里截断：不发起请求、不跳歌，只提示先完成风险确认。
+    if (!onlineSourcesUnlocked()) {
+        // beginSwitch() 置的 m_switching 必须清掉，否则用户后续点播放会被吞
+        PlayerController::instance()->stop();
+        const QString hint = QStringLiteral("请先导入音源：在设置页输入「我自己承担后果」并连点「导入」7 次完成风险确认");
+        setStatus(hint);
+        qWarning().noquote() << QStringLiteral("[音源] 未完成风险确认，停止取链（不跳歌）：%1 - %2")
+                                    .arg(song.title, song.artist);
+        emit notify(hint, QStringLiteral("warning"));
+        return;
     }
 
     // 预取缓存命中：直链已在手，跳过整轮网络/脚本取链，切歌近乎即时。
@@ -1874,6 +1907,19 @@ void AppController::startAlternateFallback(const Song &song, qint64 failedPos, c
 void AppController::autoAdvanceAfterFailure(const QString &songLabel, const QString &msg,
                                             const QString &brief)
 {
+    // 未解锁风险确认时取链全被拦，这种情况下自动跳歌只会把队列跳空：
+    // 直接停住并提示，绝不在锁定态下跳下一首（主闸门在 resolveAndPlay）。
+    // 这里兜底拦的是闸门生效前已在途的 resolve/onPlayerError 迟到回调。
+    if (!onlineSourcesUnlocked()) {
+        d->consecutiveFailures = 0;
+        d->inFallback = false;
+        PlayerController *player = PlayerController::instance();
+        player->stop();
+        const QString hint = QStringLiteral("请先导入音源：在设置页输入「我自己承担后果」并连点「导入」7 次完成风险确认");
+        setStatus(hint);
+        emit notify(hint, QStringLiteral("warning"));
+        return;
+    }
     // 所有音源都换过仍播不出来：自动播放下一首。
     // 用连续失败计数 + 队列长度兜底，防止「列表循环里全是失败歌」时
     // 一首首跳过又绕回起点、无限重播；中间只要有歌正常播起来（进度>2s）
@@ -1905,7 +1951,8 @@ void AppController::playResult(int index)
     const QVector<Song> &songs = m_results->songs();
     if (index < 0 || index >= songs.size()) return;
     // setQueue 已经发 queueChanged，队列模型会自动同步，无需再手动 syncQueueModel
-    PlayerController::instance()->setQueue(songs, index);
+    // 带上结果区上下文：歌单/榜单/收藏/历史按歌单播完，搜索/推荐由漫游模式接管续播。
+    PlayerController::instance()->setQueue(songs, index, d->resultsContext);
     resolveAndPlay(songs.at(index));
 }
 
@@ -2345,49 +2392,88 @@ void AppController::onRecommendationNeeded()
     const Song seed = player->current();
     if (d->recommendPending) return;   // 上一个推荐请求还没回来，别叠加成多个请求
 
-    // 种子必须是汽水果：其他平台没有免签名的相似歌曲接口，直接走原队列逻辑。
-    if (seed.source != QLatin1String("qishui") || seed.sourceId.isEmpty()) {
+    const bool roaming = Settings::boolean(QStringLiteral("roamMode"), false);
+    const bool qishuiSeed = seed.source == QLatin1String("qishui") && !seed.sourceId.isEmpty();
+    // 漫游模式只接管非歌单上下文；歌单上下文即使开着漫游也按队列播完。
+    // 但汽水歌例外：汽水官方 App 在歌单播完后会按最后一首继续推荐，
+    // 这里不能被漫游的「歌单不接管」短路掉。
+    if (!qishuiSeed && roaming
+        && seed.extra.value(QStringLiteral("__roamContext")).toString()
+                       == QLatin1String("playlist")) {
         player->playNextInQueue();
         return;
     }
 
+    // 汽水 related 只认汽水 track_id。种子是其它平台时先用「歌名+歌手」在汽水
+    // 搜一个匹配曲目当跳板（与 loadQishuiRecommend 熟悉/新鲜模式的映射同一思路），
+    // 搜不到就退回原队列，不硬凑。
+    const auto relatedOf = [this, seed, roaming](const Song &qishuiSeed) {
+        SourceManager::instance()->related(qishuiSeed, 12,
+            [this, seed, roaming](const QVector<Song> &list) {
+                d->recommendPending = false;
+                PlayerController *p = PlayerController::instance();
+                // 请求期间用户可能已手动切歌：种子不是当前歌时丢弃，不能把上一首的
+                // 相似歌塞进用户正在听的歌后面。
+                if (p->current().uid != seed.uid) return;
+
+                // 去重：跳过种子和队列里已有的歌，最多插 10 首。
+                QSet<QString> known;
+                known.insert(seed.uid);
+                for (const Song &s : p->queue()) known.insert(s.uid);
+                QVector<Song> picked;
+                for (Song s : list) {
+                    if (picked.size() >= 10) break;
+                    if (s.uid.isEmpty() || s.title.isEmpty() || known.contains(s.uid)) continue;
+                    known.insert(s.uid);
+                    // 继承漫游上下文，让后续切歌继续按推荐流走
+                    if (roaming) s.extra.insert(QStringLiteral("__roamContext"),
+                                                seed.extra.value(QStringLiteral("__roamContext")));
+                    picked << s;
+                }
+
+                if (picked.isEmpty()) {
+                    setStatus(QStringLiteral("汽水推荐不可用，继续按队列播放"));
+                    p->playNextInQueue();
+                    return;
+                }
+
+                Logger::write(QStringLiteral("I"),
+                              QStringLiteral("%1：按「%2」取到 %3 首推荐")
+                                      .arg(roaming ? QStringLiteral("漫游模式")
+                                                   : QStringLiteral("汽水漫游"))
+                                      .arg(seed.title).arg(picked.size()));
+                p->insertAfterCurrent(picked);
+                setStatus(QStringLiteral("%1：已加入 %2 首推荐")
+                              .arg(roaming ? QStringLiteral("漫游模式") : QStringLiteral("汽水漫游"))
+                              .arg(picked.size()));
+                QTimer::singleShot(0, this, [p] { p->playNextInQueue(); });
+            });
+    };
+
     d->recommendPending = true;
-    setStatus(QStringLiteral("正在按「%1」获取汽水推荐…").arg(seed.title));
-    SourceManager::instance()->related(seed, 12, [this, seed](const QVector<Song> &list) {
-        d->recommendPending = false;
-        PlayerController *p = PlayerController::instance();
-        // 请求期间用户可能已经手动切歌：种子已经不是当前歌时丢弃这批推荐，
-        // 不能把「上一首的相似歌」塞进用户正在听的歌后面。
-        if (p->current().uid != seed.uid) return;
-
-        // 去重：跳过种子本身和队列里已有的歌（uid = "source:sourceId"），最多插 10 首。
-        QSet<QString> known;
-        known.insert(seed.uid);
-        for (const Song &s : p->queue()) known.insert(s.uid);
-        QVector<Song> picked;
-        for (const Song &s : list) {
-            if (picked.size() >= 10) break;
-            if (s.uid.isEmpty() || s.title.isEmpty() || known.contains(s.uid)) continue;
-            known.insert(s.uid);
-            picked << s;
-        }
-
-        if (picked.isEmpty()) {
-            // 没拿到推荐（未登录 / 网络失败 / 全被去重掉）：退回原队列。
-            // 顺序播放的末尾会在这里自然停住，不会卡死也不会重播当前歌。
-            setStatus(QStringLiteral("汽水推荐不可用，继续按队列播放"));
-            p->playNextInQueue();
-            return;
-        }
-
-        Logger::write(QStringLiteral("I"),
-                      QStringLiteral("汽水漫游：按「%1」取到 %2 首推荐")
-                              .arg(seed.title).arg(picked.size()));
-        p->insertAfterCurrent(picked);
-        setStatus(QStringLiteral("汽水漫游：已加入 %1 首推荐").arg(picked.size()));
-        // 等队列变更信号处理完再推进，界面先看到队列里多出来的推荐歌
-        QTimer::singleShot(0, this, [p] { p->playNextInQueue(); });
-    });
+    setStatus(QStringLiteral("正在按「%1」获取推荐…").arg(seed.title));
+    if (seed.source == QLatin1String("qishui") && !seed.sourceId.isEmpty()) {
+        relatedOf(seed);
+        return;
+    }
+    // 非汽水果子：汽水站内搜同名同歌手，取首个匹配映射成汽水 track
+    const QString kw = (seed.title + QLatin1Char(' ') + seed.artist).trimmed();
+    SourceManager::instance()->search(kw, QStringLiteral("qishui"), 5,
+        [this, seed, relatedOf](const QVector<Song> &mapped) {
+            // 请求期间用户已切到别的歌则丢弃
+            if (PlayerController::instance()->current().uid != seed.uid) {
+                d->recommendPending = false;
+                return;
+            }
+            if (mapped.isEmpty()) {
+                d->recommendPending = false;
+                setStatus(QStringLiteral("未在汽水找到「%1」的匹配曲目，继续按队列播放")
+                              .arg(seed.title));
+                PlayerController::instance()->playNextInQueue();
+                return;
+            }
+            relatedOf(mapped.first());
+        });
 }
 void AppController::seek(qint64 positionMs) { PlayerController::instance()->seek(positionMs); }
 void AppController::setVolume(int value) { PlayerController::instance()->setVolume(value); }

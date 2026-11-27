@@ -1759,6 +1759,56 @@
             "cover": "resources[].entity.playlist.url_cover",
             "count": "resources[].entity.playlist.count_tracks"
           }
+        },
+        "feedMode": {
+          "_note": "汽水「发现 → 模式探索」场景模式列表（Chill 放松 / 快乐时光 / 图书馆 / 深夜 EMO 等 45 个）：POST /luna/feed/mode 免登录，Luna App UA 即可。feed_mode_block[].feed_mode[] 中 type=scene_mode 的条目由 MusicSource::qishuiRank 展平成 Playlist（extra.kind=radio，sourceId=scene_mode_id），详情同样走 radioTracks（实测 radio_id=scene_mode_id 可出歌）。",
+          "method": "POST",
+          "path": "https://beta-luna.douyin.com/luna/feed/mode",
+          "contentType": "json",
+          "headers": {
+            "User-Agent": "Luna/19.1.0 Android"
+          },
+          "jsonBody": {},
+          "root": "feed_mode_block",
+          "fields": {
+            "id": "feed_mode[].entity.feed_scene_mode.scene_mode_id",
+            "title": "feed_mode[].text",
+            "cover": "feed_mode[].url_info"
+          }
+        },
+        "radioMix": {
+          "_note": "汽水「发现 → 模式探索」电台流：与 rank 同端点，但 sub_channel_id=-1 返回 discover_radio（title/desc/inner_block_id/style.cover_url_list），实测轮换返回多组共 24+ 个模式。由 MusicSource::qishuiRank 与推荐歌单合并后一起进榜单；radio 的 sourceId 用 inner_block_id，详情走 radioTracks。免登录，Luna App UA 即可。",
+          "method": "POST",
+          "path": "https://beta-luna.douyin.com/luna/discover/mix",
+          "contentType": "json",
+          "headers": {
+            "User-Agent": "Luna/19.1.0 Android"
+          },
+          "jsonBody": {
+            "sub_channel_id": "-1",
+            "count": "{limit}"
+          },
+          "root": "inner_block",
+          "fields": {
+            "id": "inner_block_id",
+            "title": "title",
+            "cover": "resources[].style.cover_url_list"
+          }
+        },
+        "radioTracks": {
+          "_note": "汽水模式探索电台的歌曲流：items[].entity.track_wrapper.track（与普通歌单详情同一套 track 结构），由 MusicSource::qishuiRadioDetail 展平解析。免登录。",
+          "method": "POST",
+          "path": "https://beta-luna.douyin.com/luna/feed/radio/tracks",
+          "contentType": "json",
+          "headers": {
+            "User-Agent": "Luna/19.1.0 Android"
+          },
+          "jsonBody": {
+            "radio_id": "{id}",
+            "count": "{limit}",
+            "cursor": ""
+          },
+          "root": "items"
         }
       },
       "defaultBoards": [

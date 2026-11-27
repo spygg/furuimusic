@@ -966,9 +966,14 @@ void PlayerController::setCurrentCover(const QString &cover)
     emit mediaChanged();
 }
 
-void PlayerController::setQueue(const QVector<Song> &songs, int index)
+void PlayerController::setQueue(const QVector<Song> &songs, int index,
+                                const QString &context)
 {
     m_queue = songs;
+    // 漫游上下文打在每首歌上：后续 addQueue 混入的歌（默认无标记 → 单曲）也各带各的来源。
+    if (!context.isEmpty()) {
+        for (Song &s : m_queue) s.extra.insert(QStringLiteral("__roamContext"), context);
+    }
     m_currentIndex = qBound(-1, index, m_queue.size() - 1);
     m_pendingSeek = 0;   // 用户显式换歌/开新列表，不再套用续播位置
     m_resumeSeekReady = false;
@@ -1081,11 +1086,25 @@ void PlayerController::advance(bool allowRecommend)
     m_ended = false;       // 换歌后这首的「已播完」状态作废
 
     const Song cur = current();
-    if (allowRecommend && cur.source == QLatin1String("qishui") && !cur.sourceId.isEmpty()) {
-        if (Settings::boolean(QStringLiteral("qishuiRoam"), true)) {   // 设置页已隐藏该开关，默认保持开启
-            emit recommendationNeeded();
-            return;
-        }
+    // 漫游模式：非歌单上下文（搜索/单曲/推荐）且队列已播到最后一首时，
+    // 交给 AppController 按当前歌取推荐续播；歌单上下文始终按队列播完。
+    // 「队列尾部才触发」避免每首插 10 首导致队列无限膨胀，也保证手动点
+    // 下一首时队列里还有歌就正常切歌。单曲循环由 EndOfMedia 原地重播，不走这里。
+    if (allowRecommend && Settings::boolean(QStringLiteral("roamMode"), false)
+        && cur.extra.value(QStringLiteral("__roamContext")).toString()
+               != QLatin1String("playlist")
+        && m_currentIndex + 1 >= m_queue.size()) {
+        emit recommendationNeeded();
+        return;
+    }
+    // 汽水官方 App 的行为：歌单/电台播完不会停，而是按最后一首一直推荐下去。
+    // 只在队列尾部触发，避免每首后面都插 10 首；汽水歌即使在歌单上下文、
+    // 即使 roamMode 关着也续播（qishuiRoam 默认开）。
+    if (allowRecommend && m_currentIndex + 1 >= m_queue.size()
+        && cur.source == QLatin1String("qishui") && !cur.sourceId.isEmpty()
+        && Settings::boolean(QStringLiteral("qishuiRoam"), true)) {
+        emit recommendationNeeded();
+        return;
     }
 
     int nextIndex = m_currentIndex;

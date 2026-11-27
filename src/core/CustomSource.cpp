@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QJsonValue>
 #include <QUrlQuery>
+#include <memory>
 
 #include "HttpClient.h"
 #include "JsonMapper.h"
@@ -137,7 +138,83 @@ void CustomSourceManager::resolve(const Song &song, const QString &quality, Play
         tryScriptSources(song, quality, cb);
         return;
     }
-    resolveAt(0, song, quality, cb);
+    if (!Settings::boolean(QStringLiteral("sourceRace"), true)) {
+        resolveAt(0, song, quality, cb);
+        return;
+    }
+
+    // 并行竞速：自建 HTTP 接口 / 本地目录同时开跑，谁先拿到可用地址谁赢。
+    // 全失败才落到在线脚本层（脚本层内部同样竞速）。
+    struct State {
+        PlayableCallback cb;
+        int remaining = 0;
+        bool done = false;
+        bool fallbackStarted = false;
+    };
+    auto state = std::make_shared<State>();
+    state->cb = cb;
+    auto win = [state](const Playable &p) {
+        if (state->done) return;
+        state->done = true;
+        if (state->cb) state->cb(p);
+    };
+    auto fallback = [this, state, song, quality]() {
+        if (state->done || state->fallbackStarted) return;
+        state->fallbackStarted = true;
+        tryScriptSources(song, quality, state->cb);
+    };
+    auto finishOne = [state, fallback]() {
+        if (state->done) return;
+        if (--state->remaining > 0) return;
+        fallback();
+    };
+    for (const Item &item : m_items) {
+        if (!item.enabled) continue;
+        ++state->remaining;
+        if (item.type == QLatin1String("local")) {
+            scanLocal();
+            Playable p = matchLocal(song);
+            if (p.ok) {
+                p.substituted = true;
+                p.substituteSource = item.name;
+                win(p);
+            } else {
+                finishOne();
+            }
+            continue;
+        }
+        const QVariantMap vars = songVarsFor(song, quality);
+        QUrl url(item.value + QStringLiteral("/musicUrl"));
+        QUrlQuery q;
+        for (auto it = vars.constBegin(); it != vars.constEnd(); ++it)
+            q.addQueryItem(it.key(), it.value().toString());
+        url.setQuery(q);
+        HttpClient::instance()->request(QStringLiteral("GET"), url, QVariantMap(), QByteArray(),
+            [state, item, win, finishOne](const HttpClient::Reply &r) {
+                if (state->done) { finishOne(); return; }
+                Playable p;
+                if (r.ok) {
+                    const QJsonValue root = Json::rootOf(r.json);
+                    const QString found = Json::firstString(root, {
+                        QStringLiteral("url"), QStringLiteral("data.url"),
+                        QStringLiteral("data[0].url"), QStringLiteral("data.playUrl")
+                    });
+                    if (!found.isEmpty()) {
+                        p.ok = true;
+                        p.url = QUrl(found);
+                        if (!p.url.isValid() || p.url.scheme().isEmpty())
+                            p.url = QUrl::fromLocalFile(found);
+                        p.substituted = true;
+                        p.substituteSource = item.name;
+                    }
+                }
+                if (p.ok) win(p);
+                else finishOne();
+            });
+    }
+    // 所有条目都是 disabled（remaining 仍为 0）：直接进脚本层
+    if (state->remaining == 0)
+        fallback();
 }
 
 void CustomSourceManager::resolveAt(int index, const Song &song, const QString &quality,

@@ -159,10 +159,14 @@ class AppController : public QObject {
     Q_PROPERTY(QString quality READ quality NOTIFY settingsChanged)
     Q_PROPERTY(bool vipSubstituteEnabled READ vipSubstituteEnabled NOTIFY settingsChanged)
     Q_PROPERTY(bool autoToggleSource READ autoToggleSource NOTIFY settingsChanged)
+    Q_PROPERTY(bool sourceRaceEnabled READ sourceRaceEnabled NOTIFY settingsChanged)
     // 取链顺序：platform（平台优先）/ vip（VIP 歌先走自定义，默认）/ custom（全部先走自定义）
     Q_PROPERTY(QString sourceFirstOrder READ sourceFirstOrder NOTIFY settingsChanged)
     // 汽水漫游：开启后播到汽水果时，下一首由汽水推荐流决定（队列只作兜底）
     Q_PROPERTY(bool qishuiRoam READ qishuiRoam NOTIFY settingsChanged)
+    // 漫游模式：搜索/单曲/推荐等「非歌单」队列播完后自动按汽水相似歌曲续播。
+    // 歌单/榜单/收藏/历史队列不受影响，始终按歌单顺序播完。
+    Q_PROPERTY(bool roamMode READ roamMode NOTIFY settingsChanged)
     // 播放时常亮（仅 Android 有效）：前台播放时锁屏不熄灭
     Q_PROPERTY(bool keepScreenOn READ keepScreenOn NOTIFY settingsChanged)
     // MV 沉浸页常亮：进 MV 会暂停音乐，但视频仍在播，屏幕不能跟着音乐状态熄掉。
@@ -258,8 +262,10 @@ public:
     QString quality() const;
     bool vipSubstituteEnabled() const;
     bool autoToggleSource() const;
+    bool sourceRaceEnabled() const;
     QString sourceFirstOrder() const;
     bool qishuiRoam() const;
+    bool roamMode() const;
     bool keepScreenOn() const;
     bool mvScreenOn() const { return m_mvScreenOn; }
     void setMvScreenOn(bool on);

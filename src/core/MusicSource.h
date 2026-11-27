@@ -43,6 +43,9 @@ public:
     // rank 拉取失败/被反爬时回退用，保证未登录也能按平台展示默认歌单（洛雪式）。
     QVector<Playlist> defaultBoards() const;
     void playlistDetail(const QString &id, int limit, int offset, SongsCallback cb);
+    // 汽水「模式探索」电台的歌曲流（items[].entity.track_wrapper.track）。
+    // 电台不是普通歌单，详情走 /luna/feed/radio/tracks 而非 /luna/playlist/detail。
+    void radioDetail(const QString &id, int limit, SongsCallback cb);
     // 「下一首 / 音乐推荐」：以一首歌为种子取相似歌曲（汽水 /luna/track/related）。
     // 没有该能力的平台直接回调空列表，调用方按原队列逻辑兜底。
     void related(const Song &song, int limit, SongsCallback cb);
@@ -108,7 +111,10 @@ private:
     // 框架通用 JsonMapper 不展平子数组，故单独展平解析。
     void qishuiSearch(const QString &keyword, int limit, int offset, SongsCallback cb);
     void qishuiPlaylistDetail(const QString &id, int limit, int offset, SongsCallback cb);
+    void qishuiRadioDetail(const QString &id, int limit, SongsCallback cb);
     void qishuiSearchPlaylists(const QString &keyword, int limit, int offset, PlaylistsCallback cb);
+    // 汽水取链是两段式：SEO 详情给 VOD GetPlayInfo 签名地址，再换真实音频直链。
+    void qishuiResolveUrl(const Song &song, const QString &quality, PlayableCallback cb);
     // 汽水推荐/发现歌单：POST /luna/discover/mix，免登录，结构 inner_block[].resources[].entity.playlist
     void qishuiRank(int limit, int offset, PlaylistsCallback cb);
     // 汽水「下一首」：GET /luna/track/related?track_id=…，items[].entity.track_wrapper.track

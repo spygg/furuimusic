@@ -549,9 +549,13 @@ void AuthManager::pollQr()
     if (m_qrMode == QLatin1String("netease")) {
         if (m_qrSource.isEmpty() || m_qrKey.isEmpty()) { m_poll.stop(); return; }
         const QString sourceId = m_qrSource;
+        // 刷新二维码会换 unikey，但 sourceId 不变：旧 key 的轮询最长 20s 才回来，
+        // 若只比 sourceId，旧请求的 802(已扫码) 会盖到新码上 → 刚出码就提示已扫码。
+        // 连 key 一起快照比对，旧会话的迟到回调一律丢弃。
+        const QString pollKey = m_qrKey;
         // 出码与轮询必须是同一套协议：Cookie 会话就绑在这次请求链上
-        auto onCheck = [this, sourceId](const HttpClient::Reply &r) {
-                if (!m_polling || m_qrSource != sourceId) return;
+        auto onCheck = [this, sourceId, pollKey](const HttpClient::Reply &r) {
+                if (!m_polling || m_qrSource != sourceId || m_qrKey != pollKey) return;
                 absorbNeteaseCookies(r);
                 if (!r.ok) { m_qrStatus = QStringLiteral("轮询失败：") + shortNetworkError(r.error); emit qrChanged(); return; }
                 const QJsonValue root = Json::rootOf(r.json);

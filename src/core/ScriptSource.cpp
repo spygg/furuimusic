@@ -1715,7 +1715,10 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
         Song song;
         QVector<Candidate> candidates;
         QStringList failures;   // 逐个音源记录真实失败原因，别再只报「均未取到」
-        int index = 0;
+        int index = 0;          // 下一个待启动的候选
+        int running = 0;        // 在途竞速请求数
+        bool done = false;      // 已有赢家 / 全部失败，迟到结果一律丢弃
+        bool launching = false; // 防止同步回调重入 launch
     };
     auto state = std::make_shared<ResolveState>();
     state->cb = cb;
@@ -1777,6 +1780,8 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
     // 取链成功：记成绩 → 置顶 → 回调，三条路径共用
     auto succeed = [this, state](const Candidate &cand, const QString &url,
                                  const QVariantMap &headers) {
+        if (state->done) return;   // 竞速中别的源已经赢了，迟到结果直接丢弃
+        state->done = true;
         qInfo().noquote() << QStringLiteral("[换源] OK ") + cand.name + QStringLiteral(" [") + cand.lxKey
                                  + QLatin1Char(']')
                                  + (cand.viaSearch ? QStringLiteral("(跨平台)") : QString())
@@ -1822,114 +1827,139 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
             demoteSource(cand.engineId);
     };
 
-    // 用 weak_ptr 打断「shared_ptr -> function -> shared_ptr」的自捕获循环；
-    // 链上的异步回调各自捕获局部强引用 step，链结束即随回调一起释放。
-    auto next = std::make_shared<std::function<void()>>();
-    std::weak_ptr<std::function<void()>> weakNext = next;
-    *next = [this, state, weakNext, succeed, failed, bestMatch]() {
-        auto step = weakNext.lock();
-        if (!step) return;
-        if (state->index >= state->candidates.size()) {
-            Playable p;
-            p.reason = QStringLiteral("script-failed");
-            p.message = state->failures.isEmpty()
-                ? QStringLiteral("所有在线音源均未能取到音频地址")
-                : QStringLiteral("在线音源取链失败：%1")
-                      .arg(state->failures.join(QStringLiteral("；")));
-            if (state->cb) state->cb(p);
-            return;
-        }
-        const Candidate cand = state->candidates.at(state->index++);
-        qInfo().noquote() << QStringLiteral("[换源] 尝试 %1/%2：%3 [%4]%5 分数=%6")
-                                 .arg(state->index)
-                                 .arg(int(state->candidates.size()))
-                                 .arg(cand.name, cand.lxKey,
-                                      cand.viaSearch ? QStringLiteral("（跨平台搜索）") : QString())
-                                 .arg(scoreOf(cand.engineId, cand.lxKey));
+    // 并行竞速：同时发最多 concurrency 个候选，谁先拿到可用地址谁赢；
+    // 迟到的成功一律丢弃（succeed 里的 done 守卫），失败的候选立刻补位。
+    // sourceRace=false 时 concurrency=1，退回原来的串行逐源尝试。
+    const int concurrency = Settings::boolean(QStringLiteral("sourceRace"), true) ? 3 : 1;
+    qInfo().noquote() << QStringLiteral("[换源] 竞速启动：并发 %1，候选 %2")
+                             .arg(concurrency).arg(int(state->candidates.size()));
+    auto launch = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> weakLaunch = launch;
+    auto finishOne = [state, weakLaunch]() {
+        --state->running;
+        if (state->done) return;
+        if (auto l = weakLaunch.lock()) (*l)();
+    };
+    auto finishAll = [this, state]() {
+        if (state->done) return;
+        state->done = true;
+        Playable p;
+        p.reason = QStringLiteral("script-failed");
+        p.message = state->failures.isEmpty()
+            ? QStringLiteral("所有在线音源均未能取到音频地址")
+            : QStringLiteral("在线音源取链失败：%1")
+                  .arg(state->failures.join(QStringLiteral("；")));
+        if (state->cb) state->cb(p);
+    };
+    *launch = [this, state, weakLaunch, finishOne, finishAll, succeed, failed, bestMatch,
+               concurrency]() {
+        auto keepAlive = weakLaunch.lock();
+        if (!keepAlive || state->launching) return;
+        state->launching = true;
+        while (!state->done && state->running < concurrency
+               && state->index < state->candidates.size()) {
+            const Candidate cand = state->candidates.at(state->index++);
+            ++state->running;
+            qInfo().noquote() << QStringLiteral("[换源] 竞速尝试 %1/%2：%3 [%4]%5 分数=%6")
+                                     .arg(state->index)
+                                     .arg(int(state->candidates.size()))
+                                     .arg(cand.name, cand.lxKey,
+                                          cand.viaSearch ? QStringLiteral("（跨平台搜索）") : QString())
+                                     .arg(scoreOf(cand.engineId, cand.lxKey));
 
-        ensureEngine(cand.engineId, [this, state, cand, step, succeed, failed, bestMatch](bool ok) {
-            if (!ok) {
-                failed(cand, QStringLiteral("脚本初始化失败"));
-                (*step)();
-                return;
-            }
-            ScriptEngine *engine = m_engines.value(cand.engineId).data();
-            if (!engine || !engine->ready()) {
-                failed(cand, QStringLiteral("脚本未就绪"));
-                (*step)();
-                return;
-            }
-            QPointer<ScriptEngine> guard(engine);
-
-            // 取链：target 是「带该平台 id 的 Song」（原歌，或跨平台匹配到的同曲）
-            auto callUrl = [this, state, cand, step, succeed, failed, guard](const Song &target) {
-                ScriptEngine *e = guard.data();
-                if (!e) {
-                    failed(cand, QStringLiteral("脚本已卸载"));
-                    (*step)();
+            ensureEngine(cand.engineId, [this, state, cand, finishOne, succeed, failed,
+                                         bestMatch](bool ok) {
+                if (state->done) { finishOne(); return; }
+                if (!ok) {
+                    failed(cand, QStringLiteral("脚本初始化失败"));
+                    finishOne();
                     return;
                 }
-                QVariantMap info;
-                info.insert(QStringLiteral("type"), cand.quality);
-                info.insert(QStringLiteral("musicInfo"), musicInfoFor(target, cand.lxKey));
-                e->callAction(cand.lxKey, QStringLiteral("musicUrl"), info,
-                    [this, state, cand, step, succeed, failed](const ScriptActionResult &r) {
-                        QString url;
-                        QVariantMap hdr;
-                        if (r.ok) {
-                            qInfo().noquote() << QStringLiteral("[换源] 原始返回 类型=")
-                                                     + QString::fromLatin1(r.data.typeName())
-                                                 + QStringLiteral(" 文本=") + r.data.toString().left(90);
-                            url = playUrlFrom(r.data, &hdr);
-                        }
-                        if (url.isEmpty()) {
-                            failed(cand, r.ok ? QStringLiteral("未返回音频地址") : r.error);
-                            (*step)();
-                            return;
-                        }
-                        // 地址必须能直接交给播放器：脚本偶发会把 undefined/半截字符串当成
-                        // url 回调回来（实测有源返回单个字符），以前直接 succeed，结果
-                        // 「取链成功 → 播放器 4ms 报错 → 再换源」无限循环。这里先卡一道。
-                        const QString scheme = QUrl(url).scheme().toLower();
-                        if (scheme != QLatin1String("http") && scheme != QLatin1String("https")
-                            && scheme != QLatin1String("file")) {
-                            failed(cand, QStringLiteral("返回的地址无效：%1").arg(url.left(40)));
-                            (*step)();
-                            return;
-                        }
-                        succeed(cand, url, hdr);
-                    }, 15000);
-            };
+                ScriptEngine *engine = m_engines.value(cand.engineId).data();
+                if (!engine || !engine->ready()) {
+                    failed(cand, QStringLiteral("脚本未就绪"));
+                    finishOne();
+                    return;
+                }
+                QPointer<ScriptEngine> guard(engine);
 
-            if (!cand.viaSearch) {
-                callUrl(state->song);
-                return;
-            }
-            // 跨平台：先按「歌名 + 歌手」搜这个平台，再挑最像的一条取链
-            QVariantMap sinfo;
-            const QString keyword = (state->song.title + QLatin1Char(' ') + state->song.artist).trimmed();
-            sinfo.insert(QStringLiteral("keyword"), keyword);
-            sinfo.insert(QStringLiteral("page"), 1);
-            sinfo.insert(QStringLiteral("limit"), 8);
-            sinfo.insert(QStringLiteral("type"), 1);
-            qInfo().noquote() << QStringLiteral("[换源] 跨平台搜索 %1 [%2] 关键词「%3」")
-                                     .arg(cand.name, cand.lxKey, keyword);
-            engine->callAction(cand.lxKey, QStringLiteral("search"), sinfo,
-                [state, cand, step, failed, bestMatch, callUrl](const ScriptActionResult &sr) {
-                    if (!sr.ok)
-                        qWarning().noquote() << QStringLiteral("[换源] 跨平台搜索失败 %1 [%2]：%3")
-                                                    .arg(cand.name, cand.lxKey, sr.error);
-                    const Song matched = bestMatch(state->song, actionList(sr.data));
-                    if (matched.title.isEmpty()) {
-                        failed(cand, QStringLiteral("其它平台没有匹配的同曲"));
-                        (*step)();
+                // 取链：target 是「带该平台 id 的 Song」（原歌，或跨平台匹配到的同曲）
+                auto callUrl = [this, state, cand, finishOne, succeed, failed, guard](const Song &target) {
+                    ScriptEngine *e = guard.data();
+                    if (!e) {
+                        failed(cand, QStringLiteral("脚本已卸载"));
+                        finishOne();
                         return;
                     }
-                    callUrl(matched);
-                }, 15000);
-        });
+                    QVariantMap info;
+                    info.insert(QStringLiteral("type"), cand.quality);
+                    info.insert(QStringLiteral("musicInfo"), musicInfoFor(target, cand.lxKey));
+                    e->callAction(cand.lxKey, QStringLiteral("musicUrl"), info,
+                        [this, state, cand, finishOne, succeed, failed](const ScriptActionResult &r) {
+                            QString url;
+                            QVariantMap hdr;
+                            if (r.ok) {
+                                qInfo().noquote() << QStringLiteral("[换源] 原始返回 类型=")
+                                                         + QString::fromLatin1(r.data.typeName())
+                                                     + QStringLiteral(" 文本=") + r.data.toString().left(90);
+                                url = playUrlFrom(r.data, &hdr);
+                            }
+                            if (state->done) { finishOne(); return; }
+                            if (url.isEmpty()) {
+                                failed(cand, r.ok ? QStringLiteral("未返回音频地址") : r.error);
+                                finishOne();
+                                return;
+                            }
+                            // 地址必须能直接交给播放器：脚本偶发会把 undefined/半截字符串当成
+                            // url 回调回来（实测有源返回单个字符），以前直接 succeed，结果
+                            // 「取链成功 → 播放器 4ms 报错 → 再换源」无限循环。这里先卡一道。
+                            const QString scheme = QUrl(url).scheme().toLower();
+                            if (scheme != QLatin1String("http") && scheme != QLatin1String("https")
+                                && scheme != QLatin1String("file")) {
+                                failed(cand, QStringLiteral("返回的地址无效：%1").arg(url.left(40)));
+                                finishOne();
+                                return;
+                            }
+                            succeed(cand, url, hdr);
+                            finishOne();
+                        }, 15000);
+                };
+
+                if (!cand.viaSearch) {
+                    callUrl(state->song);
+                    return;
+                }
+                // 跨平台：先按「歌名 + 歌手」搜这个平台，再挑最像的一条取链
+                QVariantMap sinfo;
+                const QString keyword = (state->song.title + QLatin1Char(' ') + state->song.artist).trimmed();
+                sinfo.insert(QStringLiteral("keyword"), keyword);
+                sinfo.insert(QStringLiteral("page"), 1);
+                sinfo.insert(QStringLiteral("limit"), 8);
+                sinfo.insert(QStringLiteral("type"), 1);
+                qInfo().noquote() << QStringLiteral("[换源] 跨平台搜索 %1 [%2] 关键词「%3」")
+                                         .arg(cand.name, cand.lxKey, keyword);
+                engine->callAction(cand.lxKey, QStringLiteral("search"), sinfo,
+                    [state, cand, finishOne, failed, bestMatch, callUrl](const ScriptActionResult &sr) {
+                        if (state->done) { finishOne(); return; }
+                        if (!sr.ok)
+                            qWarning().noquote() << QStringLiteral("[换源] 跨平台搜索失败 %1 [%2]：%3")
+                                                        .arg(cand.name, cand.lxKey, sr.error);
+                        const Song matched = bestMatch(state->song, actionList(sr.data));
+                        if (matched.title.isEmpty()) {
+                            failed(cand, QStringLiteral("其它平台没有匹配的同曲"));
+                            finishOne();
+                            return;
+                        }
+                        callUrl(matched);
+                    }, 15000);
+            });
+        }
+        state->launching = false;
+        // 同步回调可能在 while 内部就完成了全部候选，这里兜底收尾
+        if (!state->done && state->running == 0 && state->index >= state->candidates.size())
+            finishAll();
     };
-    (*next)();
+    (*launch)();
 }
 
 void ScriptSourceManager::lyric(const Song &song, LyricCallback cb)

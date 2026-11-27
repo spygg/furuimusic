@@ -76,13 +76,18 @@ Item {
     // 把 C++ 侧的状态文案收敛成有限相位，遮罩只认相位，不猜字符串。
     // 统一在这里做词匹配，并兼容在线脚本配置里可能出现的英文别名；
     // 判定顺序：失败/过期优先，再成功，最后才是扫码中。
+    // 关键：C++ 出码后的正常态是「等待扫码」，里面就含「扫码」二字——
+    // 早先 /扫码|scan/ 无条件判 scanned，导致刚刷新出码就盖「已扫码，请确认」
+    // 的遮罩（用户根本没扫）。必须先识别「等待扫码 / 等待确认」这类中间态。
     function qrPhaseOf(status) {
         var s = String(status || "").toLowerCase()
         if (s.length === 0) return ""
         if (/失败|错误|风控|拒绝|取消|error|fail|denied|reject|cancel/.test(s)) return "error"
         if (/过期|超时|expired|expire|timeout/.test(s)) return "expired"
         if (/成功|success|confirmed|authorized/.test(s)) return "done"
-        if (/已扫码|扫码|scanned|scan/.test(s)) return "scanned"
+        // 等待类中间态优先于「已扫码」匹配（用户名/文案里也常有「扫码登录」等字样）
+        if (/等待|待确认|待扫码|waiting|pending|未扫|准备中|获取中/.test(s)) return ""
+        if (/已扫码|已扫描|扫过了|scanned|已确认/.test(s)) return "scanned"
         return ""
     }
     readonly property string qrPhase: {

@@ -66,40 +66,9 @@ Item {
     // 详情曲目正在从平台接口拉取：此时列表为空不等于「没有歌」，
     // 头部直接显示「0 首」会让人以为榜单是空的
     property bool detailLoading: false
-
-    // 汽水推荐模式选择框的条目（音源菜单点「汽水音乐」弹出）。
-    // modeKey 非空 = 三种推荐模式之一；categoryKey 非空 = 场景子领域
-    // （沿用当前模式下拉选中的模式）。label 避开 MenuItem.text 的属性遮蔽。
-    component QishuiModeItem: MenuItem {
-        property string label: ""
-        property string modeKey: ""
-        property int modeIndex: -1
-        property string categoryKey: ""
-        height: Math.max(40, theme.touchMin)
-        contentItem: Text {
-            text: label
-            color: hovered ? cPrimary : cText
-            font.pixelSize: 14
-            verticalAlignment: Text.AlignVCenter
-            leftPadding: 10
-            elide: Text.ElideRight
-        }
-        background: Rectangle {
-            radius: 10
-            color: hovered ? root.cChipHover : "transparent"
-        }
-        // MenuItem 用 triggered() 才是规范信号；原先的 onClicked 在这套自定义
-        // contentItem/background 下偶发不投递，导致「点了菜单但模式没变」。
-        onTriggered: {
-            qishuiModeMenu.close()
-            if (modeKey !== "") {
-                qishuiModeCombo.currentIndex = modeIndex
-                app.loadQishuiRecommend(modeKey, "")
-            } else if (categoryKey !== "") {
-                app.loadQishuiRecommend(qishuiModeCombo.model[qishuiModeCombo.currentIndex].key, categoryKey)
-            }
-        }
-    }
+    // 汽水发现面板默认展示「模式探索」歌单网格；推荐歌曲由右上角「看歌曲」切换，
+    // 这样熟悉/新鲜模式生成的歌曲流仍有入口，但不再挤占歌单的滚动空间。
+    property bool qishuiShowSongs: false
 
     // 只有「我的歌单」「发现榜单」和搜索结果有两种排布；收藏/历史/队列本身就是单列曲目列表，
     // 在这些 Tab 上显示切换按钮会是死按钮，直接不展示
@@ -464,8 +433,14 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                         if (root.tabIndex === 4) {
-                            app.loadDiscovery(root.selectedSourceId())
-                            root.hint = "正在刷新各平台公开榜单"
+                            if (root.selectedSourceId() === "qishui") {
+                                root.qishuiShowSongs = false
+                                app.loadQishuiRecommend("", "")
+                                root.hint = "正在刷新汽水模式歌单"
+                            } else {
+                                app.loadDiscovery(root.selectedSourceId())
+                                root.hint = "正在刷新各平台公开榜单"
+                            }
                         } else if (root.tabIndex === 5) {
                             app.loadMvList(root.mvArea, false)
                             root.hint = "正在刷新 MV 榜单"
@@ -498,8 +473,14 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                         if (root.tabIndex === 4) {
-                            app.loadDiscovery(root.selectedSourceId())
-                            root.hint = "正在刷新各平台公开榜单"
+                            if (root.selectedSourceId() === "qishui") {
+                                root.qishuiShowSongs = false
+                                app.loadQishuiRecommend("", "")
+                                root.hint = "正在刷新汽水模式歌单"
+                            } else {
+                                app.loadDiscovery(root.selectedSourceId())
+                                root.hint = "正在刷新各平台公开榜单"
+                            }
                         } else if (root.tabIndex === 5) {
                             app.loadMvList(root.mvArea, false)
                             root.hint = "正在刷新 MV 榜单"
@@ -919,12 +900,14 @@ Item {
                                 root.selectedPlatform = index
                                 app.filterPlaylists(index === 0 ? "" : app.sourceIds[index - 1])
                                 if (index > 0 && app.sourceIds[index - 1] === "qishui") {
-                                    // 汽水音乐：切到发现页并弹推荐模式选择框——
-                                    // 模式入口放在音源菜单里比埋在发现页深处更好发现
+                                    // 汽水音乐：切到发现页并直接展示「发现 → 模式探索」的
+                                    // 场景模式/电台歌单（不再是其它平台榜单，也不弹模式菜单）。
+                                    // 模式切换/场景筛选留在发现页顶部的下拉与场景胶囊里。
                                     root.tabIndex = 4
                                     root.discoveryTitle = ""
                                     root.openPlaylistTitle = ""
-                                    qishuiModeMenu.popup(platformBtn, 0, platformBtn.height + 6)
+                                    root.qishuiShowSongs = false
+                                    app.loadQishuiRecommend("", "")
                                 } else {
                                     root.reloadSongs()
                                 }
@@ -934,32 +917,6 @@ Item {
                         onObjectRemoved: function(index, object) { platformMenu.removeItem(object) }
                     }
                 }
-            }
-
-            // 汽水推荐模式选择框：音源菜单点「汽水音乐」时弹出。
-            // 与发现页里的模式下拉共用状态（qishuiModeCombo 是唯一状态源），
-            // 选完即加载；发现页的 chips 仍可换场景。
-            Menu {
-                id: qishuiModeMenu
-                padding: 6
-                background: Rectangle {
-                    implicitWidth: 210
-                    radius: 14
-                    color: theme.card
-                    border.color: cLine
-                    border.width: 1
-                }
-                // 条目数固定，逐个展开写（不用 inline component：contentItem 里
-                // 引用包裹 MenuItem 的属性有作用域坑）
-                QishuiModeItem { label: "默认模式 · 推荐歌单"; modeKey: "default"; modeIndex: 0 }
-                QishuiModeItem { label: "熟悉模式 · 收藏/历史扩列"; modeKey: "familiar"; modeIndex: 1 }
-                QishuiModeItem { label: "新鲜模式 · 近期发现"; modeKey: "fresh"; modeIndex: 2 }
-                MenuSeparator { contentItem: Rectangle { implicitHeight: 1; color: cLine } }
-                QishuiModeItem { label: "场景：快乐时光"; categoryKey: "快乐时光" }
-                QishuiModeItem { label: "场景：雨天"; categoryKey: "雨天" }
-                QishuiModeItem { label: "场景：KTV 必点"; categoryKey: "KTV必点" }
-                QishuiModeItem { label: "场景：睡前"; categoryKey: "睡前" }
-                QishuiModeItem { label: "场景：动感健身"; categoryKey: "动感健身" }
             }
 
             // 胶囊 Tab：选中 = 主色底白字 + 淡投影；放不下时横向滚动，右缘渐隐提示可左滑
@@ -1566,65 +1523,71 @@ Item {
                                     }
                                 }
                             }
-                            Text {
+                            RowLayout {
                                 Layout.fillWidth: true
-                                text: "推荐歌单"
-                                color: cSub
-                                font.pixelSize: theme.fontSm
-                                visible: qishuiPlaylistRepeater.count > 0
-                            }
-                            Flickable {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 92
-                                contentWidth: qishuiPlaylistRow.implicitWidth
-                                clip: true
-                                visible: qishuiPlaylistRepeater.count > 0
-                                Row {
-                                    id: qishuiPlaylistRow
-                                    spacing: 8
-                                    Repeater {
-                                        id: qishuiPlaylistRepeater
-                                        model: app.discovery
-                                        delegate: Rectangle {
-                                            width: 92
-                                            height: 86
-                                            radius: 10
-                                            color: cCard
-                                            border.color: cLine
-                                            clip: true
-                                            Image {
-                                                anchors.fill: parent
-                                                source: model.cover
-                                                // 卡片只有 92x86，各平台封面原图常是 600~1080px：
-                                                // 不限解码尺寸会导致一排榜单就吃掉上百 MB 内存
-                                                sourceSize.width: 200
-                                                sourceSize.height: 200
-                                                fillMode: Image.PreserveAspectCrop
-                                                asynchronous: true
-                                            }
-                                            Rectangle {
-                                                anchors.left: parent.left
-                                                anchors.right: parent.right
-                                                anchors.bottom: parent.bottom
-                                                height: 26
-                                                color: Qt.rgba(0, 0, 0, 0.55)
-                                                Text {
-                                                    anchors.centerIn: parent
-                                                    width: parent.width - 8
-                                                    text: model.title
-                                                    color: "#FFFFFF"
-                                                    font.pixelSize: theme.fontXs
-                                                    elide: Text.ElideRight
-                                                    horizontalAlignment: Text.AlignHCenter
-                                                }
-                                            }
-                                            MouseArea {
-                                                anchors.fill: parent
-                                                cursorShape: Qt.PointingHandCursor
-                                                onClicked: root.openDiscovery(model.title, model.uid)
-                                            }
-                                        }
+                                Text {
+                                    text: root.qishuiShowSongs
+                                          ? "推荐歌曲"
+                                          : ("模式探索 · " + qishuiModeGrid.count + " 个歌单")
+                                    color: cSub
+                                    font.pixelSize: theme.fontSm
+                                    elide: Text.ElideRight
+                                }
+                                Item { Layout.fillWidth: true }
+                                Rectangle {
+                                    implicitWidth: toggleText.implicitWidth + 20
+                                    implicitHeight: 28
+                                    radius: 14
+                                    color: root.cChip
+                                    border.color: cLine
+                                    Text {
+                                        id: toggleText
+                                        anchors.centerIn: parent
+                                        text: root.qishuiShowSongs ? "看歌单" : "看歌曲"
+                                        color: cPrimary
+                                        font.pixelSize: theme.fontSm
                                     }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.qishuiShowSongs = !root.qishuiShowSongs
+                                    }
+                                }
+                            }
+                            // 汽水「发现 → 模式探索」歌单墙：场景模式 + 电台 + 官方歌单，
+                            // 竖向网格一直往上滑（不再是一排 92px 的横向卡片）。
+                            GridView {
+                                id: qishuiModeGrid
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                clip: true
+                                visible: !root.qishuiShowSongs
+                                model: app.discovery
+                                cellWidth: root.gridCellWidth
+                                cellHeight: root.gridCellHeight
+                                cacheBuffer: cellHeight * 2
+                                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                                delegate: AlbumCard {
+                                    id: modeCard
+                                    width: qishuiModeGrid.cellWidth
+                                    height: qishuiModeGrid.cellHeight
+                                    title: model.title
+                                    subtitle: (model.count > 0 ? model.count + " 首 · " : "")
+                                              + model.sourceName
+                                    cover: model.cover
+                                    badge: model.sourceName
+                                    accent: app.sourceColor(model.source)
+                                    onClicked: root.openDiscovery(model.title, model.uid)
+                                    onLongPressed: root.openPlaylistMenu(
+                                        model.uid, model.title, modeCard, posX, posY,
+                                        function() { root.openDiscovery(model.title, model.uid) }, true)
+                                }
+                                EmptyState {
+                                    anchors.centerIn: parent
+                                    visible: qishuiModeGrid.count === 0 && !app.discoveryLoading
+                                    iconName: "music"
+                                    title: "暂无模式歌单"
+                                    hint: "检查网络后点「刷新榜单」重试"
                                 }
                             }
                             ListView {
@@ -1632,6 +1595,7 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 clip: true
+                                visible: root.qishuiShowSongs
                                 spacing: 8
                                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                                 model: app.results

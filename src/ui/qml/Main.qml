@@ -36,11 +36,36 @@ ApplicationWindow {
         anchors.leftMargin: -platform.osSafeLeft
         visible: platform.isMobile && theme.coverLyricBackground
                  && shell.item && shell.item.pageIndex !== 2 && shell.item.pageIndex !== 3
+                 && shell.item.pageIndex !== 4   // MV 页自己铺满整窗（含挖孔），不再垫模糊封面
         source: app.currentCover.length > 0 ? app.currentCover
                                             : "qrc:/qml/art/default_cover.jpg"
         dark: theme.dark
         veil: shell.item && shell.item.pageIndex === 1 ? 0.62 : 0.90
         Behavior on veil { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+    }
+
+    // 修复 Qt 6.11 部分 GSI 机型：软键盘收起后 safeArea.top 卡在 80dp
+    // （IME 高度 56dp 被算进状态栏 24dp），且不发 safeAreaMarginsChanged，
+    // ApplicationWindow 的 contentItem 被误推到 y=80，整页下移 56dp
+    // （搜索框离顶部一大截）。键盘显示时的内缩合理，只在他收起后拉回纯状态栏高度。
+    // platform.statusBarTop 来自 JNI 状态栏高度，不受 IME 影响（实测恒 24dp）。
+    Timer {
+        id: imeSafeFix
+        interval: 400
+        running: platform.isMobile
+        repeat: true
+        onTriggered: {
+            if (Qt.inputMethod && Qt.inputMethod.visible) return
+            const ci = win.contentItem
+            if (!ci || platform.statusBarTop <= 0) return
+            const expected = platform.statusBarTop
+            if (Math.abs(ci.y - expected) <= 1) return
+            const delta = ci.y - expected
+            console.log("IMEFIX ci.y=" + ci.y + "->" + expected
+                        + " h=" + ci.height + "+" + delta)
+            ci.y = expected
+            ci.height = ci.height + delta
+        }
     }
 
     // ---- Android 返回键主通道（onClosing）----
@@ -172,12 +197,18 @@ ApplicationWindow {
         // 左侧：横屏挖孔在左侧时 Qt 已把 contentItem 内缩 osSafeLeft，这里反向减掉，
         // 让内容顶到屏幕最左、左侧不留那条 margin。竖屏 osSafeLeft=0 不受影响
         // （竖屏顶部仍保留安全区，按钮要避开挖孔）；桌面恒 0。
+        // 顶部：MV 全屏时去掉安全区内缩（margin=0，让黑底视频铺满状态栏/挖孔区）。
+        // 不能用负值：anchors.fill + 负 topMargin 在本机把 Loader 高度从 1612 算成 321，
+        // 视频和控制条全挤在顶部一小条。margin=0 既铺满又不会触发塌缩。
+        // 桌面 osSafeTop=0，两值相同无影响。
         anchors.leftMargin: platform.insetLeft - platform.osSafeLeft
         anchors.rightMargin: platform.insetRight
-        anchors.topMargin: platform.insetTop
+        anchors.topMargin: shell.item && shell.item.pageIndex === 4
+                           ? 0 : platform.insetTop
         anchors.bottomMargin: platform.insetBottom
-        source: win.shellSource
-        // Qt 只把按键派发给 activeFocusItem，焦点为空时事件直接被丢弃（不是发给 contentItem），
+    source: win.shellSource
+
+    // Qt 只把按键派发给 activeFocusItem，焦点为空时事件直接被丢弃（不是发给 contentItem），
         // 所以外壳自己持有焦点；页面里的输入框被点按时仍会正常抢走焦点。
         focus: true
         // 媒体实体键兜底：车机的 KeyEvent 若没被 Activity 接住（例如落在 WebView

@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QRect>
+#include <QTimer>
 #include <QString>
 #include <QUrl>
 
@@ -52,6 +53,10 @@ class PlatformAdapter : public QObject {
     // insetTop 是「还差多少要由 QML 补」的差额，窗口铺满整屏且 Qt 已内缩时为 0；
     // 但状态栏区域实际被 Qt 从内容区里切掉了这么多，QML 想让背景铺过去必须知道它。
     Q_PROPERTY(qreal osSafeTop READ osSafeTop NOTIFY insetsChanged)
+    // 纯系统状态栏高度（来自 JNI，不受软键盘 IME 影响，恒为 24dp）。
+    // osSafeTop 在部分 GSI 机型上键盘收起后会卡在 80dp（IME 高度被算进 safeArea），
+    // QML 用 statusBarTop 算出被误推的偏移并反向补偿。
+    Q_PROPERTY(qreal statusBarTop READ statusBarTop NOTIFY insetsChanged)
     // 同 osSafeTop，只是横屏挖孔在左侧时 Qt 对内容区做的横向内缩量
     // （safeAreaMargins.left）。窗口级背景要盖住挖孔那条必须知道它。
     Q_PROPERTY(qreal osSafeLeft READ osSafeLeft NOTIFY insetsChanged)
@@ -103,6 +108,7 @@ public:
     qreal insetLeft() const { return m_insetLeft; }
     qreal insetTop() const { return m_insetTop; }
     qreal osSafeTop() const { return m_lastSafeTop; }
+    qreal statusBarTop() const { return m_lastOsTop; }
     qreal osSafeLeft() const { return m_lastSafeLeft; }
     qreal insetRight() const { return m_insetRight; }
     qreal insetBottom() const { return m_insetBottom; }

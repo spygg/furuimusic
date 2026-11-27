@@ -54,7 +54,10 @@ public:
     void setDucked(bool on);
     bool ducked() const { return m_ducked; }
 
-    void setQueue(const QVector<Song> &songs, int index);
+    // context: 播放上下文 "playlist"（歌单/榜单/收藏/历史）或空/"single"（搜索/单曲/推荐）。
+    // 写进每首歌的 extra["__roamContext"]，切歌时由当前歌判断漫游模式是否接管。
+    void setQueue(const QVector<Song> &songs, int index,
+                  const QString &context = QString());
     void addQueue(const QVector<Song> &songs);
     void removeQueue(int index);
     void clearQueue();

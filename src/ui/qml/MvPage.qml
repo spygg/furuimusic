@@ -35,6 +35,11 @@ Rectangle {
         theme.statusBarOverride = on ? 1 : -1
         // 进 MV 会暂停音乐，屏幕常亮不能只跟着音乐播放态；单独告知原生侧。
         app.mvScreenOn = on
+        // 进入 MV 自动锁横屏 + 沉浸式隐藏系统栏（横屏素材在竖屏窗口里会被压成
+        // 小画面 + 上下大黑边，用户期望进 MV 就是横屏全屏）；退出恢复自动方向。
+        // setFullscreen 同步 isFullscreen 状态位，full 按钮此时显示「退出横屏」。
+        // 桌面无方向概念，setFullscreen 走 showFullScreen/showNormal。
+        if (root.isFullscreen !== on) root.setFullscreen(on)
     }
     onEnabledChanged: syncScreenState(enabled)
     // 外壳重建/页面销毁时可能来不及走 enabled→false，留下全局 override；
@@ -425,10 +430,13 @@ Rectangle {
     }
 
     // 顶部栏：返回 + 标题/艺人 + 解码后端徽标
+    // 外壳在 MV 时把 topMargin 放成 0（视频铺满状态栏/挖孔区）；控制条自己把
+    // 状态栏高度加回来，否则返回键会顶到状态栏时间/图标上（桌面两值恒 0，无影响）。
     Rectangle {
         id: topBar
         z: 14
         anchors.top: parent.top
+        anchors.topMargin: platform.insetTop
         anchors.left: parent.left
         anchors.right: parent.right
         height: Math.max(76, theme.touchMin + 28)

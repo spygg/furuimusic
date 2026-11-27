@@ -118,9 +118,11 @@ PlatformAdapter::PlatformAdapter(QObject *parent) : QObject(parent)
         emit formFactorChanged();
     });
 
-    // 软键盘显隐会改变「底部安全区是否要计入」（见 refreshInsets 的去重逻辑），
-    // 而输入法状态变化不一定伴随窗口尺寸变化（部分机型的 adjustResize 时机更晚），
-    // 这里直接跟着输入法信号重算一次，键盘一弹出就把正确边距交给 QML。
+    // 软键盘显隐会改变安全区：两台机型上键盘收起后 Qt 不还原 safeArea.top，
+    // 且 visibleChanged 收起沿可能丢失。这里在 IME 信号到达时重算一次边距；
+    // 真正的内容偏移补偿交给 QML 侧（见 Main.qml 的 statusBarTop 反向补偿），
+    // 因为被误推的是 ApplicationWindow.contentItem，C++ 的 QQuickWindow::contentItem
+    // 不是同一个对象，在 C++ 侧读它的 y 恒为 0。
     if (QInputMethod *ime = QGuiApplication::inputMethod()) {
         connect(ime, &QInputMethod::visibleChanged, this, [this] {
             if (m_safeAreaWindow)

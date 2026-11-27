@@ -14,6 +14,7 @@
 #include <memory>
 
 #include "JsonMapper.h"
+#include "Logger.h"
 #include "KugouProtocol.h"
 #include "NeteaseCrypto.h"
 #include "Settings.h"
@@ -544,6 +545,9 @@ void MusicSource::resolveUrl(const Song &song, const QString &quality, PlayableC
         if (cb) cb(p);
         return;
     }
+    // 汽水不是单请求直链：SEO 详情只给 VOD GetPlayInfo 签名地址，必须再走一次才拿得到音频。
+    if (m_desc.driver == QLatin1String("qishui"))
+        return qishuiResolveUrl(song, quality, cb);
     const Endpoint ep = m_desc.endpoints.value(QStringLiteral("url"));
     const QVariantMap vars = songVars(song, quality);
     call(ep, vars, [this, ep, song, cb](const HttpClient::Reply &r) {
@@ -1375,6 +1379,50 @@ inline Playlist qishuiPlaylistToPlaylist(const QJsonValue &p, const QString &sou
     if (p.isObject()) pl.extra = p.toObject().toVariantMap();
     return pl;
 }
+
+// 汽水「发现 → 模式探索」的电台卡片（discover_radio）：不是普通歌单，
+// 详情走 /luna/feed/radio/tracks。extra["kind"]="radio" 供 SourceManager 路由。
+inline Playlist qishuiRadioToPlaylist(const QJsonValue &block, const QString &source)
+{
+    Playlist pl;
+    pl.source = source;
+    pl.type = QStringLiteral("rank");
+    pl.sourceId = Json::stringAt(block, QStringLiteral("inner_block_id"));
+    pl.title = Json::stringAt(block, QStringLiteral("title"));
+    pl.owner = Json::stringAt(block, QStringLiteral("resources[0].style.desc"));
+    // 电台的封面在 resources[].style.cover_url_list[]，套一层 url_cover 复用 qishuiCoverOf
+    QJsonObject wrap;
+    wrap.insert(QStringLiteral("url_cover"),
+                Json::valueAt(block, QStringLiteral("resources[0].style.cover_url_list[0]")));
+    pl.cover = qishuiCoverOf(wrap);
+    pl.count = 0;   // 电台是无限流，没有固定曲目数
+    if (pl.sourceId.isEmpty()) pl.sourceId = QString::number(qHash(pl.title), 16);
+    pl.uid = source + QLatin1Char(':') + pl.sourceId;
+    pl.extra.insert(QStringLiteral("kind"), QStringLiteral("radio"));
+    return pl;
+}
+
+// 汽水「发现 → 模式探索」的场景模式（feed_mode_block[].feed_mode[]，type=scene_mode）：
+// 实测 /luna/feed/radio/tracks 接受 scene_mode_id 当 radio_id，所以同样按电台歌单处理。
+// 封面在 url_info（与 url_cover 同构），套一层复用 qishuiCoverOf。
+inline Playlist qishuiSceneModeToPlaylist(const QJsonValue &m, const QString &source)
+{
+    Playlist pl;
+    pl.source = source;
+    pl.type = QStringLiteral("rank");
+    pl.sourceId = Json::stringAt(m, QStringLiteral("entity.feed_scene_mode.scene_mode_id"));
+    pl.title = Json::stringAt(m, QStringLiteral("text"));
+    QJsonObject wrap;
+    wrap.insert(QStringLiteral("url_cover"), Json::valueAt(m, QStringLiteral("url_info")));
+    pl.cover = qishuiCoverOf(wrap);
+    pl.count = 0;   // 模式是无限流，没有固定曲目数
+    if (pl.sourceId.isEmpty()) return pl;
+    pl.uid = source + QLatin1Char(':') + pl.sourceId;
+    pl.extra.insert(QStringLiteral("kind"), QStringLiteral("radio"));
+    pl.extra.insert(QStringLiteral("subQueueType"),
+                    Json::stringAt(m, QStringLiteral("entity.feed_scene_mode.sub_queue_type")));
+    return pl;
+}
 } // anonymous namespace
 
 void MusicSource::qishuiSearch(const QString &keyword, int limit, int offset, SongsCallback cb)
@@ -1424,6 +1472,118 @@ void MusicSource::qishuiPlaylistDetail(const QString &id, int limit, int offset,
             }
         }
         if (cb) cb(out);
+    });
+}
+
+void MusicSource::radioDetail(const QString &id, int limit, SongsCallback cb)
+{
+    if (m_desc.driver == QLatin1String("qishui"))
+        return qishuiRadioDetail(id, limit, cb);
+    if (cb) cb(QVector<Song>());
+}
+
+// 汽水模式探索电台：/luna/feed/radio/tracks 返回的 items[].entity.track_wrapper.track
+// 与普通歌单详情同一套结构，直接复用 qishuiCollectItems/qishuiUnwrapTrack/qishuiTrackToSong。
+void MusicSource::qishuiRadioDetail(const QString &id, int limit, SongsCallback cb)
+{
+    const Endpoint ep = m_desc.endpoints.value(QStringLiteral("radioTracks"));
+    if (!ep.valid()) {
+        if (cb) cb(QVector<Song>());
+        return;
+    }
+    QVariantMap v = baseVars();
+    v.insert(QStringLiteral("cookie"), QString());   // 电台流公开，匿名访问
+    v.insert(QStringLiteral("id"), id);
+    v.insert(QStringLiteral("limit"), QString::number(limit));
+    call(ep, v, [this, cb](const HttpClient::Reply &r) {
+        QVector<Song> out;
+        if (r.ok) {
+            const QJsonValue root = Json::rootOf(r.json);
+            const QJsonArray items = qishuiCollectItems(root);
+            for (const QJsonValue &m : items) {
+                const QJsonValue t = qishuiUnwrapTrack(m);
+                if (t.isNull()) continue;
+                if (Json::stringAt(t, QStringLiteral("id")).isEmpty()
+                    || Json::stringAt(t, QStringLiteral("name")).isEmpty())
+                    continue;
+                out << qishuiTrackToSong(t, m_desc.id);
+            }
+        }
+        if (cb) cb(out);
+    });
+}
+
+// 汽水取链是两段式，通用 resolveUrl 的 resultPaths 拿不到直链：
+//   1) GET /luna/h5/seo_track?track_id=<id> → track_player.url_player_info（VOD GetPlayInfo 签名地址）
+//   2) GET 该签名地址 → Result.Data.PlayInfoList[].MainPlayUrl（真正可播的音频）
+// 实测 MainPlayUrl 不需要额外鉴权头，Range 请求直接回 206 audio/mp4。
+void MusicSource::qishuiResolveUrl(const Song &song, const QString &quality, PlayableCallback cb)
+{
+    const Endpoint ep = m_desc.endpoints.value(QStringLiteral("url"));
+    const auto fail = [this, cb](const QString &message, const QString &reason) {
+        Playable p;
+        p.ok = false;
+        p.source = m_desc.id;
+        p.reason = reason;
+        p.message = message;
+        if (cb) cb(p);
+    };
+    if (!ep.valid() || song.sourceId.isEmpty()) {
+        fail(QStringLiteral("汽水未配置取链接口或歌曲 id 为空"), QStringLiteral("unavailable"));
+        return;
+    }
+    QVariantMap v = songVars(song, quality);
+    v.insert(QStringLiteral("cookie"), QString());   // SEO 接口公开，带登录 Cookie 反而容易空回包
+    call(ep, v, [this, song, quality, cb, fail](const HttpClient::Reply &r) {
+        const QJsonValue root = r.ok ? Json::rootOf(r.json) : QJsonValue();
+        const QString ticket = Json::stringAt(root, QStringLiteral("track_player.url_player_info"));
+        if (ticket.isEmpty()) {
+            fail(QStringLiteral("汽水未返回播放地址（可能需要会员或已下架）"), QStringLiteral("vip"));
+            return;
+        }
+        HttpClient::instance()->request(QStringLiteral("GET"), QUrl(ticket),
+                                        QVariantMap(), QByteArray(),
+                                        [this, song, quality, cb, fail](const HttpClient::Reply &r2) {
+            if (!r2.ok) {
+                fail(QStringLiteral("汽水播放地址已过期或网络异常"), QStringLiteral("unavailable"));
+                return;
+            }
+            const QJsonValue detail = Json::rootOf(r2.json);
+            const QJsonArray infos = Json::arrayAt(detail, QStringLiteral("Result.Data.PlayInfoList"));
+            QStringList wanted;
+            if (quality == QLatin1String("standard")) wanted << QStringLiteral("medium");
+            else if (quality == QLatin1String("higher") || quality == QLatin1String("excellent"))
+                wanted << QStringLiteral("higher") << QStringLiteral("medium");
+            else
+                wanted << QStringLiteral("lossless") << QStringLiteral("highest")
+                       << QStringLiteral("higher") << QStringLiteral("medium");
+            QString picked;
+            QString anyUrl;
+            QString backupUrl;
+            for (const QJsonValue &info : infos) {
+                const QString main = Json::stringAt(info, QStringLiteral("MainPlayUrl"));
+                const QString backup = Json::stringAt(info, QStringLiteral("BackupPlayUrl"));
+                if (anyUrl.isEmpty() && !main.isEmpty()) anyUrl = main;
+                if (backupUrl.isEmpty() && !backup.isEmpty()) backupUrl = backup;
+                if (picked.isEmpty() && !main.isEmpty()
+                    && wanted.contains(Json::stringAt(info, QStringLiteral("Quality"))))
+                    picked = main;
+            }
+            const QString url = !picked.isEmpty() ? picked
+                              : (!anyUrl.isEmpty() ? anyUrl : backupUrl);
+            if (url.isEmpty()) {
+                fail(QStringLiteral("汽水未返回可播放的音频地址"), QStringLiteral("unavailable"));
+                return;
+            }
+            Playable p;
+            p.ok = true;
+            p.source = m_desc.id;
+            p.url = QUrl(url);
+            p.message = QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist);
+            qInfo().noquote() << QStringLiteral("[取链] 汽水 VOD 直链已解析：%1 - %2")
+                                     .arg(song.title, song.artist);
+            if (cb) cb(p);
+        });
     });
 }
 
@@ -1492,6 +1652,8 @@ void MusicSource::qishuiSearchPlaylists(const QString &keyword, int limit, int o
 void MusicSource::qishuiRank(int limit, int offset, PlaylistsCallback cb)
 {
     const Endpoint ep = m_desc.endpoints.value(QStringLiteral("rank"));
+    const Endpoint radioEp = m_desc.endpoints.value(QStringLiteral("radioMix"));
+    const Endpoint modeEp = m_desc.endpoints.value(QStringLiteral("feedMode"));
     QVariantMap v = baseVars();
     // 推荐歌单/榜单是公开接口：登录后 m_session.cookie 会被 baseVars 填进
     // 源级 "Cookie: {cookie}" 头，发给 beta-luna/api.qishui.com 会被拒或返回空，
@@ -1519,25 +1681,132 @@ void MusicSource::qishuiRank(int limit, int offset, PlaylistsCallback cb)
         return out;
     };
 
+    // 汽水 App「发现 → 模式探索」的电台卡片：inner_block[type=discover_radio]。
+    // 官方接口每次只回 12 个且在两组间轮换，所以下面发两次再按 uid 去重。
+    const auto parseRadio = [this](const HttpClient::Reply &r) {
+        QVector<Playlist> out;
+        if (!r.ok) return out;
+        const QJsonValue root = Json::rootOf(r.json);
+        const QJsonArray blocks = Json::arrayAt(root, QStringLiteral("inner_block"));
+        for (const QJsonValue &b : blocks) {
+            if (Json::stringAt(b, QStringLiteral("type")) != QStringLiteral("discover_radio"))
+                continue;
+            out << qishuiRadioToPlaylist(b, m_desc.id);
+        }
+        return out;
+    };
+
+    // 汽水「发现 → 模式探索」的场景模式卡片：45 个左右，是这一页真正的主体。
+    const auto parseScene = [this](const HttpClient::Reply &r) {
+        QVector<Playlist> out;
+        if (!r.ok) return out;
+        const QJsonValue root = Json::rootOf(r.json);
+        const QJsonArray blocks = Json::arrayAt(root, QStringLiteral("feed_mode_block"));
+        for (const QJsonValue &b : blocks) {
+            const QJsonArray modes = Json::arrayAt(b, QStringLiteral("feed_mode"));
+            for (const QJsonValue &m : modes) {
+                if (Json::stringAt(m, QStringLiteral("type")) != QStringLiteral("scene_mode"))
+                    continue;
+                const Playlist pl = qishuiSceneModeToPlaylist(m, m_desc.id);
+                if (!pl.uid.isEmpty() && !pl.title.isEmpty()) out << pl;
+            }
+        }
+        return out;
+    };
+
+    // 异步聚合：场景模式 + 两批电台 + 推荐歌单全部回来再一次性回调，
+    // 避免早到的一批先刷新 UI、晚到的一批又把它覆盖掉。
+    struct Agg {
+        int pending = 0;
+        QVector<Playlist> playlists;
+        QVector<Playlist> radios;
+        QVector<Playlist> scenes;
+    };
+    auto agg = std::make_shared<Agg>();
+    agg->pending = 1 + (radioEp.valid() ? 2 : 0) + (modeEp.valid() ? 1 : 0);
+    const auto finish = [this, cb, agg] {
+        if (--agg->pending > 0) return;
+        QVector<Playlist> out;
+        QSet<QString> seen;
+        QSet<QString> seenTitles;
+        // 场景模式/电台在前：这就是汽水「模式探索」那一大片卡片；
+        // 官方推荐歌单在后。同名卡片（两批电台轮换 / 场景与电台重名）只留一张。
+        const QVector<Playlist> *groups[] = { &agg->scenes, &agg->radios, &agg->playlists };
+        for (const QVector<Playlist> *src : groups) {
+            for (const Playlist &p : *src) {
+                if (p.uid.isEmpty() || seen.contains(p.uid)
+                    || seenTitles.contains(p.title.trimmed())) continue;
+                seen.insert(p.uid);
+                seenTitles.insert(p.title.trimmed());
+                out << p;
+            }
+        }
+        if (out.isEmpty()) out = defaultBoards();
+        Logger::write(QStringLiteral("I"),
+                      QStringLiteral("汽水榜单：%1 个场景模式 + %2 个模式电台 + %3 个推荐歌单")
+                          .arg(agg->scenes.size()).arg(agg->radios.size())
+                          .arg(agg->playlists.size()));
+        if (cb) cb(out);
+    };
+
     // 真机实测：beta-luna.douyin.com 在部分网络下 DNS/连接失败，导致「我的歌单」
     // 里汽水一个官方歌单都没有。api.qishui.com 是搜索/详情/账号共用的主域名，
     // 同样支持 /luna/discover/mix（实测返回 8 个推荐歌单），真机网络必通。
     // 故配置端点（beta-luna）失败或空时，改打主域名重试一次，再回退静态 defaultBoards。
-    call(ep, v, [this, cb, ep, v, parse](const HttpClient::Reply &r) {
+    call(ep, v, [this, ep, v, parse, agg, finish](const HttpClient::Reply &r) {
         const QVector<Playlist> first = parse(r);
-        if (!first.isEmpty()) { if (cb) cb(first); return; }
+        if (!first.isEmpty()) { agg->playlists = first; finish(); return; }
         if (!ep.path.startsWith(m_desc.base, Qt::CaseInsensitive)) {
             Endpoint fallback = ep;
             fallback.path = m_desc.base + QStringLiteral("/luna/discover/mix");
-            call(fallback, v, [this, cb, parse](const HttpClient::Reply &r2) {
-                const QVector<Playlist> second = parse(r2);
-                if (cb) cb(second.isEmpty() ? defaultBoards() : second);
+            call(fallback, v, [parse, agg, finish](const HttpClient::Reply &r2) {
+                agg->playlists = parse(r2);
+                finish();
             });
             return;
         }
-        // 接口偶发失败/被限流时回退静态默认榜单，避免空白
-        if (cb) cb(defaultBoards());
+        finish();   // 接口偶发失败/被限流：由最终聚合回退静态默认榜单
     });
+
+    if (radioEp.valid()) {
+        for (int i = 0; i < 2; ++i) {
+            QVariantMap rv = v;
+            // 服务端按请求在两组电台间轮换；带一个不同 cursor 提高覆盖到 24 个的概率
+            rv.insert(QStringLiteral("cursor"), i == 0 ? QString() : QStringLiteral("radio-mix-2"));
+            call(radioEp, rv, [this, radioEp, rv, parseRadio, agg, finish](const HttpClient::Reply &r) {
+                const QVector<Playlist> got = parseRadio(r);
+                if (got.isEmpty() && !radioEp.path.startsWith(m_desc.base, Qt::CaseInsensitive)) {
+                    Endpoint fb = radioEp;
+                    fb.path = m_desc.base + QStringLiteral("/luna/discover/mix");
+                    call(fb, rv, [parseRadio, agg, finish](const HttpClient::Reply &r2) {
+                        agg->radios += parseRadio(r2);
+                        finish();
+                    });
+                    return;
+                }
+                agg->radios += got;
+                finish();
+            });
+        }
+    }
+
+    // 场景模式是「模式探索」的主力：/luna/feed/mode 一次给 45 个，公开免登录。
+    if (modeEp.valid()) {
+        call(modeEp, v, [this, modeEp, v, parseScene, agg, finish](const HttpClient::Reply &r) {
+            const QVector<Playlist> got = parseScene(r);
+            if (got.isEmpty() && !modeEp.path.startsWith(m_desc.base, Qt::CaseInsensitive)) {
+                Endpoint fb = modeEp;
+                fb.path = m_desc.base + QStringLiteral("/luna/feed/mode");
+                call(fb, v, [parseScene, agg, finish](const HttpClient::Reply &r2) {
+                    agg->scenes = parseScene(r2);
+                    finish();
+                });
+                return;
+            }
+            agg->scenes = got;
+            finish();
+        });
+    }
 }
 
 } // namespace Furui
