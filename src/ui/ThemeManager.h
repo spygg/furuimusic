@@ -103,8 +103,8 @@ public:
     void setStatusBarOverride(int override);
 
     // ---- 配色对齐 AlgerMusicPlayer（品牌绿 #22C55E + 白/黑干净的底）----
-    QColor bg() const { return isDark() ? QColor("#0E0E10") : QColor("#FFFFFF"); }
-    QColor surface() const { return isDark() ? QColor("#1B1B20") : QColor("#F7F8FA"); }
+    QColor bg() const { return isDark() ? QColor("#0E0E10") : QColor("#F7F8FA"); }
+    QColor surface() const { return isDark() ? QColor("#1B1B20") : QColor("#F1F3F5"); }
     QColor card() const { return isDark() ? QColor("#1A1A1E") : QColor("#FFFFFF"); }
     QColor cardHover() const { return isDark() ? QColor("#242429") : QColor("#F3F4F6"); }
     QColor text() const { return isDark() ? QColor("#F5F5F7") : QColor("#111827"); }

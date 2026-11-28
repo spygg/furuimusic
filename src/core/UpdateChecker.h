@@ -16,9 +16,14 @@
 #include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
+#include <functional>
 #include <memory>
 
+class QThread;
+
 namespace Furui {
+
+struct UpdateVerification;
 
 class UpdateChecker : public QObject {
     Q_OBJECT
@@ -32,6 +37,7 @@ class UpdateChecker : public QObject {
     Q_PROPERTY(QVariantList history READ history NOTIFY stateChanged)
     Q_PROPERTY(bool checking READ checking NOTIFY stateChanged)
     Q_PROPERTY(bool downloading READ downloading NOTIFY stateChanged)
+    Q_PROPERTY(bool verifying READ verifying NOTIFY stateChanged)
     // 远端版本是否真的比本地新（QML 的「下载/安装」按钮据此禁用，避免重复安装同版本）
     Q_PROPERTY(bool hasUpdate READ hasUpdate NOTIFY stateChanged)
     // 下载进度 0..100，总大小未知时为 -1
@@ -45,6 +51,7 @@ class UpdateChecker : public QObject {
 public:
     static UpdateChecker *instance();
     explicit UpdateChecker(QObject *parent = nullptr);
+    ~UpdateChecker() override;
 
     QString localVersion() const;
     QString remoteVersion() const { return m_remoteVersion; }
@@ -52,6 +59,7 @@ public:
     QVariantList history() const { return m_history; }
     bool checking() const { return m_checking; }
     bool downloading() const { return m_downloading; }
+    bool verifying() const { return m_verifying; }
     bool hasUpdate() const;
     int progress() const { return m_progress; }
     QString downloadedPath() const { return m_downloadedPath; }
@@ -85,9 +93,16 @@ private:
     struct DownloadProbeState;
 
     void probeLatestRelease();
-    void fetchManifests(const QString &ref, const QString &apiVersion);
+    void fetchManifests(const QString &ref, const QString &apiVersion,
+                        const QJsonObject &release);
     void finishCheck(const std::shared_ptr<FetchState> &state);
-    bool applyManifest(const QJsonObject &obj);
+    bool applyManifest(const QJsonObject &obj, const QJsonObject &release);
+    void resetTrustedRelease();
+    void verifyPackage(const QString &path, quint64 gen, std::function<void()> done);
+    void cancelVerification(bool wait);
+    void installVerifiedPackage();
+    void openVerifiedDownloadFolder();
+    QString copyVerifiedToDownloads();
     QString downloadUrlFor(const QString &version) const;
     // downloadUrlFor 公共体：key = 清单 downloads 键，fallbackAsset = 默认资产名。
     // 车机特供版用它改查 android-carcompat 键 / 特供资产名。
@@ -103,13 +118,23 @@ private:
     QString m_changelog;
     QVariantList m_history;
     QVariantMap m_downloads;   // manifest 里的 downloads 映射（平台 -> 直链，可远程改镜像）
+    QString m_releaseTag;
+    QString m_packageAsset;
+    QString m_packageUrl;
+    QString m_packageSha256;
+    qint64 m_packageSize = 0;
+    bool m_releaseMetadataTrusted = false;
     QStringList m_downloadQueue;  // 探测后按耗时排序的可用线路，失败时依次回退
     int m_downloadIndex = 0;
-    // 「重新下载」时递增：让旧探测/旧下载的异步回调全部作废，避免旧请求抢答或写同一个文件
+    // 「重新下载」时递增：让旧探测/旧下载/校验的异步回调全部作废，避免旧请求抢答或写同一个文件
     quint64 m_downloadGen = 0;
     QPointer<QNetworkReply> m_downloadReply;
+    std::shared_ptr<UpdateVerification> m_verification;
+    QPointer<QThread> m_verificationThread;
+    std::function<void()> m_verificationDone;
     bool m_checking = false;
     bool m_downloading = false;
+    bool m_verifying = false;
     int m_progress = 0;
     QString m_downloadedPath;
     QString m_lastResult;

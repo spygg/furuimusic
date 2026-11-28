@@ -526,7 +526,12 @@ QJsonValue UserApi::businessRoot(const QString &sourceId, const QString &name,
         const QString inner = Json::stringAt(root, codePath);
         QStringList ok = listOf(ep.extra.value(QStringLiteral("successValues")));
         if (ok.isEmpty()) ok << QStringLiteral("0") << QStringLiteral("200");
-        if (!inner.isEmpty() && !ok.contains(inner)) {
+        if (inner.isEmpty()) {
+            if (error) *error = SourceConfig::instance()->nameOf(sourceId)
+                + QStringLiteral("：接口未返回业务状态码");
+            return QJsonValue();
+        }
+        if (!ok.contains(inner)) {
             // 平台把「登录态失效」编成自己的错误码（酷狗的 20010/20017），
             // 这类码要直接告诉用户该重新登录，而不是抛一个看不懂的数字
             const QStringList authCodes = listOf(ep.extra.value(QStringLiteral("authCodes")));
@@ -606,13 +611,33 @@ void UserApi::completePlaylistSongs(const QString &sourceId, const QString &cook
                                     const QString &name, const HttpClient::Reply &r, int maxSongs,
                                     const std::function<void(const QVector<Song> &)> &cb)
 {
-    const QVector<Song> preview = parseSongs(sourceId, name, r);
+    completePlaylistSongs(sourceId, cookie, name, r, maxSongs, nullptr, cb);
+}
+
+void UserApi::completePlaylistSongs(const QString &sourceId, const QString &cookie,
+                                    const QString &name, const HttpClient::Reply &r, int maxSongs,
+                                    bool *requestOk,
+                                    const std::function<void(const QVector<Song> &)> &cb)
+{
+    QString error;
+    const QJsonValue root = businessRoot(sourceId, name, r, &error);
+    bool businessOk = !root.isUndefined() && !root.isNull();
     const Endpoint ep = endpoint(sourceId, name);
+    if (businessOk) {
+        const QJsonValue collection = ep.root.isEmpty() ? root : Json::valueAt(root, ep.root);
+        if (!collection.isArray()) {
+            businessOk = false;
+            error = QStringLiteral("歌曲列表字段缺失或格式错误");
+        }
+    }
+    const QVector<Song> preview = parseSongs(sourceId, name, r);
+    if (requestOk) *requestOk = businessOk;
     const QString idsPath = ep.extra.value(QStringLiteral("fullIdsPath")).toString();
     const QString fillName = ep.extra.value(QStringLiteral("fillEndpoint")).toString();
     // 没声明补全规则的端点（QQ/酷狗/咪咕…）直接回原结果
-    if (!r.ok) {
-        qWarning().noquote() << "[userapi]" << sourceId << name << "request failed:" << r.error
+    if (!businessOk) {
+        qWarning().noquote() << "[userapi]" << sourceId << name << "request failed:"
+                             << (error.isEmpty() ? r.error : error)
                              << "status=" << r.status
                              << QString::fromUtf8(r.body.left(200));
         if (cb) cb(preview);
@@ -626,10 +651,16 @@ void UserApi::completePlaylistSongs(const QString &sourceId, const QString &cook
         qWarning().noquote() << "[userapi]" << sourceId << name << "preview empty, root="
                              << ep.root << "body=" << QString::fromUtf8(r.body.left(300));
 
-    QString error;
-    const QJsonValue root = businessRoot(sourceId, name, r, &error);
+    const QJsonValue idsValue = Json::valueAt(root, idsPath);
+    if (!idsValue.isArray()) {
+        qWarning().noquote() << "[userapi]" << sourceId << name << "full ids missing:"
+                             << idsPath << "body=" << QString::fromUtf8(r.body.left(200));
+        if (requestOk) *requestOk = false;
+        if (cb) cb(preview);
+        return;
+    }
     QStringList ids;
-    const QJsonArray arr = Json::arrayAt(root, idsPath);
+    const QJsonArray arr = idsValue.toArray();
     ids.reserve(arr.size());
     for (const QJsonValue &v : arr) {
         const QString id = v.isObject() ? Json::stringAt(v, QStringLiteral("id")) : Json::str(v);
@@ -640,11 +671,18 @@ void UserApi::completePlaylistSongs(const QString &sourceId, const QString &cook
         if (cb) cb(preview);
         return;
     }
-    if (maxSongs > 0 && ids.size() > maxSongs) ids = ids.mid(0, maxSongs);
+    bool truncated = false;
+    if (maxSongs > 0 && ids.size() > maxSongs) {
+        qWarning().noquote() << "[userapi]" << sourceId << name << "sync capped:"
+                             << ids.size() << "ids /" << maxSongs << "limit";
+        truncated = true;
+        ids = ids.mid(0, maxSongs);
+    }
 
     const Endpoint fillEp = endpoint(sourceId, fillName);
     if (!fillEp.valid()) {
         qWarning().noquote() << "[userapi]" << sourceId << "fill endpoint missing:" << fillName;
+        if (requestOk) *requestOk = false;
         if (cb) cb(preview);
         return;
     }
@@ -664,9 +702,12 @@ void UserApi::completePlaylistSongs(const QString &sourceId, const QString &cook
     auto want = std::make_shared<QStringList>(ids);
     auto got = std::make_shared<QHash<QString, Song>>();
     auto next = std::make_shared<int>(0);
+    auto fillOk = std::make_shared<bool>(true);
     auto step = std::make_shared<std::function<void()>>();
-    *step = [this, sourceId, fillName, base, want, got, next, step, preview, cb, batch]() {
+    *step = [this, sourceId, fillName, base, want, got, next, step, preview, cb, batch,
+             requestOk, fillOk, truncated]() {
         if (*next >= want->size()) {
+            if (requestOk) *requestOk = !truncated && *fillOk;
             QVector<Song> out;
             out.reserve(want->size());
             for (const QString &id : *want) {
@@ -682,11 +723,16 @@ void UserApi::completePlaylistSongs(const QString &sourceId, const QString &cook
         QVariantMap v = base;
         v.insert(QStringLiteral("ids"), slice.join(QLatin1Char(',')));
         call(sourceId, fillName, v,
-             [this, sourceId, fillName, got, step, slice](const HttpClient::Reply &fr) {
-                 const QVector<Song> songs = parseSongs(sourceId, fillName, fr);
-                 if (songs.isEmpty())
-                     qWarning().noquote() << "[userapi]" << sourceId << "songDetail batch empty:"
-                                          << fr.error << fr.status;
+             [this, sourceId, fillName, got, step, slice, fillOk](const HttpClient::Reply &fr) {
+                 QString error;
+                const QJsonValue root = businessRoot(sourceId, fillName, fr, &error);
+                if (root.isUndefined() || root.isNull()) *fillOk = false;
+                const QVector<Song> songs = parseSongs(sourceId, fillName, fr);
+                if (songs.isEmpty()) {
+                    *fillOk = false;
+                    qWarning().noquote() << "[userapi]" << sourceId << fillName << "songDetail batch empty:"
+                                         << (error.isEmpty() ? fr.error : error) << fr.status;
+                }
                  else if (songs.size() < slice.size())
                      qWarning().noquote() << "[userapi]" << sourceId << "songDetail batch short:"
                                           << songs.size() << "/" << slice.size();
@@ -775,7 +821,8 @@ void UserApi::fetchLibrary(const QString &sourceId, const QString &cookie,
         const int songLists = out->playlistSongs.size();
         int songs = 0;
         for (const auto &pair : out->playlistSongs) songs += pair.second.size();
-        out->ok = !out->playlists.isEmpty() || !out->favorites.isEmpty();
+        out->ok = !out->favoritesError && out->failedPlaylists == 0
+            && (!out->playlists.isEmpty() || out->favoritesLoaded);
         const QString counts =
             QStringLiteral("%1：歌单 %2 个，收藏 %3 首，已拉取 %4 个歌单共 %5 首")
                 .arg(SourceConfig::instance()->nameOf(sourceId))
@@ -785,10 +832,14 @@ void UserApi::fetchLibrary(const QString &sourceId, const QString &cookie,
             out->message = counts;
             return;
         }
-        // 服务端已经说明原因（签名不过、登录态失效等）时保留它，
-        // 泛泛的「未读到数据」会把用户该做的事（重新扫码）藏起来。
-        if (out->message.isEmpty())
+        if (out->failedPlaylists > 0) {
+            out->message = counts + QStringLiteral("；%1 个歌单未完整同步，已保留本地缓存")
+                                      .arg(out->failedPlaylists);
+        } else if (out->message.isEmpty()) {
+            // 服务端已经说明原因（签名不过、登录态失效等）时保留它，
+            // 泛泛的「未读到数据」会把用户该做的事（重新扫码）藏起来。
             out->message = counts + QStringLiteral("；未读到数据，请检查登录态与账号接口配置");
+        }
     };
 
     const QVariantMap base = vars(sourceId, cookie.trimmed());
@@ -831,9 +882,11 @@ void UserApi::fetchLibrary(const QString &sourceId, const QString &cookie,
                         endpoint(sourceId, QStringLiteral("playlistSongs")).valid();
                     struct Task { QString name; QVariantMap v; QString uid; bool favorites; };
                     QVector<Task> tasks;
-                    if (cfg.driver == QLatin1String("http") &&
-                        endpoint(sourceId, QStringLiteral("favorites")).valid() &&
-                        cfg.endpoints.contains(QStringLiteral("favorites"))) {
+                    const bool canLoadFavorites = cfg.driver == QLatin1String("http")
+                        && endpoint(sourceId, QStringLiteral("favorites")).valid()
+                        && cfg.endpoints.contains(QStringLiteral("favorites"));
+                    out->favoritesLoaded = canLoadFavorites || (!favoriteId.isEmpty() && listSongsKnown);
+                    if (canLoadFavorites) {
                         QVariantMap fv = v;
                         tasks.append({QStringLiteral("favorites"), fv, QString(), true});
                     } else if (listSongsKnown && !favoriteId.isEmpty()) {
@@ -871,12 +924,16 @@ void UserApi::fetchLibrary(const QString &sourceId, const QString &cookie,
                                 const int cap = qBound(1, Settings::integer(
                                     QStringLiteral("syncPlaylistMaxSongs"), 1000), 5000);
                                 const QString cookie = v.value(QStringLiteral("cookie")).toString();
-                                completePlaylistSongs(sourceId, cookie, t.name, r, cap,
-                                    [t, out, oneDone](const QVector<Song> &songs) {
-                                        if (t.favorites) out->favorites = songs;
-                                        else {
-                                            if (songs.isEmpty()) ++out->failedPlaylists;
+                                auto requestOk = std::make_shared<bool>(false);
+                                completePlaylistSongs(sourceId, cookie, t.name, r, cap, requestOk.get(),
+                                    [t, out, oneDone, requestOk](const QVector<Song> &songs) {
+                                        if (t.favorites) {
+                                            out->favorites = songs;
+                                            out->favoritesError = !(*requestOk);
+                                        } else if (*requestOk) {
                                             out->playlistSongs.append(qMakePair(t.uid, songs));
+                                        } else {
+                                            ++out->failedPlaylists;
                                         }
                                         oneDone();
                                     });

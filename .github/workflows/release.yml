@@ -470,12 +470,19 @@ jobs:
             KSALIAS="$RELEASE_KEY_ALIAS"
             KSPASS="$RELEASE_KEYSTORE_PASSWORD"
             KEYPASS="$RELEASE_KEY_PASSWORD"
-          else
-            echo "::warning::RELEASE_* signing secrets incomplete; falling back to the checked-in PUBLIC DEBUG keystore in src/platform/android-qt6/furui-debug.keystore.b64. This APK is only guaranteed installable, NOT a production release identity."
+          elif [ "${GITHUB_REF:-}" = "${GITHUB_REF#refs/tags/}" ]; then
+            # 非 tag 构建（workflow_dispatch 手动验证）：允许公开 debug 密钥兜底，
+            # 产物只进 workflow artifacts、不发布，签名身份无所谓。
+            echo "::warning::RELEASE_* signing secrets incomplete; using checked-in PUBLIC DEBUG keystore for a NON-RELEASE workflow_dispatch artifact."
             base64 -d src/platform/android-qt6/furui-debug.keystore.b64 > "$KS"
             KSALIAS="androiddebugkey"
             KSPASS="android"
             KEYPASS="android"
+          else
+            # 正式 tag 发布绝不允许用仓库内公开密钥签名：同包名可被他人伪造更新包，
+            # 日后切换正式密钥还会造成签名不一致（审查 B-16）。缺密钥直接 fail。
+            echo "::error::正式 tag 发布缺少 RELEASE_* 签名密钥（keystore/密码/alias 必须四项齐全）。禁止回退到仓库内公开 debug 密钥签名发布。"
+            exit 1
           fi
           test -s "$KS"
           "$BT/zipalign" -f -p 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
@@ -530,6 +537,18 @@ jobs:
       - name: List
         run: find release-assets -type f -printf '%p %s bytes\n'
 
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          find . -type f \( -name '*.zip' -o -name '*.AppImage' -o -name '*.apk' \) -print0 \
+            | sort -z | while IFS= read -r -d '' file; do
+                (cd "$(dirname "$file")" && sha256sum "$(basename "$file")")
+              done > SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 5
+          cat SHA256SUMS
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -538,5 +557,6 @@ jobs:
             release-assets/*/*.zip
             release-assets/*/*.AppImage
             release-assets/*/*.apk
+            release-assets/SHA256SUMS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

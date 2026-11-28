@@ -4,6 +4,7 @@
 #include <QTimer>
 #include <QVector>
 
+#include <QHash>
 #include <QMap>
 #include <functional>
 
@@ -75,6 +76,18 @@ signals:
 
 private:
     explicit AuthManager(QObject *parent = nullptr);
+
+    // 以下代次/序号只由 GUI 线程（AuthManager 对象所属线程）访问。HTTP 回调也由同一
+    // 线程上的 HttpClient 投递；每个异步边界都必须快照并复核，不能只看 m_polling。
+    quint64 invalidateLogin(const QString &sourceId);
+    quint64 currentLoginGeneration(const QString &sourceId) const;
+    quint64 nextSyncSequence(const QString &sourceId);
+    bool beginQrSession(const QString &sourceId, quint64 loginGeneration);
+    bool qrCurrent(const QString &sourceId, quint64 loginGeneration,
+                   quint64 qrGeneration) const;
+    void endQrSession(quint64 qrGeneration);
+    void clearQrSessionData();
+
     void pollQr();
     // 启动轮询并记录本次会话的硬过期时刻，所有出码路径都必须走这里
     void startQrPolling();
@@ -97,8 +110,12 @@ private:
     // QQ 音乐原生扫码（ptlogin 二维码 + musicu QQLogin 换登录态，无需外部服务）
     void startQqQr();
     void pollQqQr();
-    void qqFollowGrantChain(const QString &url, int hop);
-    void qqExchange(const QString &code);
+    void qqFollowGrantChain(const QString &url, int hop, const QString &sourceId,
+                           quint64 loginGeneration, quint64 qrGeneration,
+                           const QString &qrsig, const QString &loginSig);
+    void qqExchange(const QString &code, const QString &sourceId,
+                    quint64 loginGeneration, quint64 qrGeneration,
+                    const QString &qrsig, const QString &loginSig);
     // 酷狗原生扫码（login-user.kugou.com 二维码 + 轮询取 token/userid，无需外部服务）
     void startKgQr();
     void pollKgQr();
@@ -106,33 +123,54 @@ private:
     // i.kuwo.cn 回调换 Cookie）。QQ/微博要内嵌浏览器回调，本工程没链 WebEngine，故未内置。
     void startKuwoWxQr();
     void pollKuwoWx();
-    void kuwoWxExchange(const QString &code);
+    void kuwoWxExchange(const QString &code, const QString &sourceId,
+                        quint64 loginGeneration, quint64 qrGeneration,
+                        const QString &uuid);
     // 酷我登录结果的统一收口：解析 data.cookies → 落库 → 补资料
-    void finishKuwoLogin(const HttpClient::Reply &r, const QString &okMessage);
+    void finishKuwoLogin(const HttpClient::Reply &r, const QString &okMessage,
+                         quint64 expectedGeneration);
     // 汽水：登录闭环在汽水服务端（passport/web/* 出码 + check_qrconnect 轮询 + /luna/me 换
     // session），客户端只跑出码 → 轮询 → 拿 sessionid → 换账号；未配置自建账号 API 服务时
     // 直接走官方 endpoint，无需任何外部服务即可「直接扫码」登录。
     // 与 src/tools/qishui_login_flow_test.py 的探针链路保持一致。
     void startQishuiQr();
     void pollQishuiQr();
-    void finishQishuiLogin(const QString &sessionId);
+    void finishQishuiLogin(const QString &sessionId, const QString &sourceId,
+                           quint64 loginGeneration, quint64 qrGeneration,
+                           const QString &base, const QString &token);
     // 汽水：把本轮扫码会话的 Cookie 映射拼成 "name=value; ..." 头（passport_csrf_token / sessionid）
     QString qishuiCookieHeader() const;
     // 汽水扫码轮询统一的应答处理：统一解析状态文案 + 拿 sessionid（Set-Cookie / body 两条链路共用）
     // errorCode 非 0 时按服务端错误处理（7 = 访问太频繁，只能退避，不能终止会话）
     void handleQishuiPollReply(const HttpClient::Reply &r, const QString &sessionId,
-                               const QString &st, int errorCode, const QString &description);
+                               const QString &st, int errorCode, const QString &description,
+                               const QString &sourceId, quint64 loginGeneration,
+                               quint64 qrGeneration, const QString &token);
     void generateQrImage(const QString &content, const QString &sourceId);
     // data:image/png;base64,... 形态的二维码（汽水 passport 出码返回）→ 直接落盘
     bool saveQrDataUrl(const QString &dataUrl, const QString &sourceId);
     // 会话超时则收尾（停轮询、置「已过期」）并返回 true，调用方直接 return
     bool qrTimedOut();
-    void saveSession(const QString &sourceId, const QString &cookie,
+    bool qrDeadlineReached() const;
+    void failQrSession(quint64 qrGeneration, const QString &message);
+    bool saveSession(const QString &sourceId, const QString &cookie,
                      const QString &uid, const QString &nickname, const QString &avatar,
-                     const QString &message);
-    void fetchUserInfo(const QString &sourceId, const QString &cookie, const QString &uid);
+                     const QString &message, quint64 expectedGeneration);
+    void fetchUserInfo(const QString &sourceId, const QString &cookie, const QString &uid,
+                       quint64 expectedGeneration, const std::function<void()> &done);
+
+    // 登录代次与同步序号都按 source 独立，避免旧回调在新一轮同源操作中复用。
+    QHash<QString, quint64> m_loginGenerations;
+    QHash<QString, quint64> m_syncSequences;
+    // 发码成功到提交短信登录之间沿用同一代次；其它登录入口会使该表项失效。
+    QHash<QString, quint64> m_phoneCodeGenerations;
+    QHash<QString, quint64> m_phoneAttemptSequences;
+    QHash<QString, QString> m_phoneCodePhones;
+    quint64 m_qrGeneration = 0;
+    quint64 m_qrLoginGeneration = 0;
 
     QTimer m_poll;
+    QTimer m_qrExpiry;
     QString m_qrSource;
     QString m_qrKey;
     QString m_qrImagePath;
@@ -145,6 +183,7 @@ private:
     QString m_qrMode;
     QString m_qqQrsig;
     QString m_qqLoginSig;
+    bool m_qqGrantStarted = false;
     QString m_kgQrcode;
     // 酷我微信扫码会话：uuid 来自 qrconnect 页面里的 /connect/qrcode/<uuid>，
     // m_kwPollBusy 防止长轮询（最长 30s）和 2s 定时器叠在一起发请求

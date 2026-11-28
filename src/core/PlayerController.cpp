@@ -538,6 +538,13 @@ void PlayerController::fetchWithHeaders()
 
 void PlayerController::togglePause()
 {
+    // 媒体键从 JNI 线程同步调入（AndroidMediaSession CmdPlay/CmdPause）：普通分支
+    // 会直接 m_player->pause()/play()。函数入口统一排队回属主线程，消除跨线程
+    // 操作 QMediaPlayer / QTimer 的数据竞争（原来只有 m_ended 分支做了转移）。
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, &PlayerController::togglePause, Qt::QueuedConnection);
+        return;
+    }
     if (!m_currentUrl.isValid()) {
         // 启动时恢复了「暂停」态（还没加载音频）：按下播放即开始解析，从上次位置继续
         if (m_currentIndex >= 0 && m_currentIndex < m_queue.size())
@@ -577,6 +584,16 @@ void PlayerController::togglePause()
 
 void PlayerController::stop()
 {
+    // stop/beginSwitch 可能从 JNI 线程进来（媒体键 CmdStop、通知栏），也可能因
+    // beginSwitch 在主线程被调；统一先排回属主线程，避免跨线程操作 m_player/QTimer。
+    // 顺带作废 m_playGen：正在「带 headers 下载整首」的旧歌回调（gen == m_playGen）
+    // 会因此被丢弃——否则切歌/停止后整首下载完成仍会 startLocal 把旧歌播出来
+    //（审查 B-03：界面已切新歌却突然播出上一首的缓存文件）。
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, &PlayerController::stop, Qt::QueuedConnection);
+        return;
+    }
+    ++m_playGen;
     m_watchdog->stop();
     m_lastPosition = -1;
     m_stallSince = 0;
@@ -694,21 +711,25 @@ void PlayerController::onWatchdog()
     const qint64 total = duration();
 
     if (state == QMediaPlayer::StoppedState) {
-        if (pos > 0) {
-            // 出过声音后自己停住：结束信号丢失，兜底切下一首
+        const bool explicitEnd = m_player->mediaStatus() == QMediaPlayer::EndOfMedia;
+        const bool nearEnd = m_everPlayed && total > 0 && pos >= qMax<qint64>(0, total - 3000);
+        if (m_everPlayed && (explicitEnd || nearEnd)) {
+            // 只有明确 EOF 或确实位于尾部时，才把停止当作播完。
+            // 曲中 StoppedState 是异常停止，直接 next 会无提示跳过剩余内容。
             m_advancing = true;
             m_ended = true;
-            qInfo("看门狗：结束信号丢失，兜底下一首：%s（pos %lld）",
-                  qUtf8Printable(current().title), pos);
+            qInfo("看门狗：结束信号丢失，兜底下一首：%s（pos %lld / %lld，status %d）",
+                  qUtf8Printable(current().title), pos, total, int(m_player->mediaStatus()));
             QTimer::singleShot(0, this, [this] { if (m_advancing) next(); });
         } else {
-            // 一直没起播：超过 15s 判加载失败，交上层逐源换源
+            // 未起播或曲中意外停止：交给既有加载/播放恢复链路，不把整首判成结束。
             const qint64 elapsed = m_loadStarted > 0 ? now - m_loadStarted : 0;
             if (elapsed >= 15000) {
                 m_watchdog->stop();
-                qWarning("看门狗：起播超时（%lldms）：%s", elapsed,
+                qWarning("看门狗：停止后未恢复（%lldms，pos %lld）：%s", elapsed, pos,
                          qUtf8Printable(current().title));
-                emit errorOccurred(QStringLiteral("加载超时，无法播放"));
+                emit errorOccurred(pos > 0 ? QStringLiteral("播放意外停止，正在尝试恢复")
+                                           : QStringLiteral("加载超时，无法播放"));
             }
         }
         return;
@@ -921,6 +942,12 @@ void PlayerController::restoreState()
 
 void PlayerController::seek(qint64 ms)
 {
+    // JNI 线程（车机 CmdSeek / 通知栏进度条）也会直调：与主线程竞态 m_pendingSeek、
+    // m_resumeSeekTimer 与 m_player，统一排队回属主线程执行。
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, ms] { seek(ms); }, Qt::QueuedConnection);
+        return;
+    }
     if (ms < 0) ms = 0;
     // 用户主动拖动进度/歌词跳转：取消尚未完成的断点续播，避免两条 setPosition
     // 互相打架（定时器下一拍又把位置拽回续播目标）。
@@ -1058,6 +1085,9 @@ void PlayerController::removeQueue(int index)
 
 void PlayerController::clearQueue()
 {
+    // 清队列必须同时作废播放代次：初始取链/整首下载在途时清空队列，
+    // 迟到的回调（gen 仍匹配）会 startLocal 让「空队列」重新出声（审查 B-03/B-04）。
+    ++m_playGen;
     m_queue.clear();
     m_currentIndex = -1;
     m_currentUrl = QUrl();

@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <memory>
 
@@ -22,6 +23,16 @@ namespace Furui {
 namespace {
 
 QString normalizeSourceName(const QString &raw);
+
+// 所有卸载路径统一等待 workerStopped 后再 deleteLater，避免 worker 仍持有 facade。
+void retireScriptEngine(ScriptEngine *engine)
+{
+    if (!engine) return;
+    QObject::connect(engine, &ScriptEngine::workerStopped, engine, [engine] {
+        engine->deleteLater();
+    });
+    engine->stop();
+}
 
 // 内置在线音源（LX 脚本协议）动态发现：
 // 直接解析 github.com/pdone/lx-music-source 仓库页面（README 原文 + 每日可用性
@@ -943,30 +954,40 @@ void ScriptSourceManager::updateFromInit(Item &item, const ScriptInitResult &r)
 
 void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistResult, bool silent)
 {
-    const QString id = item.id;
+    // 旧 waiter 属于旧代次，替换时必须先取走并明确失败，不能留给新引擎结算。
+    const Item snapshot = item;
+    const QString id = snapshot.id;
+    QVector<std::function<void(bool)>> oldWaiters;
     if (QPointer<ScriptEngine> old = m_engines.value(id)) {
-        old->stop();
-        old->deleteLater();
+        oldWaiters = m_waiters.take(id);
+        m_engines.remove(id);
+        m_starting.remove(id);
+        retireScriptEngine(old);
     }
-    ScriptEngine *engine = new ScriptEngine(item.name, this);
+
+    ScriptEngine *engine = new ScriptEngine(snapshot.name, this);
+    QPointer<ScriptEngine> engineGuard(engine);
     m_engines.insert(id, engine);
     m_starting.insert(id);
 
     QVariantMap meta;
-    meta.insert(QStringLiteral("name"), item.name);
-    meta.insert(QStringLiteral("version"), item.version);
-    meta.insert(QStringLiteral("author"), metaLine(item.script, QStringLiteral("author")));
-    meta.insert(QStringLiteral("homepage"), metaLine(item.script, QStringLiteral("homepage")));
-    meta.insert(QStringLiteral("description"), metaLine(item.script, QStringLiteral("description")));
-    meta.insert(QStringLiteral("rawScript"), item.script);
+    meta.insert(QStringLiteral("name"), snapshot.name);
+    meta.insert(QStringLiteral("version"), snapshot.version);
+    meta.insert(QStringLiteral("author"), metaLine(snapshot.script, QStringLiteral("author")));
+    meta.insert(QStringLiteral("homepage"), metaLine(snapshot.script, QStringLiteral("homepage")));
+    meta.insert(QStringLiteral("description"), metaLine(snapshot.script, QStringLiteral("description")));
+    meta.insert(QStringLiteral("rawScript"), snapshot.script);
 
     QPointer<ScriptSourceManager> self(this);
-    // 提示里只用名字：条目可能在初始化过程中被删除，先拷一份
-    const QString srcName = item.name.isEmpty() ? id : item.name;
-    engine->start(item.script, meta, [self, id, cb, persistResult, srcName, silent](const ScriptInitResult &r) {
+    // 提示里只用名字：条目可能在初始化过程中被删除，先拷一份。
+    const QString srcName = snapshot.name.isEmpty() ? id : snapshot.name;
+    engine->start(snapshot.script, meta,
+        [self, id, engineGuard, cb, persistResult, srcName, silent](const ScriptInitResult &r) {
         ScriptSourceManager *mgr = self.data();
-        if (!mgr) return;
+        // 旧引擎的迟到结果不得污染同 id 的新引擎。
+        if (!mgr || mgr->m_engines.value(id).data() != engineGuard.data()) return;
         mgr->m_starting.remove(id);
+        const QVector<std::function<void(bool)>> waiters = mgr->m_waiters.take(id);
         Item *it = mgr->find(id);
         if (it) {
             // 先拷贝再写回：find 返回的是 QHash 内部元素的指针，
@@ -982,16 +1003,10 @@ void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistR
         else
             mgr->m_engineFailAt.insert(id, QDateTime::currentMSecsSinceEpoch());
         if (!r.ok) {
-            // 初始化回调可能正运行在 QuickJS 内部（脚本同步 send(inited) 触发），
-            // 不能在这里立刻 stop/free 上下文，否则等于在 JS 执行中途销毁宿主。
+            // 回调已在 GUI；统一 retire，workerStopped 后才允许销毁 facade。
             QPointer<ScriptEngine> dead = mgr->m_engines.value(id);
             mgr->m_engines.remove(id);
-            if (dead) {
-                QTimer::singleShot(0, dead.data(), [dead] {
-                    if (dead) dead->stop();
-                    if (dead) dead->deleteLater();
-                });
-            }
+            retireScriptEngine(dead);
         }
         emit mgr->changed();
 
@@ -1016,9 +1031,13 @@ void ScriptSourceManager::startEngine(Item &item, DoneCallback cb, bool persistR
             emit mgr->message(id, r.ok, text);
         if (cb) cb(r.ok, text);
 
-        const QVector<std::function<void(bool)>> waiters = mgr->m_waiters.take(id);
+        // 已在外部信号/回调前取走，避免重入启动新代次后误结算新 waiter。
         for (const auto &w : waiters) w(r.ok);
     });
+
+    // 先发布并启动新代次，再结算旧 waiter；旧 waiter 可能重入 ensureEngine，
+    // 此时它应替换刚登记的新引擎，而不是被外层随后创建的对象覆盖。
+    for (const auto &w : oldWaiters) w(false);
 }
 
 void ScriptSourceManager::ensureEngine(const QString &id, std::function<void(bool)> cb)
@@ -1229,16 +1248,15 @@ void ScriptSourceManager::remove(const QString &id)
             Settings::set(QStringLiteral("builtinScriptRemoved"), list);
         }
     }
-    if (QPointer<ScriptEngine> e = m_engines.take(id)) {
-        e->stop();
-        e->deleteLater();
-    }
+    if (QPointer<ScriptEngine> e = m_engines.take(id))
+        retireScriptEngine(e);
     m_starting.remove(id);
-    m_waiters.remove(id);
+    const QVector<std::function<void(bool)>> waiters = m_waiters.take(id);
     m_items.remove(id);
     m_order.removeAll(id);
     saveOrder();
     Library::instance()->removeScriptSource(id);
+    for (const auto &w : waiters) w(false);
     emit changed();
 }
 
@@ -1246,22 +1264,32 @@ void ScriptSourceManager::setEnabled(const QString &id, bool enabled)
 {
     Item *item = find(id);
     if (!item) return;
-    item->enabled = enabled;
+    const QPointer<ScriptEngine> engineBefore = m_engines.value(id);
+    Item updated = *item;
+    updated.enabled = enabled;
+    QVector<std::function<void(bool)>> disabledWaiters;
     if (!enabled) {
-        if (QPointer<ScriptEngine> e = m_engines.take(id)) {
-            e->stop();
-            e->deleteLater();
-        }
+        if (QPointer<ScriptEngine> e = m_engines.take(id))
+            retireScriptEngine(e);
         m_starting.remove(id);
-        item->status = QStringLiteral("disabled");
-    } else if (item->status == QLatin1String("disabled")) {
-        item->status = QStringLiteral("pending");
-        item->errorType.clear();
-        item->errorMsg.clear();
+        disabledWaiters = m_waiters.take(id);
+        updated.status = QStringLiteral("disabled");
+    } else if (updated.status == QLatin1String("disabled")) {
+        updated.status = QStringLiteral("pending");
+        updated.errorType.clear();
+        updated.errorMsg.clear();
     }
-    persist(*item);
+    m_items.insert(id, updated);
+    persist(updated);
     emit changed();
-    if (enabled) startEngine(*item, {}, true);
+    for (const auto &w : disabledWaiters) w(false);
+    // changed()/旧 waiter 可能已删除、禁用或启动了新代次，不能覆盖它们的选择。
+    Item *current = find(id);
+    const QPointer<ScriptEngine> engineNow = m_engines.value(id);
+    const bool engineUnchanged = engineBefore.isNull()
+        ? engineNow.isNull() : engineNow.data() == engineBefore.data();
+    if (enabled && current && current->enabled && engineUnchanged)
+        startEngine(*current, {}, true);
 }
 
 QString ScriptSourceManager::platformToLx(const QString &platform)
@@ -1934,29 +1962,51 @@ void ScriptSourceManager::resolve(const Song &song, const QString &quality, Play
                     callUrl(state->song);
                     return;
                 }
-                // 跨平台：先按「歌名 + 歌手」搜这个平台，再挑最像的一条取链
+                // 跨平台：先按「歌名 + 歌手」搜这个平台，再挑最像的一条取链。
+                // 0 条命中时用「净化关键词」（去掉「（RnB版）」这类括号后缀）重试一次：
+                // 很多冷门曲目只有无后缀版本被第三方平台收录。
                 QVariantMap sinfo;
                 const QString keyword = (state->song.title + QLatin1Char(' ') + state->song.artist).trimmed();
-                sinfo.insert(QStringLiteral("keyword"), keyword);
+                // 去掉标题尾部的全角括号段（支持连续多段，如「（RnB版）（伴奏）」）
+                QString bareTitle = state->song.title;
+                while (true) {
+                    const int open = bareTitle.lastIndexOf(QChar(u'（'));
+                    const int close = bareTitle.lastIndexOf(QChar(u'）'));
+                    if (open < 0 || close <= open || close != bareTitle.size() - 1) break;
+                    bareTitle.chop(bareTitle.size() - open);
+                }
+                const QString bareKeyword = (bareTitle + QLatin1Char(' ') + state->song.artist).trimmed();
                 sinfo.insert(QStringLiteral("page"), 1);
                 sinfo.insert(QStringLiteral("limit"), 8);
                 sinfo.insert(QStringLiteral("type"), 1);
-                qInfo().noquote() << QStringLiteral("[换源] 跨平台搜索 %1 [%2] 关键词「%3」")
-                                         .arg(cand.name, cand.lxKey, keyword);
-                engine->callAction(cand.lxKey, QStringLiteral("search"), sinfo,
-                    [state, cand, finishOne, failed, bestMatch, callUrl](const ScriptActionResult &sr) {
-                        if (state->done) { finishOne(); return; }
-                        if (!sr.ok)
-                            qWarning().noquote() << QStringLiteral("[换源] 跨平台搜索失败 %1 [%2]：%3")
-                                                        .arg(cand.name, cand.lxKey, sr.error);
-                        const Song matched = bestMatch(state->song, actionList(sr.data));
-                        if (matched.title.isEmpty()) {
-                            failed(cand, QStringLiteral("其它平台没有匹配的同曲"));
-                            finishOne();
-                            return;
-                        }
-                        callUrl(matched);
-                    }, 15000);
+                const auto doSearch = std::make_shared<std::function<void(const QString &, int)>>();
+                *doSearch = [engine, cand, state, finishOne, failed, bestMatch, callUrl,
+                             sinfo, keyword, bareKeyword, doSearch](const QString &kw, int tryIdx) mutable {
+                    sinfo.insert(QStringLiteral("keyword"), kw);
+                    qInfo().noquote() << QStringLiteral("[换源] 跨平台搜索 %1 [%2] 关键词「%3」")
+                                             .arg(cand.name, cand.lxKey, kw);
+                    engine->callAction(cand.lxKey, QStringLiteral("search"), sinfo,
+                        [state, cand, finishOne, failed, bestMatch, callUrl, doSearch,
+                         keyword, bareKeyword, kw, tryIdx](const ScriptActionResult &sr) {
+                            if (state->done) { finishOne(); return; }
+                            if (!sr.ok)
+                                qWarning().noquote() << QStringLiteral("[换源] 跨平台搜索失败 %1 [%2]：%3")
+                                                            .arg(cand.name, cand.lxKey, sr.error);
+                            const Song matched = bestMatch(state->song, actionList(sr.data));
+                            if (matched.title.isEmpty()) {
+                                // 首搜未命中且存在净化关键词时重试一次
+                                if (tryIdx == 0 && bareKeyword != keyword)
+                                    (*doSearch)(bareKeyword, 1);
+                                else {
+                                    failed(cand, QStringLiteral("其它平台没有匹配的同曲"));
+                                    finishOne();
+                                }
+                                return;
+                            }
+                            callUrl(matched);
+                        }, 15000);
+                };
+                (*doSearch)(keyword, 0);
             });
         }
         state->launching = false;

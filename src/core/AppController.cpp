@@ -1558,7 +1558,11 @@ void AppController::resolveAndPlay(const Song &song)
     d->triedFallback.clear();
     // 任何新歌都递增取链代次：缓存命中时也要作废上一首仍在途的 resolve，
     // 否则旧结果会在新歌已经开始播放后把播放地址换回去。
+    // 同时作废 fallbackGen：上一首在途的「重解析/换源」回调只核对 fallbackGen
+    //（见 startAlternateFallback），不递增的话旧回调仍能通过校验，把上一首的
+    // 换源结果 playUrl 出来覆盖新歌（审查 B-04）。
     const quint64 resolveGeneration = ++d->resolveGen;
+    ++d->fallbackGen;
     d->inFallback = false;
     d->recoverStage = Impl::RecoverStage::None;   // 新歌重置断流恢复阶梯
     d->recoverPos = 0;
@@ -2174,7 +2178,16 @@ void AppController::removeQueue(int index)
 { PlayerController::instance()->removeQueue(index); }
 
 void AppController::clearQueue()
-{ PlayerController::instance()->clearQueue(); }
+{
+    // 清队列时作废全部取链代次：清空后在途的初始取链/换源回调若仍命中旧代次，
+    // 会对着空队列 playUrl / 误跳下一首（审查 B-04）。
+    ++d->resolveGen;
+    ++d->fallbackGen;
+    d->currentSong = Song();
+    d->inFallback = false;
+    d->recoverStage = Impl::RecoverStage::None;
+    PlayerController::instance()->clearQueue();
+}
 
 void AppController::downloadResult(int index)
 {
@@ -2404,60 +2417,21 @@ void AppController::onRecommendationNeeded()
 
     // 汽水 related 只认汽水 track_id。种子是其它平台时先用「歌名+歌手」在汽水
     // 搜一个匹配曲目当跳板（与 loadQishuiRecommend 熟悉/新鲜模式的映射同一思路），
-    // 搜不到就退回原队列，不硬凑。
-    const auto relatedOf = [this, seed, roaming](const Song &qishuiSeed) {
-        SourceManager::instance()->related(qishuiSeed, 12,
-            [this, seed, roaming](const QVector<Song> &list) {
-                d->recommendPending = false;
-                PlayerController *p = PlayerController::instance();
-                // 请求期间用户可能已手动切歌：种子不是当前歌时丢弃，不能把上一首的
-                // 相似歌塞进用户正在听的歌后面。
-                if (p->current().uid != seed.uid) return;
-
-                // 去重：跳过种子和队列里已有的歌，最多插 10 首。
-                QSet<QString> known;
-                known.insert(seed.uid);
-                for (const Song &s : p->queue()) known.insert(s.uid);
-                QVector<Song> picked;
-                for (Song s : list) {
-                    if (picked.size() >= 10) break;
-                    if (s.uid.isEmpty() || s.title.isEmpty() || known.contains(s.uid)) continue;
-                    known.insert(s.uid);
-                    // 继承漫游上下文，让后续切歌继续按推荐流走
-                    if (roaming) s.extra.insert(QStringLiteral("__roamContext"),
-                                                seed.extra.value(QStringLiteral("__roamContext")));
-                    picked << s;
-                }
-
-                if (picked.isEmpty()) {
-                    setStatus(QStringLiteral("汽水推荐不可用，继续按队列播放"));
-                    p->playNextInQueue();
-                    return;
-                }
-
-                Logger::write(QStringLiteral("I"),
-                              QStringLiteral("%1：按「%2」取到 %3 首推荐")
-                                      .arg(roaming ? QStringLiteral("漫游模式")
-                                                   : QStringLiteral("汽水漫游"))
-                                      .arg(seed.title).arg(picked.size()));
-                p->insertAfterCurrent(picked);
-                setStatus(QStringLiteral("%1：已加入 %2 首推荐")
-                              .arg(roaming ? QStringLiteral("漫游模式") : QStringLiteral("汽水漫游"))
-                              .arg(picked.size()));
-                QTimer::singleShot(0, this, [p] { p->playNextInQueue(); });
-            });
-    };
+    // 搜不到就退回原队列，不硬凑。请求本体在 relatedRecommend()（含回空重试）。
 
     d->recommendPending = true;
     setStatus(QStringLiteral("正在按「%1」获取推荐…").arg(seed.title));
+    Logger::write(QStringLiteral("I"),
+                  QStringLiteral("[推荐] 队列末尾触发续播：按「%1 - %2」取相似歌（source=%3）")
+                      .arg(seed.title, seed.artist, seed.source));
     if (seed.source == QLatin1String("qishui") && !seed.sourceId.isEmpty()) {
-        relatedOf(seed);
+        relatedRecommend(seed, seed, roaming, 0);
         return;
     }
     // 非汽水果子：汽水站内搜同名同歌手，取首个匹配映射成汽水 track
     const QString kw = (seed.title + QLatin1Char(' ') + seed.artist).trimmed();
     SourceManager::instance()->search(kw, QStringLiteral("qishui"), 5,
-        [this, seed, relatedOf](const QVector<Song> &mapped) {
+        [this, seed, roaming](const QVector<Song> &mapped) {
             // 请求期间用户已切到别的歌则丢弃
             if (PlayerController::instance()->current().uid != seed.uid) {
                 d->recommendPending = false;
@@ -2470,7 +2444,76 @@ void AppController::onRecommendationNeeded()
                 PlayerController::instance()->playNextInQueue();
                 return;
             }
-            relatedOf(mapped.first());
+            relatedRecommend(seed, mapped.first(), roaming, 0);
+        });
+}
+
+// related 请求 + 结果消费。attempt==0 失败后延迟 5s 重试一次：
+// 实测夜间网络抖动（日志 96 条 QSslSocket device not open）会让接口回空，
+// 不重试的话队列末尾直接 stop()，漫游「无限下一首」就断了。
+void AppController::relatedRecommend(const Song &seed, const Song &qishuiSeed,
+                                     bool roaming, int attempt)
+{
+    SourceManager::instance()->related(qishuiSeed, 12,
+        [this, seed, qishuiSeed, roaming, attempt](const QVector<Song> &list) {
+            d->recommendPending = false;
+            PlayerController *p = PlayerController::instance();
+            // 请求期间用户可能已手动切歌：种子不是当前歌时丢弃，不能把上一首的
+            // 相似歌塞进用户正在听的歌后面。
+            if (p->current().uid != seed.uid) return;
+
+            // 去重：跳过种子和队列里已有的歌，最多插 10 首。
+            QSet<QString> known;
+            known.insert(seed.uid);
+            for (const Song &s : p->queue()) known.insert(s.uid);
+            QVector<Song> picked;
+            for (Song s : list) {
+                if (picked.size() >= 10) break;
+                if (s.uid.isEmpty() || s.title.isEmpty() || known.contains(s.uid)) continue;
+                known.insert(s.uid);
+                // 继承漫游上下文，让后续切歌继续按推荐流走
+                if (roaming) s.extra.insert(QStringLiteral("__roamContext"),
+                                            seed.extra.value(QStringLiteral("__roamContext")));
+                picked << s;
+            }
+
+            if (picked.isEmpty()) {
+                if (attempt < 1) {
+                    Logger::write(QStringLiteral("W"),
+                                  QStringLiteral("[推荐] 按「%1」取推荐回空（第 %2 次），5s 后重试")
+                                      .arg(seed.title).arg(attempt + 1));
+                    setStatus(QStringLiteral("推荐暂时不可用，正在重试…"));
+                    // 重试在途期间保持 recommendPending=true，挡住叠加请求；
+                    // relatedRecommend 的回调完成时会把复位成 false
+                    QTimer::singleShot(5000, this, [this, seed, qishuiSeed, roaming, attempt] {
+                        if (PlayerController::instance()->current().uid != seed.uid) {
+                            d->recommendPending = false;
+                            return;
+                        }
+                        relatedRecommend(seed, qishuiSeed, roaming, attempt + 1);
+                    });
+                    return;
+                }
+                Logger::write(QStringLiteral("W"),
+                              QStringLiteral("[推荐] 按「%1」取推荐两次回空，放弃续播并停止")
+                                  .arg(seed.title));
+                setStatus(QStringLiteral("汽水推荐不可用，已停止播放"));
+                emit notify(QStringLiteral("推荐获取失败（网络不稳），播放已停止；点播放可继续"),
+                            QStringLiteral("warning"));
+                p->playNextInQueue();
+                return;
+            }
+
+            Logger::write(QStringLiteral("I"),
+                          QStringLiteral("%1：按「%2」取到 %3 首推荐")
+                              .arg(roaming ? QStringLiteral("漫游模式")
+                                           : QStringLiteral("汽水漫游"))
+                              .arg(seed.title).arg(picked.size()));
+            p->insertAfterCurrent(picked);
+            setStatus(QStringLiteral("%1：已加入 %2 首推荐")
+                          .arg(roaming ? QStringLiteral("漫游模式") : QStringLiteral("汽水漫游"))
+                          .arg(picked.size()));
+            QTimer::singleShot(0, this, [p] { p->playNextInQueue(); });
         });
 }
 void AppController::seek(qint64 positionMs) { PlayerController::instance()->seek(positionMs); }

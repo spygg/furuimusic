@@ -19,6 +19,8 @@
 #include "NeteaseCrypto.h"
 #include "Settings.h"
 #include <QRegularExpression>
+#include <QTimer>
+#include <functional>
 
 namespace Furui {
 
@@ -1585,59 +1587,76 @@ void MusicSource::qishuiResolveUrl(const Song &song, const QString &quality, Pla
         fail(QStringLiteral("汽水未配置取链接口或歌曲 id 为空"), QStringLiteral("unavailable"));
         return;
     }
-    QVariantMap v = songVars(song, quality);
-    v.insert(QStringLiteral("cookie"), QString());   // SEO 接口公开，带登录 Cookie 反而容易空回包
-    call(ep, v, [this, song, quality, cb, fail](const HttpClient::Reply &r) {
-        const QJsonValue root = r.ok ? Json::rootOf(r.json) : QJsonValue();
-        const QString ticket = Json::stringAt(root, QStringLiteral("track_player.url_player_info"));
-        if (ticket.isEmpty()) {
-            fail(QStringLiteral("汽水未返回播放地址（可能需要会员或已下架）"), QStringLiteral("vip"));
-            return;
-        }
-        HttpClient::instance()->request(QStringLiteral("GET"), QUrl(ticket),
-                                        QVariantMap(), QByteArray(),
-                                        [this, song, quality, cb, fail](const HttpClient::Reply &r2) {
-            if (!r2.ok) {
-                fail(QStringLiteral("汽水播放地址已过期或网络异常"), QStringLiteral("unavailable"));
+    // 取链分两段走：先带登录态请求 seo_track（登录后付费/版权曲目才可能拿到完整音频，
+    // 匿名只给 30/60s 试听片段——2026-11 实测：孙燕姿 271s 元数据匿名只回 30s、薛之谦
+    // 279s 只回 60s，独立曲目回全曲）；带 cookie 被拒或回空时降级匿名再试一次
+    //（免费曲目匿名也能拿全曲，且部分接口带登录态反而空回包）。
+    const QString sessionCookie = m_session.cookie;
+    const auto resolveTicket = std::make_shared<std::function<void(bool)>>();
+    *resolveTicket = [this, song, quality, cb, fail, ep, sessionCookie,
+                      resolveTicket](bool withCookie) mutable {
+        QVariantMap v = songVars(song, quality);
+        v.insert(QStringLiteral("cookie"), withCookie ? sessionCookie : QString());
+        call(ep, v, [this, song, quality, cb, fail, resolveTicket, sessionCookie,
+                     withCookie](const HttpClient::Reply &r) {
+            const QJsonValue root = r.ok ? Json::rootOf(r.json) : QJsonValue();
+            const QString ticket = Json::stringAt(root, QStringLiteral("track_player.url_player_info"));
+            if (ticket.isEmpty()) {
+                if (withCookie && !sessionCookie.isEmpty()) {
+                    Logger::write(QStringLiteral("I"),
+                                  QStringLiteral("[取链] 汽水带登录态未返回播放地址，降级匿名重试"));
+                    QTimer::singleShot(0, this, [resolveTicket] { (*resolveTicket)(false); });
+                    return;
+                }
+                fail(QStringLiteral("汽水未返回播放地址（可能需要会员或已下架）"), QStringLiteral("vip"));
                 return;
             }
-            const QJsonValue detail = Json::rootOf(r2.json);
-            const QJsonArray infos = Json::arrayAt(detail, QStringLiteral("Result.Data.PlayInfoList"));
-            QStringList wanted;
-            if (quality == QLatin1String("standard")) wanted << QStringLiteral("medium");
-            else if (quality == QLatin1String("higher") || quality == QLatin1String("excellent"))
-                wanted << QStringLiteral("higher") << QStringLiteral("medium");
-            else
-                wanted << QStringLiteral("lossless") << QStringLiteral("highest")
-                       << QStringLiteral("higher") << QStringLiteral("medium");
-            QString picked;
-            QString anyUrl;
-            QString backupUrl;
-            for (const QJsonValue &info : infos) {
-                const QString main = Json::stringAt(info, QStringLiteral("MainPlayUrl"));
-                const QString backup = Json::stringAt(info, QStringLiteral("BackupPlayUrl"));
-                if (anyUrl.isEmpty() && !main.isEmpty()) anyUrl = main;
-                if (backupUrl.isEmpty() && !backup.isEmpty()) backupUrl = backup;
-                if (picked.isEmpty() && !main.isEmpty()
-                    && wanted.contains(Json::stringAt(info, QStringLiteral("Quality"))))
-                    picked = main;
-            }
-            const QString url = !picked.isEmpty() ? picked
-                              : (!anyUrl.isEmpty() ? anyUrl : backupUrl);
-            if (url.isEmpty()) {
-                fail(QStringLiteral("汽水未返回可播放的音频地址"), QStringLiteral("unavailable"));
-                return;
-            }
-            Playable p;
-            p.ok = true;
-            p.source = m_desc.id;
-            p.url = QUrl(url);
-            p.message = QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist);
-            qInfo().noquote() << QStringLiteral("[取链] 汽水 VOD 直链已解析：%1 - %2")
-                                     .arg(song.title, song.artist);
-            if (cb) cb(p);
+            HttpClient::instance()->request(QStringLiteral("GET"), QUrl(ticket),
+                                            QVariantMap(), QByteArray(),
+                                            [this, song, quality, cb, fail](const HttpClient::Reply &r2) {
+                if (!r2.ok) {
+                    fail(QStringLiteral("汽水播放地址已过期或网络异常"), QStringLiteral("unavailable"));
+                    return;
+                }
+                const QJsonValue detail = Json::rootOf(r2.json);
+                const QJsonArray infos = Json::arrayAt(detail, QStringLiteral("Result.Data.PlayInfoList"));
+                QStringList wanted;
+                if (quality == QLatin1String("standard")) wanted << QStringLiteral("medium");
+                else if (quality == QLatin1String("higher") || quality == QLatin1String("excellent"))
+                    wanted << QStringLiteral("higher") << QStringLiteral("medium");
+                else
+                    wanted << QStringLiteral("lossless") << QStringLiteral("highest")
+                           << QStringLiteral("higher") << QStringLiteral("medium");
+                QString picked;
+                QString anyUrl;
+                QString backupUrl;
+                for (const QJsonValue &info : infos) {
+                    const QString main = Json::stringAt(info, QStringLiteral("MainPlayUrl"));
+                    const QString backup = Json::stringAt(info, QStringLiteral("BackupPlayUrl"));
+                    if (anyUrl.isEmpty() && !main.isEmpty()) anyUrl = main;
+                    if (backupUrl.isEmpty() && !backup.isEmpty()) backupUrl = backup;
+                    if (picked.isEmpty() && !main.isEmpty()
+                        && wanted.contains(Json::stringAt(info, QStringLiteral("Quality"))))
+                        picked = main;
+                }
+                const QString url = !picked.isEmpty() ? picked
+                                  : (!anyUrl.isEmpty() ? anyUrl : backupUrl);
+                if (url.isEmpty()) {
+                    fail(QStringLiteral("汽水未返回可播放的音频地址"), QStringLiteral("unavailable"));
+                    return;
+                }
+                Playable p;
+                p.ok = true;
+                p.source = m_desc.id;
+                p.url = QUrl(url);
+                p.message = QStringLiteral("正在播放：%1 - %2").arg(song.title, song.artist);
+                qInfo().noquote() << QStringLiteral("[取链] 汽水 VOD 直链已解析：%1 - %2")
+                                         .arg(song.title, song.artist);
+                if (cb) cb(p);
+            });
         });
-    });
+    };
+    (*resolveTicket)(!sessionCookie.isEmpty());
 }
 
 // GET /luna/track/related：items[].entity.track_wrapper.track，和歌单详情同一套 track 结构。

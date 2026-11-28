@@ -10,15 +10,17 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
-#include <QPointer>
 #include "core/QtCompat.h"
+#include <QMutex>
 #include <QSet>
+#include <QThread>
 #include <QUrl>
 #include <QtMath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <utility>
 
 extern "C" {
 #include "3rd/quickjs/quickjs.h"
@@ -164,10 +166,16 @@ QString exceptionText(JSContext *ctx, JSValue exception)
                                       ? jsString(ctx, stack) : QString();
         JS_FreeValue(ctx, stack);
         if (!stackText.isEmpty()) {
-            // 只保留首行栈帧，避免把整个调用栈塞进 UI
+            // 只保留首行栈帧，避免把整个调用栈塞进 UI。
+            // 全为换行的栈文本经 SkipEmptyParts 切分后是空表，必须先判空（否则 first() 越界）。
             const QStringList lines = stackText.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-            if (lines.size() > 1) text += QStringLiteral("（") + lines.at(1).trimmed() + QStringLiteral("）");
-            else if (text.isEmpty()) text = lines.first().trimmed();
+            if (lines.isEmpty()) {
+                // 栈帧全部不可用时退回原始文本，保持非空语义
+            } else if (lines.size() > 1) {
+                text += QStringLiteral("（") + lines.at(1).trimmed() + QStringLiteral("）");
+            } else if (text.isEmpty()) {
+                text = lines.first().trimmed();
+            }
         }
         if (!text.isEmpty()) return text;
     }
@@ -274,8 +282,11 @@ JSValue qjsonToJs(JSContext *ctx, const QJsonValue &value, int depth)
 QByteArray bytesFromJs(JSContext *ctx, JSValueConst value)
 {
     if (JS_IsString(value)) {
-        const char *s = JS_ToCString(ctx, value);
-        QByteArray out = s ? QByteArray(s, int(strlen(s))) : QByteArray();
+        // 用带长度的 API 取字符串：JS_ToCString + strlen 会在第一个 \0 处截断，
+        // 含嵌入 NUL 的二进制 payload（如脚本加密数据）会被静默剪短
+        size_t len = 0;
+        const char *s = JS_ToCStringLen(ctx, &len, value);
+        QByteArray out = s ? QByteArray(s, int(len)) : QByteArray();
         JS_FreeCString(ctx, s);
         return out;
     }
@@ -382,6 +393,96 @@ QVariantMap readOptions(JSContext *ctx, JSValueConst options, QString *urlOut,
 
 } // namespace
 
+namespace {
+
+// 固定 worker 池：线程只在 GUI 创建/启动，引擎从 acquire 起终身绑定该线程。
+class ScriptWorkerPool {
+public:
+    static ScriptWorkerPool *instance()
+    {
+        static ScriptWorkerPool pool;
+        return &pool;
+    }
+
+    ScriptWorkerPool()
+    {
+#if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
+        const int count = 1;
+#else
+        const int count = 2;
+#endif
+        for (int i = 0; i < count; ++i) {
+            QThread *thread = new QThread();
+            thread->setObjectName(QStringLiteral("FuruiScriptWorker-%1").arg(i + 1));
+            thread->start();
+            m_threads.append(thread);
+        }
+    }
+
+    ~ScriptWorkerPool() { shutdownThreads(); }
+
+    QThread *acquire()
+    {
+        QMutexLocker lock(&m_mutex);
+        if (m_shuttingDown || m_threads.isEmpty()) return nullptr;
+        QThread *thread = m_threads.at(m_next++ % m_threads.size());
+        return thread;
+    }
+
+    void registerEngine(ScriptEngine *engine)
+    {
+        QMutexLocker lock(&m_mutex);
+        m_engines.insert(engine);
+    }
+
+    void unregisterEngine(ScriptEngine *engine)
+    {
+        QMutexLocker lock(&m_mutex);
+        m_engines.remove(engine);
+    }
+
+    QVector<ScriptEngine *> engines() const
+    {
+        QMutexLocker lock(&m_mutex);
+        QVector<ScriptEngine *> out;
+        out.reserve(m_engines.size());
+        for (ScriptEngine *engine : m_engines) out.append(engine);
+        return out;
+    }
+
+    void clearEngines()
+    {
+        QMutexLocker lock(&m_mutex);
+        m_engines.clear();
+    }
+
+    void shutdownThreads()
+    {
+        QMutexLocker lock(&m_mutex);
+        m_shuttingDown = true;
+        for (QThread *thread : m_threads) {
+            thread->quit();
+            thread->wait();
+        }
+    }
+
+private:
+    mutable QMutex m_mutex;
+    QVector<QThread *> m_threads;
+    QSet<ScriptEngine *> m_engines;
+    int m_next = 0;
+    bool m_shuttingDown = false;
+};
+
+HttpClient *scriptHttpClient()
+{
+    // 每个 worker 线程一份 NAM；请求与回调天然留在同一线程。
+    static thread_local std::unique_ptr<HttpClient> client(HttpClient::createForCurrentThread());
+    return client.get();
+}
+
+} // namespace
+
 struct ScriptEngineHost {
     static ScriptEngine *self(JSContext *ctx)
     {
@@ -478,10 +579,13 @@ struct ScriptEngineHost {
         return JS_UNDEFINED;
     }
 
-    // lx.request 的异步状态：JSValue 只在引擎还活着时有效，随上下文一起销毁。
+    // lx.request 的异步状态：只由 worker 线程访问。raw facade 由 Lifetime 保护：
+    // 所有 DNS/HTTP 回调必须先看 cancelled/done，取消后不得再解引用 engine。
     struct ReqState {
-        QPointer<ScriptEngine> engine;
+        ScriptEngine *engine = nullptr;
+        std::shared_ptr<ScriptEngine::Lifetime> lifetime;
         JSValue cb = JS_UNDEFINED;
+        bool done = false;
     };
     using ReqStatePtr = std::shared_ptr<ReqState>;
 
@@ -489,13 +593,16 @@ struct ScriptEngineHost {
     static void deliverScriptReply(const ReqStatePtr &st, const QString &method,
                                    const QString &url, const HttpClient::Reply &r)
     {
+        if (!st || st->done || !st->lifetime || st->lifetime->cancelled.load())
+            return;
+        st->done = true;
         if (scriptTraceEnabled())
             scriptTrace(QStringLiteral("[lx.request] %1 %2 => %3 %4")
                             .arg(method, url, QString::number(r.status),
                                  r.error.left(160)));
-        ScriptEngine *engine = st->engine.data();
-        if (!engine || engine->m_stopped) {
-            // 引擎已销毁：JSValue 随上下文一起释放，这里不再碰它
+        ScriptEngine *engine = st->engine;
+        if (!engine || engine->m_stopped.load()) {
+            // stop 后晚到响应直接丢弃；dup 的 JSValue 随 QuickJS context teardown 释放。
             return;
         }
         JSContext *c = static_cast<JSContext *>(engine->m_ctx);
@@ -548,8 +655,9 @@ struct ScriptEngineHost {
                                       const QByteArray &body, int timeout,
                                       bool follow, int hopsLeft)
     {
-        ScriptEngine *engine = st->engine.data();
-        if (!engine || engine->m_stopped) return;
+        if (!st || st->done || !st->lifetime || st->lifetime->cancelled.load()) return;
+        ScriptEngine *engine = st->engine;
+        if (!engine || engine->m_stopped.load()) return;
         const QString blocked = unsafeRequestTarget(target);
         if (!blocked.isEmpty()) {
             HttpClient::Reply r;
@@ -558,10 +666,11 @@ struct ScriptEngineHost {
             deliverScriptReply(st, method, target.toString(), r);
             return;
         }
-        QHostInfo::lookupHost(target.host(), engine,
+        QHostInfo::lookupHost(target.host(), engine->m_workerContext,
             [st, target, method, headers, body, timeout, follow, hopsLeft](const QHostInfo &info) {
-                ScriptEngine *eng = st->engine.data();
-                if (!eng || eng->m_stopped) return;
+                if (!st || st->done || !st->lifetime || st->lifetime->cancelled.load()) return;
+                ScriptEngine *eng = st->engine;
+                if (!eng || eng->m_stopped.load()) return;
                 QString bad;
                 if (info.error() != QHostInfo::NoError || info.addresses().isEmpty()) {
                     bad = QStringLiteral("目标主机名解析失败");
@@ -579,9 +688,10 @@ struct ScriptEngineHost {
                     return;
                 }
                 // followRedirects=false：手动跟随 Location，每跳重新做 DNS/IP 校验。
-                HttpClient::instance()->request(method, target, headers, body,
+                scriptHttpClient()->request(method, target, headers, body,
                     [st, target, method, headers, body, timeout, follow, hopsLeft]
                     (const HttpClient::Reply &r) {
+                        if (!st || st->done || !st->lifetime || st->lifetime->cancelled.load()) return;
                         const QString loc = r.headers.value(QStringLiteral("location"));
                         if (follow && hopsLeft > 0 && r.status >= 300 && r.status < 400
                             && !loc.isEmpty()) {
@@ -636,11 +746,13 @@ struct ScriptEngineHost {
 
         auto st = std::make_shared<ReqState>();
         st->engine = e;
+        st->lifetime = e->m_lifetime;
         st->cb = JS_DupValue(ctx, cb);
         // 最多跟随 5 跳，每跳都重新做字面 + DNS/IP 校验。
-        // 保持原有超时语义（-1 = 用 HttpClient 的设置默认），不因安全改造缩短脚本请求。
-        Q_UNUSED(timeout);
-        issueValidatedRequest(st, target, method, headers, body, -1, follow, 5);
+        // 透传脚本声明的 timeout（ms；>0 才生效，钳制到 1s~60s 区间防止烂脚本
+        // 声明超长或 0/负值绕过全局默认），未声明时保持 -1 = HttpClient 默认。
+        const int effTimeout = timeout > 0 ? qBound(1000, timeout, 60000) : -1;
+        issueValidatedRequest(st, target, method, headers, body, effTimeout, follow, 5);
 
         return JS_UNDEFINED;
     }
@@ -767,10 +879,10 @@ struct ScriptEngineHost {
         if (ms > 60000) ms = 60000;
         const int id = ++e->m_nextTimer;
         e->m_timers.insert(id, hold(JS_DupValue(ctx, argv[0])));
-        QPointer<ScriptEngine> guard(e);
-        QTimer::singleShot(ms, e, [guard, id] {
-            ScriptEngine *engine = guard.data();
-            if (!engine || engine->m_stopped) return;
+        ScriptEngine *engine = e;
+        const auto lifetime = engine->m_lifetime;
+        QTimer::singleShot(ms, engine->m_workerContext, [engine, lifetime, id] {
+            if (!lifetime || lifetime->cancelled.load() || engine->m_stopped.load()) return;
             JSContext *c = static_cast<JSContext *>(engine->m_ctx);
             void *fnHolder = engine->m_timers.take(id);
             if (!c || !fnHolder) return;
@@ -817,12 +929,12 @@ struct ScriptEngineHost {
         if (ms > 60000) ms = 60000;
         const int id = ++e->m_nextTimer;
         e->m_timers.insert(id, hold(JS_DupValue(ctx, argv[0])));
-        QTimer *timer = new QTimer(e);
+        QTimer *timer = new QTimer(e->m_workerContext);
         e->m_intervals.insert(id, timer);
-        QPointer<ScriptEngine> guard(e);
-        QObject::connect(timer, &QTimer::timeout, e, [guard, id] {
-            ScriptEngine *engine = guard.data();
-            if (!engine || engine->m_stopped) return;
+        ScriptEngine *engine = e;
+        const auto lifetime = engine->m_lifetime;
+        QObject::connect(timer, &QTimer::timeout, engine->m_workerContext, [engine, lifetime, id] {
+            if (!lifetime || lifetime->cancelled.load() || engine->m_stopped.load()) return;
             JSContext *c = static_cast<JSContext *>(engine->m_ctx);
             void *fnHolder = engine->m_timers.value(id, nullptr);
             if (!c || !fnHolder) return;
@@ -853,12 +965,6 @@ struct ScriptEngineHost {
         JS_ToInt32(ctx, &tag, argv[0]);
         auto it = e->m_pending.find(tag);
         if (it == e->m_pending.end()) return JS_UNDEFINED;
-        ScriptEngine::Pending pending = it.value();
-        e->m_pending.erase(it);
-        if (pending.timer) {
-            pending.timer->stop();
-            pending.timer->deleteLater();
-        }
 
         ScriptActionResult result;
         const int ok = JS_ToBool(ctx, argv[1]);
@@ -898,7 +1004,7 @@ struct ScriptEngineHost {
                                 : result.error.contains(QStringLiteral("timeout")) ? QStringLiteral("timeout")
                                 : QStringLiteral("runtime");
         }
-        if (pending.cb) pending.cb(result);
+        e->completeAction(tag, result);
         return JS_UNDEFINED;
     }
 };
@@ -906,16 +1012,70 @@ struct ScriptEngineHost {
 ScriptEngine::ScriptEngine(QString name, QObject *parent)
     : QObject(parent), m_name(std::move(name))
 {
+    // facade 永远留在 GUI；只有 workerContext 被 moveToThread。
+    ScriptWorkerPool::instance()->registerEngine(this);
+    connect(this, &ScriptEngine::workerStopped, this, [this] {
+        m_workerActive = false;
+        m_workerContext = nullptr;
+        m_workerStoppedNotified = true;
+    });
 }
 
-ScriptEngine::~ScriptEngine() { stop(); }
+ScriptEngine::~ScriptEngine()
+{
+    stop();
+    // 析构不能发生在 worker 还持有 raw facade 的时候。semaphore 只等待清理完成，
+    // 不等待 GUI 处理 workerStopped（析构期间 GUI 事件循环本来也不会运行）。
+    if (m_workerActive && m_lifetime) {
+        m_lifetime->stopped.acquire();
+        m_lifetime->stopped.release();
+    }
+    ScriptWorkerPool::instance()->unregisterEngine(this);
+}
 
 void ScriptEngine::stop()
 {
-    if (m_stopped) return;
-    m_stopped = true;
-    // 仍在等待初始化的调用方也要收到失败，否则 start() 会永远悬着
-    if (m_initCb) finishInit(false, QStringLiteral("runtime"), QStringLiteral("音源已停止"));
+    const bool alreadyStopped = m_stopped.exchange(true);
+    if (m_lifetime) m_lifetime->cancelled.store(true);
+    m_ready = false;
+    m_sources.clear();
+    if (m_workerActive) {
+        if (!alreadyStopped && m_workerContext && m_lifetime) {
+            const auto lifetime = m_lifetime;
+            const quint64 generation = m_generation;
+            QTimer::singleShot(0, m_workerContext, [this, lifetime, generation] {
+                stopWorker(lifetime, generation);
+            });
+        }
+        return;
+    }
+    // 未启动（或 worker 池已关闭）的引擎没有 worker 可发信号， retire helper
+    // 仍能通过 workerStopped 可靠地 deleteLater。
+    if (!m_workerStoppedNotified) {
+        m_workerStoppedNotified = true;
+        emit workerStopped();
+    }
+}
+
+void ScriptEngine::shutdownWorkers()
+{
+    ScriptWorkerPool *pool = ScriptWorkerPool::instance();
+    const QVector<ScriptEngine *> engines = pool->engines();
+    for (ScriptEngine *engine : engines) engine->stop();
+    for (ScriptEngine *engine : engines) {
+        if (engine->m_workerActive && engine->m_lifetime) {
+            engine->m_lifetime->stopped.acquire();
+            engine->m_lifetime->stopped.release();
+        }
+    }
+    pool->clearEngines();
+    pool->shutdownThreads();
+}
+
+void ScriptEngine::stopWorker(const std::shared_ptr<Lifetime> &lifetime, quint64 generation)
+{
+    if (m_workerStopping) return;
+    m_workerStopping = true;
     if (m_initTimer) {
         m_initTimer->stop();
         m_initTimer->deleteLater();
@@ -926,32 +1086,35 @@ void ScriptEngine::stop()
         timer->deleteLater();
     }
     m_intervals.clear();
-    // 先摘除再回调：避免 cb 重入时改动正在遍历的容器，并保证挂起的
-    // lyric()/resolve() 一定返回（否则界面会永远停在「加载中」）。
+
+    // init 与 pending action 都必须恰好结算一次；业务回调 post 回 GUI。
+    finishInit(false, QStringLiteral("runtime"), QStringLiteral("音源已停止"));
     const QHash<int, Pending> orphaned = m_pending;
     m_pending.clear();
+    ScriptActionResult stopped;
+    stopped.errorType = QStringLiteral("runtime");
+    stopped.error = QStringLiteral("音源已停止");
     for (auto it = orphaned.constBegin(); it != orphaned.constEnd(); ++it) {
         const Pending &p = it.value();
         if (p.timer) {
             p.timer->stop();
             p.timer->deleteLater();
         }
-        if (p.cb) {
-            ScriptActionResult r;
-            r.errorType = QStringLiteral("runtime");
-            r.error = QStringLiteral("音源已停止");
-            p.cb(r);
-        }
+        postActionResult(lifetime, generation, p.cb, stopped);
     }
-    // 上下文释放延后：stop() 可能在 QuickJS 的 C 栈上被触发（脚本回调里再触发
-    // 同 id 的 startEngine / remove / setEnabled），同步 JS_FreeContext 等于在
-    // JS 执行中途销毁宿主 → use-after-free。m_execDeadline > 0 即当前正有 JS
-    // 在跑（ExecDeadlineGuard 期间），投递到事件循环等这轮执行退出后再释放。
-    if (m_execDeadline > 0) {
-        QTimer::singleShot(0, this, [this] { teardownContext(); });
-        return;
-    }
+
     teardownContext();
+
+    // deleteLater 完成后才释放 semaphore。destroyed 的 DirectConnection 仍在 worker，
+    // 先 queued 发出 workerStopped，再唤醒可能正在析构的 GUI facade，避免释放后
+    // 再通过已销毁 this 发信号。workerStopped 的 GUI 处理顺序也晚于全部业务回调。
+    QObject *context = m_workerContext;
+    QObject::connect(context, &QObject::destroyed, this,
+        [this, lifetime] {
+            emit workerStopped();
+            lifetime->stopped.release();
+        }, Qt::DirectConnection);
+    context->deleteLater();
 }
 
 void ScriptEngine::teardownContext()
@@ -989,7 +1152,8 @@ void ScriptEngine::createContext()
     }, this);
     JS_SetInterruptHandler(rt, [](JSRuntime *, void *opaque) -> int {
         ScriptEngine *engine = static_cast<ScriptEngine *>(opaque);
-        if (!engine || engine->m_execDeadline <= 0) return 0;
+        if (!engine || engine->m_stopped.load()) return 1;
+        if (engine->m_execDeadline <= 0) return 0;
         return QDateTime::currentMSecsSinceEpoch() > engine->m_execDeadline ? 1 : 0;
     }, this);
     JSContext *ctx = JS_NewContext(rt);
@@ -1163,7 +1327,7 @@ void ScriptEngine::drainJobs()
     m_draining = true;
     {
         ExecDeadlineGuard deadline(this, 12000);
-        while (JS_IsJobPending(rt)) {
+        while (!m_stopped.load() && JS_IsJobPending(rt)) {
             JSContext *jobCtx = ctx;
             const int r = JS_ExecutePendingJob(rt, &jobCtx);
             if (r < 0) {
@@ -1177,7 +1341,7 @@ void ScriptEngine::drainJobs()
 
 void ScriptEngine::onInited(const QVariant &data)
 {
-    if (m_inited) return;
+    if (m_inited || m_initDone || m_stopped.load()) return;
     m_inited = true;
     const QVariantMap map = data.toMap();
     const bool status = !map.contains(QStringLiteral("status"))
@@ -1191,7 +1355,7 @@ void ScriptEngine::onInited(const QVariant &data)
         return;
     }
     const QVariantMap sources = map.value(QStringLiteral("sources")).toMap();
-    m_sources.clear();
+    m_initSources.clear();
     for (auto it = sources.constBegin(); it != sources.constEnd(); ++it) {
         const QVariantMap src = it.value().toMap();
         ScriptSourceInfo info;
@@ -1207,9 +1371,9 @@ void ScriptEngine::onInited(const QVariant &data)
         // LX 规范里 sources 的 name 是可选的（flower/grass 等源只给 key），
         // 缺省用 key 作为显示名，不能因缺 name 就丢弃该源。
         if (info.name.isEmpty()) info.name = info.key;
-        m_sources << info;
+        m_initSources << info;
     }
-    if (m_sources.isEmpty()) {
+    if (m_initSources.isEmpty()) {
         finishInit(false, QStringLiteral("empty"),
                    QStringLiteral("脚本完成初始化但未声明任何音源（可能是远端配置拉取失败，可稍后重试检查）"));
         return;
@@ -1219,20 +1383,106 @@ void ScriptEngine::onInited(const QVariant &data)
 
 void ScriptEngine::finishInit(bool ok, const QString &type, const QString &msg)
 {
-    m_ready = ok;
+    if (m_initDone) return;
+    m_initDone = true;
     if (m_initTimer) {
         m_initTimer->stop();
         m_initTimer->deleteLater();
         m_initTimer = nullptr;
     }
-    InitCallback cb = m_initCb;
+    InitCallback cb = std::move(m_initCb);
     m_initCb = nullptr;
     ScriptInitResult result;
     result.ok = ok;
     result.errorType = type;
     result.errorMsg = msg;
-    result.sources = m_sources;
-    if (cb) cb(result);
+    result.sources = m_initSources;
+    postInitResult(m_lifetime, m_workerGeneration, cb, result);
+}
+
+void ScriptEngine::postInitResult(const std::shared_ptr<Lifetime> &lifetime,
+                                  quint64 generation, InitCallback cb,
+                                  const ScriptInitResult &result)
+{
+    QTimer::singleShot(0, this, [this, lifetime, generation, cb, result]() mutable {
+        ScriptInitResult guiResult = result;
+        if (m_lifetime != lifetime || m_generation != generation) {
+            guiResult.ok = false;
+            guiResult.errorType = QStringLiteral("runtime");
+            guiResult.errorMsg = QStringLiteral("音源已停止");
+            guiResult.sources.clear();
+        } else if (m_stopped.load()) {
+            guiResult.ok = false;
+            guiResult.errorType = QStringLiteral("runtime");
+            guiResult.errorMsg = QStringLiteral("音源已停止");
+            guiResult.sources.clear();
+            m_ready = false;
+            m_sources.clear();
+        } else if (guiResult.ok) {
+            m_sources = guiResult.sources;
+            m_ready = true;
+        } else {
+            m_sources.clear();
+            m_ready = false;
+        }
+        if (cb) cb(guiResult);
+    });
+}
+
+void ScriptEngine::postActionResult(const std::shared_ptr<Lifetime> &lifetime,
+                                    quint64 generation, ActionCallback cb,
+                                    const ScriptActionResult &result)
+{
+    if (!cb) return;
+    QTimer::singleShot(0, this, [this, lifetime, generation, cb, result]() mutable {
+        ScriptActionResult guiResult = result;
+        if (m_lifetime != lifetime || m_generation != generation || m_stopped.load()) {
+            guiResult = ScriptActionResult();
+            guiResult.errorType = QStringLiteral("runtime");
+            guiResult.error = QStringLiteral("音源已停止");
+        }
+        cb(guiResult);
+    });
+}
+
+void ScriptEngine::completeAction(int tag, const ScriptActionResult &result)
+{
+    auto it = m_pending.find(tag);
+    if (it == m_pending.end()) return;
+    Pending pending = it.value();
+    m_pending.erase(it);
+    if (pending.timer) {
+        pending.timer->stop();
+        pending.timer->deleteLater();
+    }
+    postActionResult(m_lifetime, m_workerGeneration, std::move(pending.cb), result);
+}
+
+void ScriptEngine::initializeWorker(const QString &script, InitCallback cb, int timeoutMs,
+                                    const std::shared_ptr<Lifetime> &lifetime,
+                                    quint64 generation)
+{
+    // 即使 GUI 已抢先 stop，也先接管 callback；紧随其后的 stopWorker 才能恰好
+    // 结算一次初始化，而不是随 initialize lambda 一起丢失。
+    m_workerGeneration = generation;
+    m_initCb = std::move(cb);
+    if (lifetime->cancelled.load() || m_stopped.load() || m_workerStopping) return;
+    createContext();
+    if (lifetime->cancelled.load() || m_stopped.load()) return;
+
+    m_initTimer = new QTimer(m_workerContext);
+    m_initTimer->setSingleShot(true);
+    QObject::connect(m_initTimer, &QTimer::timeout, m_workerContext,
+        [this, lifetime] {
+            if (lifetime->cancelled.load() || m_stopped.load() || m_initDone) return;
+            const QString detail = m_lastRejection.isEmpty()
+                ? QStringLiteral("脚本初始化超时（未调用 send(inited)）")
+                : QStringLiteral("脚本初始化超时（未调用 send(inited)，内部错误：%1）")
+                      .arg(m_lastRejection);
+            finishInit(false, QStringLiteral("timeout"), detail);
+        });
+    m_initTimer->start(qMax(3000, timeoutMs));
+    evalScript(script);
 }
 
 bool ScriptEngine::supports(const QString &sourceKey, const QString &action) const
@@ -1245,39 +1495,77 @@ bool ScriptEngine::supports(const QString &sourceKey, const QString &action) con
 void ScriptEngine::start(const QString &script, const QVariantMap &meta,
                          InitCallback cb, int timeoutMs)
 {
+    if (m_workerActive || m_lifetime) {
+        ScriptInitResult r;
+        r.errorType = QStringLiteral("runtime");
+        r.errorMsg = QStringLiteral("脚本引擎已启动，不能重复初始化");
+        if (cb) cb(r);
+        return;
+    }
+
+    // GUI 快照只写一次，随后通过 workerContext 的 FIFO 事件发布给 worker。
+    m_ready = false;
+    m_sources.clear();
     m_meta = meta;
     m_version = meta.value(QStringLiteral("version")).toString();
-    m_initCb = cb;
-    createContext();
-    if (m_stopped) return;
+    const quint64 generation = ++m_generation;
+    auto lifetime = std::make_shared<Lifetime>();
+    m_lifetime = lifetime;
+    m_stopped.store(false);
 
-    m_initTimer = new QTimer(this);
-    m_initTimer->setSingleShot(true);
-    connect(m_initTimer, &QTimer::timeout, this, [this] {
-        if (m_initCb) {
-            const QString detail = m_lastRejection.isEmpty()
-                ? QStringLiteral("脚本初始化超时（未调用 send(inited)）")
-                : QStringLiteral("脚本初始化超时（未调用 send(inited)，内部错误：%1）")
-                      .arg(m_lastRejection);
-            finishInit(false, QStringLiteral("timeout"), detail);
-        }
+    QThread *thread = ScriptWorkerPool::instance()->acquire();
+    if (!thread) {
+        lifetime->cancelled.store(true);
+        m_stopped.store(true);
+        ScriptInitResult r;
+        r.errorType = QStringLiteral("runtime");
+        r.errorMsg = QStringLiteral("脚本 worker 不可用");
+        if (cb) cb(r);
+        return;
+    }
+
+    QObject *context = new QObject;
+    context->moveToThread(thread);
+    m_workerContext = context; // 地址在 active 期间不变，worker 只读该绑定
+    m_workerActive = true;
+    m_workerStoppedNotified = false;
+    QTimer::singleShot(0, context, [this, script, cb = std::move(cb), timeoutMs,
+                                    lifetime, generation]() mutable {
+        initializeWorker(script, std::move(cb), timeoutMs, lifetime, generation);
     });
-    m_initTimer->start(qMax(3000, timeoutMs));
-
-    evalScript(script);
-
-    // 同步初始化或同步失败时 finishInit 已经清理了回调，别再留着超时定时器
-    if (!m_initCb && m_initTimer) m_initTimer->stop();
 }
 
 void ScriptEngine::callAction(const QString &sourceKey, const QString &action,
                               const QVariantMap &info, ActionCallback cb, int timeoutMs)
 {
-    if (!m_ready) {
+    if (!m_ready || m_stopped.load() || !m_workerActive || !m_workerContext) {
         ScriptActionResult r;
         r.errorType = QStringLiteral("init");
         r.error = QStringLiteral("脚本尚未就绪");
         if (cb) cb(r);
+        return;
+    }
+    const auto lifetime = m_lifetime;
+    const quint64 generation = m_generation;
+    QTimer::singleShot(0, m_workerContext,
+        [this, sourceKey, action, info, cb = std::move(cb), timeoutMs,
+         lifetime, generation]() mutable {
+            executeAction(sourceKey, action, info, std::move(cb), timeoutMs,
+                          lifetime, generation);
+        });
+}
+
+void ScriptEngine::executeAction(const QString &sourceKey, const QString &action,
+                                 const QVariantMap &info, ActionCallback cb, int timeoutMs,
+                                 const std::shared_ptr<Lifetime> &lifetime,
+                                 quint64 generation)
+{
+    Q_ASSERT(QThread::currentThread() == m_workerContext->thread());
+    ScriptActionResult stopped;
+    stopped.errorType = QStringLiteral("runtime");
+    stopped.error = QStringLiteral("音源已停止");
+    if (lifetime->cancelled.load() || m_stopped.load() || m_workerStopping) {
+        postActionResult(lifetime, generation, std::move(cb), stopped);
         return;
     }
     JSContext *ctx = static_cast<JSContext *>(m_ctx);
@@ -1286,10 +1574,23 @@ void ScriptEngine::callAction(const QString &sourceKey, const QString &action,
         ScriptActionResult r;
         r.errorType = QStringLiteral("runtime");
         r.error = QStringLiteral("脚本未注册 request 处理器");
-        if (cb) cb(r);
+        postActionResult(lifetime, generation, std::move(cb), r);
         return;
     }
+
     const int tag = ++m_nextTag;
+    Pending pending;
+    pending.cb = std::move(cb);
+    pending.timer = new QTimer(m_workerContext);
+    pending.timer->setSingleShot(true);
+    QObject::connect(pending.timer, &QTimer::timeout, m_workerContext, [this, tag] {
+        ScriptActionResult r;
+        r.errorType = QStringLiteral("timeout");
+        r.error = QStringLiteral("脚本处理超时");
+        completeAction(tag, r);
+    });
+    // 先登记再调用 JS：即使脚本意外同步结算，也只有一个 tag 能取走 callback。
+    m_pending.insert(tag, pending);
 
     JSValue arg = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, arg, "action", JS_NewString(ctx, action.toUtf8().constData()));
@@ -1305,32 +1606,22 @@ void ScriptEngine::callAction(const QString &sourceKey, const QString &action,
     if (JS_IsException(ret)) {
         reportException(QStringLiteral("callAction:") + action);
         JS_FreeValue(ctx, ret);
-        ScriptActionResult r;
-        r.errorType = QStringLiteral("runtime");
-        r.error = QStringLiteral("脚本执行异常：") + action;
-        if (cb) cb(r);
+        ScriptActionResult r = m_stopped.load() ? stopped : ScriptActionResult();
+        if (!m_stopped.load()) {
+            r.errorType = QStringLiteral("runtime");
+            r.error = QStringLiteral("脚本执行异常：") + action;
+        }
+        completeAction(tag, r);
         return;
     }
+    if (!m_pending.contains(tag)) {
+        JS_FreeValue(ctx, ret);
+        return;
+    }
+    auto timerIt = m_pending.find(tag);
+    timerIt->timer->start(qMax(3000, timeoutMs));
 
-    Pending pending;
-    pending.cb = cb;
-    pending.timer = new QTimer(this);
-    pending.timer->setSingleShot(true);
-    connect(pending.timer, &QTimer::timeout, this, [this, tag] {
-        auto it = m_pending.find(tag);
-        if (it == m_pending.end()) return;
-        auto p = it.value();
-        m_pending.erase(it);
-        if (p.timer) p.timer->deleteLater();
-        ScriptActionResult r;
-        r.errorType = QStringLiteral("timeout");
-        r.error = QStringLiteral("脚本处理超时");
-        if (p.cb) p.cb(r);
-    });
-    pending.timer->start(qMax(3000, timeoutMs));
-    m_pending.insert(tag, pending);
-
-    // 用 JS 侧辅助统一处理 Promise / 普通返回值
+    // 用 JS 侧辅助统一处理 Promise / 普通返回值。
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue settle = JS_GetPropertyStr(ctx, global, "__furuiSettle");
     JS_FreeValue(ctx, global);

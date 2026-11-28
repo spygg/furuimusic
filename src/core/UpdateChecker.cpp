@@ -11,6 +11,7 @@
 #include "Version.h"
 
 #include <QElapsedTimer>
+#include <QCryptographicHash>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -20,8 +21,10 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QThread>
 #include <QUrl>
 
+#include <atomic>
 #include <climits>
 #include <algorithm>
 
@@ -35,7 +38,64 @@
 
 namespace Furui {
 
+struct UpdateVerification {
+    QString path;
+    QByteArray expectedHash;
+    qint64 expectedSize = 0;
+    std::atomic<bool> cancelled{false};
+};
+
 namespace {
+
+class PackageVerifier : public QObject {
+    Q_OBJECT
+public:
+    explicit PackageVerifier(const std::shared_ptr<UpdateVerification> &state)
+        : m_state(state) {}
+
+    void run()
+    {
+        QString error;
+        QFile file(m_state->path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            error = QStringLiteral("无法读取更新包进行 SHA-256 校验");
+        } else {
+            QCryptographicHash hash(QCryptographicHash::Sha256);
+            QByteArray buffer;
+            buffer.reserve(1024 * 1024);
+            while (!m_state->cancelled.load()) {
+                const QByteArray chunk = file.read(1024 * 1024);
+                if (chunk.isEmpty())
+                    break;
+                hash.addData(chunk);
+            }
+            if (m_state->cancelled.load()) {
+                error = QStringLiteral("更新包校验已取消");
+            } else if (file.error() != QFileDevice::NoError) {
+                error = QStringLiteral("读取更新包失败：%1").arg(file.errorString());
+            } else if (file.size() != m_state->expectedSize) {
+                error = QStringLiteral("更新包大小与官方发布记录不一致");
+            } else if (hash.result().toHex().compare(m_state->expectedHash, Qt::CaseInsensitive) != 0) {
+                error = QStringLiteral("更新包 SHA-256 校验失败，可能已损坏或被篡改");
+            }
+        }
+        emit finished(error);
+        QThread::currentThread()->quit();
+    }
+
+signals:
+    void finished(const QString &error);
+
+private:
+    std::shared_ptr<UpdateVerification> m_state;
+};
+
+QString normalizedSha256(const QString &digest)
+{
+    static const QRegularExpression valid(QStringLiteral("\\Asha256:([0-9a-fA-F]{64})\\z"));
+    const QRegularExpressionMatch match = valid.match(digest.trimmed());
+    return match.hasMatch() ? match.captured(1).toLower() : QString();
+}
 
 // 清单拉取的两级来源见 probeLatestRelease()：这一级是 GitHub API，不走任何 CDN
 QString latestReleaseApiUrl()
@@ -141,6 +201,12 @@ int compareVersion(const QString &a, const QString &b)
             return va < vb ? -1 : 1;
     }
     return 0;
+}
+
+bool isValidVersion(const QString &version)
+{
+    static const QRegularExpression valid(QStringLiteral("\\A[0-9]+(\\.[0-9]+)*\\z"));
+    return valid.match(version).hasMatch();
 }
 
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
@@ -273,6 +339,7 @@ QString androidCopyToDownloads(const QString &path, const QString &displayName)
 struct UpdateChecker::FetchState {
     int pending = 0;
     QString apiVersion;     // API 给出的 tag（仅 API 路径有值）
+    QJsonObject release;    // GitHub 官方 release 元数据，作为校验值信任根
     QString bestVersion;    // 已拿到的最高版本
     QJsonObject best;       // 与 bestVersion 对应的清单
 };
@@ -301,6 +368,14 @@ UpdateChecker::UpdateChecker(QObject *parent)
 {
 }
 
+UpdateChecker::~UpdateChecker()
+{
+    ++m_downloadGen;
+    if (m_downloadReply)
+        m_downloadReply->abort();
+    cancelVerification(true);
+}
+
 QString UpdateChecker::localVersion() const
 {
     return QStringLiteral(FURUI_APP_VERSION);
@@ -316,6 +391,8 @@ void UpdateChecker::checkForUpdates()
 {
     if (m_checking || m_downloading)
         return;
+    ++m_downloadGen;
+    cancelVerification(true);
     m_checking = true;
     m_progress = 0;
     m_lastResult.clear();
@@ -324,8 +401,20 @@ void UpdateChecker::checkForUpdates()
     m_changelog.clear();
     m_downloads.clear();
     m_history.clear();
+    m_downloadedPath.clear();
+    resetTrustedRelease();
     emit stateChanged();
     probeLatestRelease();
+}
+
+void UpdateChecker::resetTrustedRelease()
+{
+    m_releaseTag.clear();
+    m_packageAsset.clear();
+    m_packageUrl.clear();
+    m_packageSha256.clear();
+    m_packageSize = 0;
+    m_releaseMetadataTrusted = false;
 }
 
 void UpdateChecker::probeLatestRelease()
@@ -338,32 +427,47 @@ void UpdateChecker::probeLatestRelease()
                                     QByteArray(),
                                     [this](const HttpClient::Reply &r) {
         QString tag;
-        if (r.ok)
-            tag = r.json.object().value(QLatin1String("tag_name")).toString().trimmed();
-        if (tag.startsWith(QLatin1Char('v')))
-            tag.remove(0, 1);
-        if (!tag.isEmpty()) {
-            fetchManifests(tag, tag);
-            return;
+        QJsonObject release;
+        QString ref;
+        if (r.ok) {
+            release = r.json.object();
+            ref = release.value(QLatin1String("tag_name")).toString().trimmed();
+            tag = ref;
+            if (tag.startsWith(QLatin1Char('v')))
+                tag.remove(0, 1);
+            if (isValidVersion(tag)) {
+                fetchManifests(ref, tag, release);
+                return;
+            }
         }
-        // API 限流或不可达：退回 main 分支多镜像；由 finishCheck 取其中最大版本
-        fetchManifests(QStringLiteral("main"), QString());
+        // API 限流或不可达：退回 main 分支多镜像；由 finishCheck 取其中最大版本。
+        // 这条链路只能提示更新，下载仍要求官方 release 的资产 digest，不能信任镜像自报哈希。
+        fetchManifests(QStringLiteral("main"), QString(), QJsonObject());
     }, kManifestTimeoutMs);
 }
 
-void UpdateChecker::fetchManifests(const QString &ref, const QString &apiVersion)
+void UpdateChecker::fetchManifests(const QString &ref, const QString &apiVersion,
+                                   const QJsonObject &release)
 {
     const QStringList urls = manifestUrls(ref);
     auto state = std::make_shared<FetchState>();
     state->pending = urls.size();
     state->apiVersion = apiVersion;
+    state->release = release;
     for (const QString &url : urls) {
-        // 并行拉全部镜像后取最高版本：只要有一个节点是旧缓存（或者镜像没同步），
-        // 也不会像以前那样「第一个返回合法 JSON 就采纳」把结果带偏
+        // 有官方 tag 时只接受同一不可变版本的清单，避免缓存或恶意镜像报出更高版本。
+        // API 不可达时才在 main 的镜像清单中取最高版本，且该结果仅用于提示。
         HttpClient::instance()->request(QStringLiteral("GET"), QUrl(url), QVariantMap(), QByteArray(),
                                         [this, state](const HttpClient::Reply &r) {
             const QString v = r.ok ? r.json.object().value(QLatin1String("version")).toString()
                                    : QString();
+            if (!v.isEmpty()
+                && (!state->apiVersion.isEmpty() && v != state->apiVersion)) {
+                if (--state->pending > 0)
+                    return;
+                finishCheck(state);
+                return;
+            }
             if (!v.isEmpty()
                 && (state->bestVersion.isEmpty() || compareVersion(state->bestVersion, v) < 0)) {
                 state->bestVersion = v;
@@ -378,13 +482,13 @@ void UpdateChecker::fetchManifests(const QString &ref, const QString &apiVersion
 
 void UpdateChecker::finishCheck(const std::shared_ptr<FetchState> &state)
 {
-    if (!state->bestVersion.isEmpty() && applyManifest(state->best))
+    if (!state->bestVersion.isEmpty() && applyManifest(state->best, state->release))
         return;
     if (!state->apiVersion.isEmpty()) {
         // 清单一条都没拉到，但 API 已经明确了最新 tag：至少要让用户知道有更新
         QJsonObject fallback;
         fallback.insert(QStringLiteral("version"), state->apiVersion);
-        if (applyManifest(fallback))
+        if (applyManifest(fallback, state->release))
             return;
     }
     // 清单版本号非法（如 ../ 穿越）也要落到这里，不能让 m_checking 永远挂着
@@ -393,19 +497,21 @@ void UpdateChecker::finishCheck(const std::shared_ptr<FetchState> &state)
     m_checking = false;
     m_remoteVersion.clear();
     m_downloads.clear();
+    m_downloadedPath.clear();
+    resetTrustedRelease();
     m_lastResult = QStringLiteral("无法获取更新信息（网络不可达或全部镜像失败）");
     emit stateChanged();
     emit checkFinished(false, m_lastResult);
 }
 
-bool UpdateChecker::applyManifest(const QJsonObject &obj)
+bool UpdateChecker::applyManifest(const QJsonObject &obj, const QJsonObject &release)
 {
     const QString remote = obj.value(QLatin1String("version")).toString();
     // 版本号会拼进下载 URL（{version} 模板）和本地保存路径，必须是纯数字点分格式；
     // 否则清单被篡改/镜像被污染时用 "../" 就能写到下载目录之外。
-    static const QRegularExpression validVersion(QStringLiteral("^[0-9]+(\\.[0-9]+)*$"));
-    if (remote.isEmpty() || !validVersion.match(remote).hasMatch())
+    if (!isValidVersion(remote))
         return false;
+    resetTrustedRelease();
     m_checking = false;
     m_remoteVersion = remote;
     m_changelog = obj.value(QLatin1String("desc")).toString();
@@ -422,8 +528,38 @@ bool UpdateChecker::applyManifest(const QJsonObject &obj)
     const QJsonObject dl = obj.value(QLatin1String("downloads")).toObject();
     for (auto it = dl.constBegin(); it != dl.constEnd(); ++it)
         m_downloads.insert(it.key(), it.value().toString());
+
+    m_packageAsset = releaseAssetFor(platformKey());
+    QString releaseTag = release.value(QLatin1String("tag_name")).toString().trimmed();
+    if (releaseTag.startsWith(QLatin1Char('v')))
+        releaseTag.remove(0, 1);
+    if (!release.isEmpty() && releaseTag == remote) {
+        const QJsonArray assets = release.value(QLatin1String("assets")).toArray();
+        for (const QJsonValue &value : assets) {
+            const QJsonObject asset = value.toObject();
+            if (asset.value(QLatin1String("name")).toString() != m_packageAsset)
+                continue;
+            const QUrl assetUrl(asset.value(QLatin1String("browser_download_url")).toString());
+            const QString hash = normalizedSha256(asset.value(QLatin1String("digest")).toString());
+            const qint64 size = asset.value(QLatin1String("size")).toDouble(-1);
+            if (assetUrl.isValid() && assetUrl.scheme() == QLatin1String("https")
+                && assetUrl.host() == QLatin1String("github.com")
+                && !hash.isEmpty() && size > 0) {
+                m_releaseTag = releaseTag;
+                m_packageUrl = assetUrl.toString();
+                m_packageSha256 = hash;
+                m_packageSize = size;
+                m_releaseMetadataTrusted = true;
+            }
+            break;
+        }
+    }
+
     const bool hasUpdate = compareVersion(localVersion(), remote) < 0;
-    m_lastResult = hasUpdate ? QString() : QStringLiteral("已是最新版本");
+    if (hasUpdate && !m_releaseMetadataTrusted)
+        m_lastResult = QStringLiteral("发现新版本，但官方未提供可信的 SHA-256 校验信息，已禁止下载");
+    else
+        m_lastResult = hasUpdate ? QString() : QStringLiteral("已是最新版本");
     emit stateChanged();
     emit checkFinished(hasUpdate, hasUpdate ? QString() : m_lastResult);
     return true;
@@ -431,6 +567,8 @@ bool UpdateChecker::applyManifest(const QJsonObject &obj)
 
 QString UpdateChecker::downloadUrlFor(const QString &version) const
 {
+    if (m_releaseMetadataTrusted && version == m_remoteVersion)
+        return m_packageUrl;
 #ifdef FURUI_CAR_COMPAT_EDITION
     // 特供版：优先读清单里的 android-carcompat 直链；清单没给就忽略主流版
     // android 直链（那是 cn.furui.music 的包，装到特供版上等于装第二个应用），
@@ -595,10 +733,14 @@ void UpdateChecker::startDownload(const QString &urlString, quint64 gen)
             downloadNextCandidate(true);
             return;
         }
-        m_downloading = false;
-        m_downloadedPath = path;
-        emit stateChanged();
-        emit downloadFinished(path);
+        verifyPackage(path, gen, [this, path] {
+            m_downloading = false;
+            m_progress = 100;
+            m_downloadedPath = path;
+            m_lastResult = QStringLiteral("更新包已通过 SHA-256 校验");
+            emit stateChanged();
+            emit downloadFinished(path);
+        });
     }, 30 * 60 * 1000, [this, gen](qint64 received, qint64 total) {
         if (gen != m_downloadGen) return;
         const int p = total > 0 ? int(received * 100 / total) : -1;
@@ -627,6 +769,81 @@ void UpdateChecker::downloadNextCandidate(bool previousFailed)
     emit downloadFailed(QStringLiteral("所有下载线路均失败，请检查网络后重试"));
 }
 
+void UpdateChecker::verifyPackage(const QString &path, quint64 gen, std::function<void()> done)
+{
+    if (m_verifying)
+        return;
+    if (!m_releaseMetadataTrusted || m_packageSha256.isEmpty() || m_packageSize <= 0
+        || !QFile::exists(path)) {
+        m_downloading = false;
+        m_downloadedPath.clear();
+        emit stateChanged();
+        emit downloadFailed(QStringLiteral("缺少可信的更新包校验信息，已拒绝安装"));
+        return;
+    }
+    auto state = std::make_shared<UpdateVerification>();
+    state->path = path;
+    state->expectedHash = m_packageSha256.toUtf8();
+    state->expectedSize = m_packageSize;
+    m_verification = state;
+    m_verificationDone = std::move(done);
+    m_verifying = true;
+    emit stateChanged();
+
+    QThread *thread = new QThread(this);
+    auto *verifier = new PackageVerifier(state);
+    verifier->moveToThread(thread);
+    QPointer<QThread> threadGuard(thread);
+    connect(thread, &QThread::started, verifier, [verifier] { verifier->run(); });
+    connect(verifier, &PackageVerifier::finished, this,
+            [this, state, path, gen, threadGuard](const QString &error) {
+        QThread *thread = threadGuard.data();
+        if (!thread || m_verificationThread != thread)
+            return;
+        m_verificationThread.clear();
+        m_verifying = false;
+        thread->deleteLater();
+        if (state->cancelled.load() || gen != m_downloadGen)
+            return;
+        if (!error.isEmpty()) {
+            m_downloading = false;
+            m_progress = 0;
+            m_downloadedPath.clear();
+            QFile::remove(path);
+            m_verificationDone = {};
+            emit stateChanged();
+            emit downloadFailed(error);
+            return;
+        }
+        std::function<void()> done = m_verificationDone;
+        m_verificationDone = {};
+        emit stateChanged();
+        if (done)
+            done();
+    }, Qt::QueuedConnection);
+    connect(verifier, &PackageVerifier::finished, thread, &QThread::quit);
+    connect(thread, &QThread::finished, verifier, &QObject::deleteLater);
+    m_verificationThread = thread;
+    thread->start();
+}
+
+void UpdateChecker::cancelVerification(bool wait)
+{
+    if (m_verification)
+        m_verification->cancelled.store(true);
+    m_verificationDone = {};
+    m_verifying = false;
+    QPointer<QThread> thread = m_verificationThread;
+    m_verificationThread.clear();
+    m_verification.reset();
+    if (thread) {
+        thread->quit();
+        if (wait)
+            thread->wait();
+        thread->deleteLater();
+    }
+}
+
 QString UpdateChecker::targetPath() const
 {
     const QString suffix = QFileInfo(releaseAssetFor(platformKey())).suffix();
@@ -646,7 +863,7 @@ QString UpdateChecker::targetPath() const
         dir.mkpath(QStringLiteral("."));
     // 双保险：即使 m_remoteVersion 被别的路径写入异常值，也不允许它带路径分隔符。
     QString version = m_remoteVersion;
-    static const QRegularExpression validVersion(QStringLiteral("^[0-9]+(\\.[0-9]+)*$"));
+    static const QRegularExpression validVersion(QStringLiteral("\\A[0-9]+(\\.[0-9]+)*\\z"));
     if (!validVersion.match(version).hasMatch()) version = QStringLiteral("unknown");
     return dir.filePath(QStringLiteral("FuruiMusic-v%1-%2.%3")
                             .arg(version, platformKey(), suffix));
@@ -656,23 +873,32 @@ void UpdateChecker::downloadUpdate()
 {
     if (m_checking || m_remoteVersion.isEmpty())
         return;
-    // 下载中再点＝「重新下载」：递增 gen 让旧探测/旧下载的异步回调全部作废，
-    // abort 在途连接，然后照常重新探测镜像并从头下载。
-    // 没有这条路径时，断网/镜像卡死会把按钮锁死在「下载中」，用户只能干等。
-    if (m_downloading) {
-        ++m_downloadGen;
-        if (m_downloadReply)
-            m_downloadReply->abort();   // 迟到的失败回调被 gen 闸门丢弃
-        Logger::write(QStringLiteral("I"),
-                      QStringLiteral("[更新] 用户触发重新下载，作废在途请求"));
+    // 每次下载都开启新代次：旧探测、下载、校验回调均不能改写本次结果。
+    ++m_downloadGen;
+    if (m_downloadReply) {
+        m_downloadReply->abort();
+        m_downloadReply.clear();
     }
+    cancelVerification(true);
+    m_downloadQueue.clear();
+    m_downloadIndex = 0;
+    m_downloadedPath.clear();
+    if (!m_releaseMetadataTrusted || m_packageSha256.isEmpty() || m_packageSize <= 0
+        || m_packageAsset != releaseAssetFor(platformKey()) || !QUrl(m_packageUrl).isValid()) {
+        m_downloading = false;
+        m_progress = 0;
+        m_lastResult = QStringLiteral("官方 release 缺少可信的 SHA-256 校验信息，已禁止下载");
+        emit stateChanged();
+        emit downloadFailed(m_lastResult);
+        return;
+    }
+    Logger::write(QStringLiteral("I"), QStringLiteral("[更新] 用户触发下载，作废旧请求"));
     m_downloading = true;
     m_progress = -1;
-    m_downloadedPath.clear();
     emit stateChanged();
 
     // 下载前先并行探测 GitHub 原链 + 各加速镜像，选最快且返回真 APK 的线路。
-    // 探测完自动开始真正下载（成功/失败仍走原来的 downloadFinished/downloadFailed）。
+    // 镜像只传输字节，最终必须匹配官方 asset digest 与 size。
     const QStringList candidates = downloadCandidates(m_remoteVersion);
     Logger::write(QStringLiteral("I"),
                   QStringLiteral("[更新探测] 开始，%1 条候选").arg(candidates.size()));
@@ -689,11 +915,12 @@ void UpdateChecker::cancelDownload()
         m_downloadReply->abort();   // 迟到的回调被 gen 闸门丢弃
         m_downloadReply.clear();
     }
-    if (!m_downloading)
-        return;
+    cancelVerification(true);
     m_downloading = false;
+    m_verifying = false;
     m_progress = 0;
     m_downloadedPath.clear();
+    m_downloadQueue.clear();
     emit stateChanged();
     Logger::write(QStringLiteral("I"), QStringLiteral("[更新] 已取消下载"));
 }
@@ -704,6 +931,11 @@ void UpdateChecker::installUpdate()
         emit downloadFailed(QStringLiteral("更新包不存在，请重新下载"));
         return;
     }
+    verifyPackage(m_downloadedPath, m_downloadGen, [this] { installVerifiedPackage(); });
+}
+
+void UpdateChecker::installVerifiedPackage()
+{
 #if defined(Q_OS_ANDROID)
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     // 车机特供版：比亚迪 DiLink 禁止应用内拉起安装器，startActivity 常「假成功」
@@ -713,7 +945,7 @@ void UpdateChecker::installUpdate()
     // 避免车机版无条件复制 + verdict==1 + 安装失败三处叠加成 2~3 次拷贝与重复 toast。
     bool copied = false;
 #ifdef FURUI_CAR_COMPAT_EDITION
-    copied = !copyToDownloads().isEmpty();
+    copied = !copyVerifiedToDownloads().isEmpty();
 #endif
     // 系统安装器对「同签名已安装 / 应用已安装」这类失败只给一句含糊提示，
     // 先自己把 versionCode 与签名核对清楚，能装的才拉起安装器。
@@ -727,7 +959,7 @@ void UpdateChecker::installUpdate()
     }
     if (verdict == 1) {
         // 签名不同：本机装的是调试包、在线包是发布签名，强制给用户留一份可手动安装的包
-        if (!copied) copied = !copyToDownloads().isEmpty();
+        if (!copied) copied = !copyVerifiedToDownloads().isEmpty();
         const QString msg = copied
             ? QStringLiteral("更新包与当前应用签名不同（常见原因：本机装的是本地调试包，在线包是发布签名）。"
                              "已复制到系统「下载」目录，请用文件管理器安装")
@@ -740,7 +972,7 @@ void UpdateChecker::installUpdate()
     if (androidInstallApk(m_downloadedPath))
         return;
     // 拉起安装器失败（部分 ROM 禁止应用内安装）：复制到公共 Download 供文件管理器手动装
-    if (!copied) copied = !copyToDownloads().isEmpty();
+    if (!copied) copied = !copyVerifiedToDownloads().isEmpty();
     AppController::instance()->notify(
         copied ? QStringLiteral("拉起安装器失败，已复制到系统「下载」目录，请用文件管理器安装")
                : QStringLiteral("拉起安装器失败，且复制到下载目录失败，请检查存储权限后手动安装：%1")
@@ -780,6 +1012,11 @@ void UpdateChecker::openDownloadFolder()
         emit downloadFailed(QStringLiteral("更新包不存在，请重新下载"));
         return;
     }
+    verifyPackage(m_downloadedPath, m_downloadGen, [this] { openVerifiedDownloadFolder(); });
+}
+
+void UpdateChecker::openVerifiedDownloadFolder()
+{
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     // 车机/部分 ROM 禁止应用直接拉起安装器，改由系统文件管理器打开下载目录，用户手动安装。
     const QJniObject activity = QJniObject::callStaticObjectMethod(
@@ -809,6 +1046,12 @@ QString UpdateChecker::copyToDownloads()
                                           QStringLiteral("warning"));
         return QString();
     }
+    verifyPackage(m_downloadedPath, m_downloadGen, [this] { copyVerifiedToDownloads(); });
+    return QString();
+}
+
+QString UpdateChecker::copyVerifiedToDownloads()
+{
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     const QString name = QFileInfo(m_downloadedPath).fileName();
     const QString shown = androidCopyToDownloads(m_downloadedPath, name);
@@ -828,3 +1071,5 @@ QString UpdateChecker::copyToDownloads()
 }
 
 } // namespace Furui
+
+#include "UpdateChecker.moc"

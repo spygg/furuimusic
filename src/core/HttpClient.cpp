@@ -22,14 +22,25 @@ namespace Furui {
 
 HttpClient *HttpClient::instance()
 {
-    static HttpClient *c = new HttpClient();
+    // singleton 首次创建后显式同步应用级代理；worker 的独立 NAM 不能改它。
+    static HttpClient *c = [] {
+        HttpClient *client = new HttpClient();
+        applyApplicationProxyFromSettings();
+        return client;
+    }();
     return c;
+}
+
+HttpClient *HttpClient::createForCurrentThread()
+{
+    return new HttpClient();
 }
 
 HttpClient::HttpClient(QObject *parent)
     : QObject(parent)
 {
-    setProxyFromSettings();
+    // 构造只配置自身 NAM。setProxyFromSettings() 仍保留设置变更时的应用级同步行为。
+    m_nam.setProxy(proxyFromSettings());
 }
 
 QNetworkProxy HttpClient::proxyFromSettings()

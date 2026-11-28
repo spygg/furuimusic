@@ -23,6 +23,7 @@
 #include "../core/HttpClient.h"
 #include "../core/Library.h"
 #include "../core/Logger.h"
+#include "../core/ScriptEngine.h"
 #include "../core/Settings.h"
 #include "../core/SourceManager.h"
 #include "../core/UpdateChecker.h"
@@ -175,7 +176,7 @@ int main(int argc, char *argv[])
     // QNetworkAccessManager，只认应用级代理。这里与 HttpClient 保持完全一致，
     // 设置为空时强制 NoProxy，避免 Android 上系统代理探测返回无效结果时
     // 封面全部报 “Proxy connection refused”。
-    Furui::HttpClient::applyApplicationProxyFromSettings();
+    Furui::HttpClient::instance();
 
     // 运行日志：处理器要在门面单例创建前装好，启动期的告警才收得进来。
     // 是否落盘由设置决定（默认只进内存缓冲，设置页与开放 API 网页都能查看/拷贝）。
@@ -217,6 +218,12 @@ int main(int argc, char *argv[])
     engine.addImageProvider(QStringLiteral("glyph"), new Furui::GlyphImageProvider);
     engine.rootContext()->setContextProperty(QStringLiteral("app"),
                                              Furui::AppController::instance());
+    // app.exec() 返回前排空 Library FIFO，并由 DB worker 做最终 checkpoint/close/remove。
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, [] {
+        // 先取消并 join 脚本 worker，保持后续 Settings/Player/Library flush 顺序。
+        Furui::ScriptEngine::shutdownWorkers();
+        Furui::Library::instance()->shutdown();
+    });
     // Android：把播放状态交给系统 MediaSession（通知栏/锁屏/耳机/车机控制），
     // 播放时以媒体前台服务常驻，避免后台被回收；其他平台为空实现
     Furui::AndroidMediaSession::install();

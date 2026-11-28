@@ -11,6 +11,7 @@
 #include <QDateTime>
 #include "core/QtCompat.h"
 #include <memory>
+#include <limits>
 #include <QUrl>
 #include <QUrlQuery>
 #include <functional>
@@ -190,6 +191,11 @@ static QByteArray diagHttpLine(const QString &tag, const QString &path, const Ht
 // 或 ptlogin 持续回空串时，2 秒一次的轮询会永远跑下去。
 static const qint64 kQrSessionMs = 4 * 60 * 1000;
 
+static quint64 nextGeneration(quint64 value)
+{
+    return value == std::numeric_limits<quint64>::max() ? 1 : value + 1;
+}
+
 // 汽水 passport 轮询间隔：服务端按请求频次限流（约十几秒内十几次就回 error_code=7），
 // 5 秒一次既能及时反映扫码状态，也不会把配额打光。触发限流后退避到 15 秒。
 static const int kQishuiPollMs = 5000;
@@ -239,8 +245,114 @@ AuthManager::AuthManager(QObject *parent)
     : QObject(parent)
 {
     m_poll.setInterval(2000);
+    m_qrExpiry.setSingleShot(true);
     connect(&m_poll, &QTimer::timeout, this, &AuthManager::pollQr);
+    connect(&m_qrExpiry, &QTimer::timeout, this, [this] {
+        if (m_qrDeadline != 0) qrTimedOut();
+    });
     refresh();
+}
+
+quint64 AuthManager::invalidateLogin(const QString &sourceId)
+{
+    if (sourceId.isEmpty()) return 0;
+    quint64 &generation = m_loginGenerations[sourceId];
+    generation = nextGeneration(generation);
+    // 验证码/短信票据属于旧登录流程，不能跨到新代次继续使用。
+    m_phoneCodeGenerations.remove(sourceId);
+    m_phoneCodePhones.remove(sourceId);
+    if (sourceId == QLatin1String("kuwo")) {
+        m_kwTm.clear();
+        m_kwPhone.clear();
+    }
+    if (m_qrGeneration != 0 && m_qrSource == sourceId)
+        endQrSession(m_qrGeneration);
+    return generation;
+}
+
+quint64 AuthManager::currentLoginGeneration(const QString &sourceId) const
+{
+    return m_loginGenerations.value(sourceId, 0);
+}
+
+quint64 AuthManager::nextSyncSequence(const QString &sourceId)
+{
+    if (sourceId.isEmpty()) return 0;
+    quint64 &sequence = m_syncSequences[sourceId];
+    sequence = nextGeneration(sequence);
+    return sequence;
+}
+
+bool AuthManager::beginQrSession(const QString &sourceId, quint64 loginGeneration)
+{
+    if (sourceId.isEmpty() || loginGeneration == 0
+        || currentLoginGeneration(sourceId) != loginGeneration)
+        return false;
+    if (m_qrGeneration != 0) endQrSession(m_qrGeneration);
+    m_qrExpiry.stop();
+    m_qrGeneration = nextGeneration(m_qrGeneration);
+    m_qrSource = sourceId;
+    m_qrLoginGeneration = loginGeneration;
+    clearQrSessionData();
+    m_polling = false;
+    m_qrDeadline = 0;
+    m_qrEmptyStreak = 0;
+    m_qrImagePath.clear();
+    m_qrHint = QStringLiteral("正在获取二维码…");
+    m_qrStatus = QStringLiteral("准备中");
+    return true;
+}
+
+bool AuthManager::qrCurrent(const QString &sourceId, quint64 loginGeneration,
+                            quint64 qrGeneration) const
+{
+    // 成功授权后到 redirect/exchange 完成之间会刻意 m_polling=false，因此这里不能看它。
+    return !sourceId.isEmpty() && loginGeneration != 0 && qrGeneration != 0
+           && m_qrGeneration == qrGeneration
+           && m_qrSource == sourceId
+           && m_qrLoginGeneration == loginGeneration
+           && currentLoginGeneration(sourceId) == loginGeneration
+           && !qrDeadlineReached();
+}
+
+bool AuthManager::qrDeadlineReached() const
+{
+    return m_qrDeadline != 0 && QDateTime::currentMSecsSinceEpoch() >= m_qrDeadline;
+}
+
+void AuthManager::clearQrSessionData()
+{
+    m_qrMode.clear();
+    m_qrKey.clear();
+    m_qqQrsig.clear();
+    m_qqLoginSig.clear();
+    m_qqGrantStarted = false;
+    m_kgQrcode.clear();
+    m_mgSession.clear();
+    m_mgCookie.clear();
+    m_kwUuid.clear();
+    m_kwPollBusy = false;
+    m_kwTm.clear();
+    m_kwPhone.clear();
+    m_qsBase.clear();
+    m_qsToken.clear();
+    m_qsCookies.clear();
+    m_neeCookies.clear();
+    m_qrEapi = true;
+}
+
+void AuthManager::endQrSession(quint64 qrGeneration)
+{
+    if (qrGeneration == 0 || m_qrGeneration != qrGeneration) return;
+    m_poll.stop();
+    m_polling = false;
+    m_qrDeadline = 0;
+    m_qrImagePath.clear();
+    // 先递增再清凭据：迟到回调即使带着旧 qrGeneration 也无法通过 qrCurrent。
+    m_qrGeneration = nextGeneration(m_qrGeneration);
+    m_qrLoginGeneration = 0;
+    m_qrExpiry.stop();
+    clearQrSessionData();
 }
 
 QStringList AuthManager::methods(const QString &sourceId) const
@@ -275,47 +387,39 @@ QString neeQrError(const QString &code, const QString &serverMessage);
 
 void AuthManager::startQrLogin(const QString &sourceId)
 {
+    // 咪咕的公开入口自己开代次，避免 startQrLogin → startMiguQr 连续递增两次。
+    if (sourceId == QLatin1String("migu")) {
+        startMiguQr();
+        return;
+    }
+    const quint64 loginGeneration = invalidateLogin(sourceId);
+    if (!beginQrSession(sourceId, loginGeneration)) return;
+    const quint64 qrGeneration = m_qrGeneration;
+
     // QQ 音乐原生扫码（ptlogin 二维码 + QQLogin 换登录态，应用内直连）
     if (sourceId == QLatin1String("qq")) {
-        cancelQrLogin();
         startQqQr();
         return;
     }
     // 酷狗原生扫码（login-user.kugou.com 二维码接口 + web 签名，应用内直连）
     if (sourceId == QLatin1String("kugou")) {
-        cancelQrLogin();
         startKgQr();
-        return;
-    }
-    // 咪咕原生扫码（passport.migu.cn 门户同款 qrcWeb 接口，应用内直连）
-    if (sourceId == QLatin1String("migu")) {
-        cancelQrLogin();
-        startMiguQr();
         return;
     }
     // 酷我：第三方里只有微信能纯 HTTP 走完（开放平台扫码 + i.kuwo.cn 回调换 Cookie）
     if (sourceId == QLatin1String("kuwo")) {
-        cancelQrLogin();
         startKuwoWxQr();
         return;
     }
     // 汽水：登录闭环走官方 passport 出码链路（secsdk 设备签名由服务端完成），
     // 客户端按 GET /passport/web/* → GET /luna/me（web 参数，免签名）直接跑；也可配置自建账号 API 服务走其 /auth 契约。
     if (sourceId == QLatin1String("qishui")) {
-        cancelQrLogin();
         startQishuiQr();
         return;
     }
     // 网易云原生二维码登录（应用内直连，无需外部服务）
     if (UserApi::instance()->config(sourceId).driver == QLatin1String("netease")) {
-        cancelQrLogin();
         m_qrMode = QStringLiteral("netease");
-        m_qrSource = sourceId;
-        m_qrKey.clear();
-        m_qrImagePath.clear();
-        m_neeCookies.clear();
-        m_qrHint = QStringLiteral("正在获取二维码…");
-        m_qrStatus = QStringLiteral("准备中");
         emit qrChanged();
         // 与 AlgerMusicPlayer（内置 netease-cloud-music-api-alger）逐参数对齐，2026-11 实测：
         //   1) 出码端点 POST /api/login/qrcode/unikey，关键参数 type=3（官方新版流程）；
@@ -329,22 +433,31 @@ void AuthManager::startQrLogin(const QString &sourceId)
         // 不再阻塞出码。轮询通道与最终成功的那一级保持一致（m_qrEapi）。
         neteaseBootstrap(nullptr);
 
+        auto fail = [this, sourceId, loginGeneration, qrGeneration](const QString &status) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)) return;
+            m_qrStatus = status;
+            endQrSession(qrGeneration);
+            emit qrChanged();
+            emit toast(status);
+        };
         auto lastError = std::make_shared<QString>();
         auto stages = std::make_shared<std::function<void(int)>>();
-        *stages = [this, sourceId, stages, lastError](int step) {
-            if (m_qrSource != sourceId) return;
+        *stages = [this, sourceId, loginGeneration, qrGeneration,
+                   stages, lastError, fail](int step) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("netease")) return;
             if (step > 2) {
-                m_qrStatus = QStringLiteral("二维码获取失败：") +
-                             (lastError->isEmpty()
-                                  ? QStringLiteral("请检查网络后重试，或改用密码登录")
-                                  : *lastError);
-                emit qrChanged();
-                emit toast(m_qrStatus);
+                fail(QStringLiteral("二维码获取失败：")
+                     + (lastError->isEmpty()
+                            ? QStringLiteral("请检查网络后重试，或改用密码登录")
+                            : *lastError));
                 return;
             }
 
-            auto onReply = [this, sourceId, stages, lastError, step](const HttpClient::Reply &r) {
-                if (m_qrSource != sourceId) return;
+            auto onReply = [this, sourceId, loginGeneration, qrGeneration,
+                            stages, lastError, fail, step](const HttpClient::Reply &r) {
+                if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                    || m_qrMode != QLatin1String("netease")) return;
                 const QJsonValue root = Json::rootOf(r.json);
                 const QString code = Json::stringAt(root, QStringLiteral("code"));
                 const QString key = Json::firstString(root, {
@@ -373,9 +486,7 @@ void AuthManager::startQrLogin(const QString &sourceId)
                 qDebug() << "FuruiQr unikey stage" << step << "failed:" << *lastError;
                 if (code == QLatin1String("8821") || code == QLatin1String("8816")
                     || code == QLatin1String("460")) {
-                    m_qrStatus = neeQrError(code, msg);
-                    emit qrChanged();
-                    emit toast(m_qrStatus);
+                    fail(neeQrError(code, msg));
                     return;
                 }
                 m_qrStatus = QStringLiteral("正在重试获取二维码（%1/3）…").arg(step + 2);
@@ -415,25 +526,26 @@ void AuthManager::startQrLogin(const QString &sourceId)
         (*stages)(0);
         return;
     }
-    cancelQrLogin();
+
     MusicSource *s = SourceManager::instance()->source(sourceId);
-    if (!s) return;
+    if (!s) {
+        endQrSession(qrGeneration);
+        return;
+    }
     const LoginConfig &login = s->desc().login;
     if (!login.qrCreate.valid()) {
+        endQrSession(qrGeneration);
         emit toast(QStringLiteral("该平台未配置二维码登录，如需扫码，请部署实现了二维码端点的账号 API 服务"));
         return;
     }
     m_qrMode = QStringLiteral("service");
-    m_qrSource = sourceId;
-    m_qrImagePath.clear();
-    m_qrHint = QStringLiteral("正在获取二维码…");
-    m_qrStatus = QStringLiteral("准备中");
     emit qrChanged();
 
     QVariantMap vars = s->baseVars();
     s->callLogin(QStringLiteral("qrCreate"), vars,
-        [this, sourceId, s](const HttpClient::Reply &r) {
-            if (m_qrSource != sourceId) return;
+        [this, sourceId, loginGeneration, qrGeneration, s](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("service")) return;
             const QJsonValue root = Json::rootOf(r.json);
             const QVariantMap qr = s->desc().login.qr;
             m_qrKey = Json::firstString(root, {
@@ -448,8 +560,10 @@ void AuthManager::startQrLogin(const QString &sourceId)
             m_qrStatus = QStringLiteral("等待扫码");
             if (!r.ok) m_qrStatus = QStringLiteral("二维码获取失败：") + shortNetworkError(r.error);
 
-            auto saveImage = [this, sourceId](const QByteArray &bytes) {
-                if (bytes.isEmpty()) return;
+            auto saveImage = [this, sourceId, loginGeneration, qrGeneration](const QByteArray &bytes) {
+                if (bytes.isEmpty()
+                    || !qrCurrent(sourceId, loginGeneration, qrGeneration)
+                    || m_qrMode != QLatin1String("service")) return;
                 const QString path = Settings::filePath(QStringLiteral("qr_") + sourceId + QStringLiteral(".png"));
                 QFile f(path);
                 if (f.open(QIODevice::WriteOnly)) { f.write(bytes); f.close(); }
@@ -468,30 +582,23 @@ void AuthManager::startQrLogin(const QString &sourceId)
             } else if (!image.isEmpty()) {
                 m_qrHint = QStringLiteral("二维码内容：") + image;
             }
-            emit qrChanged();
-            if (r.ok && !m_qrKey.isEmpty()) {
-                startQrPolling();
+            if (!r.ok || m_qrKey.isEmpty()) {
+                m_qrStatus = r.ok ? QStringLiteral("二维码获取失败：接口未返回登录 Key")
+                                  : m_qrStatus;
+                endQrSession(qrGeneration);
+                emit qrChanged();
+                return;
             }
+            emit qrChanged();
+            startQrPolling();
         });
 }
 
 void AuthManager::cancelQrLogin()
 {
-    m_poll.stop();
-    m_polling = false;
-    m_qrDeadline = 0;
-    m_qrMode.clear();
-    m_qqQrsig.clear();
-    m_qqLoginSig.clear();
-    m_kgQrcode.clear();
-    m_mgSession.clear();
-    m_mgCookie.clear();
-    m_kwUuid.clear();
-    m_kwPollBusy = false;
-    m_kwTm.clear();
-    m_kwPhone.clear();
-    m_neeCookies.clear();
-    m_qrKey.clear();
+    if (m_qrGeneration != 0) endQrSession(m_qrGeneration);
+    clearQrSessionData();
+    m_qrLoginGeneration = 0;
     m_qrSource.clear();
     m_qrImagePath.clear();
     m_qrHint = QStringLiteral("请点击「获取二维码」后用官方 App 扫码");
@@ -502,6 +609,7 @@ void AuthManager::cancelQrLogin()
 void AuthManager::startQrPolling()
 {
     m_qrDeadline = QDateTime::currentMSecsSinceEpoch() + kQrSessionMs;
+    m_qrExpiry.start(kQrSessionMs);
     m_qrEmptyStreak = 0;
     // 汽水 passport 对请求频次很敏感：每 2 秒轮询十几次就会回 error_code=7（访问太频繁），
     // 之后二维码再被确认也读不到登录态。其余平台仍按 2 秒走。
@@ -513,18 +621,37 @@ void AuthManager::startQrPolling()
 // 会话超时后统一收尾：不清 m_qrSource，界面还要在原平台页上把「已过期」讲清楚
 bool AuthManager::qrTimedOut()
 {
-    if (m_qrDeadline == 0 || QDateTime::currentMSecsSinceEpoch() <= m_qrDeadline) return false;
-    m_poll.stop();
-    m_polling = false;
-    m_qrImagePath.clear();
-    m_qrStatus = QStringLiteral("二维码已过期，请重新获取");
-    emit qrChanged();
+    if (m_qrDeadline == 0) return false;
+    if (!qrDeadlineReached()) {
+        // 系统休眠恢复或定时器提前触发时，按真实 deadline 重排，不能丢掉唯一边界。
+        const qint64 remaining = m_qrDeadline - QDateTime::currentMSecsSinceEpoch();
+        m_qrExpiry.start(static_cast<int>(qBound<qint64>(
+            qint64(1), remaining, qint64(std::numeric_limits<int>::max()))));
+        return false;
+    }
+    failQrSession(m_qrGeneration, QStringLiteral("二维码已过期，请重新获取"));
     return true;
+}
+
+void AuthManager::failQrSession(quint64 qrGeneration, const QString &message)
+{
+    if (qrGeneration == 0 || m_qrGeneration != qrGeneration) return;
+    m_qrStatus = message;
+    endQrSession(qrGeneration);
+    emit qrChanged();
 }
 
 void AuthManager::pollQr()
 {
+    if (!m_polling || m_qrGeneration == 0) return;
+    const QString sourceId = m_qrSource;
+    const quint64 loginGeneration = m_qrLoginGeneration;
+    const quint64 qrGeneration = m_qrGeneration;
     if (qrTimedOut()) return;
+    if (!qrCurrent(sourceId, loginGeneration, qrGeneration)) {
+        endQrSession(qrGeneration);
+        return;
+    }
     if (m_qrMode == QLatin1String("qq")) {
         pollQqQr();
         return;
@@ -547,15 +674,17 @@ void AuthManager::pollQr()
     }
     // 网易云原生二维码轮询（官方网页同款明文接口，Cookie 与出码时同一个会话）
     if (m_qrMode == QLatin1String("netease")) {
-        if (m_qrSource.isEmpty() || m_qrKey.isEmpty()) { m_poll.stop(); return; }
-        const QString sourceId = m_qrSource;
+        if (m_qrKey.isEmpty()) { endQrSession(qrGeneration); return; }
         // 刷新二维码会换 unikey，但 sourceId 不变：旧 key 的轮询最长 20s 才回来，
         // 若只比 sourceId，旧请求的 802(已扫码) 会盖到新码上 → 刚出码就提示已扫码。
         // 连 key 一起快照比对，旧会话的迟到回调一律丢弃。
         const QString pollKey = m_qrKey;
+        const bool useEapi = m_qrEapi;
         // 出码与轮询必须是同一套协议：Cookie 会话就绑在这次请求链上
-        auto onCheck = [this, sourceId, pollKey](const HttpClient::Reply &r) {
-                if (!m_polling || m_qrSource != sourceId || m_qrKey != pollKey) return;
+        auto onCheck = [this, sourceId, loginGeneration, qrGeneration,
+                        pollKey](const HttpClient::Reply &r) {
+                if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                    || m_qrMode != QLatin1String("netease") || m_qrKey != pollKey) return;
                 absorbNeteaseCookies(r);
                 if (!r.ok) { m_qrStatus = QStringLiteral("轮询失败：") + shortNetworkError(r.error); emit qrChanged(); return; }
                 const QJsonValue root = Json::rootOf(r.json);
@@ -564,9 +693,8 @@ void AuthManager::pollQr()
                     // 空回复/无法解析绝不能当成"等待扫码"：历史上 weapi 密文里的 '+' 未转义时
                     // 服务端会返回空 body，导致扫码授权成功后界面永远停在未登录状态。
                     if (++m_qrEmptyStreak >= 6) {
-                        m_poll.stop();
-                        m_polling = false;
                         m_qrStatus = QStringLiteral("轮询接口连续返回空内容，请重新获取二维码");
+                        endQrSession(qrGeneration);
                         emit qrChanged();
                         emit toast(m_qrStatus);
                         return;
@@ -577,8 +705,9 @@ void AuthManager::pollQr()
                 }
                 m_qrEmptyStreak = 0;
                 if (code == QLatin1String("800")) {
-                    m_poll.stop(); m_polling = false;
-                    m_qrStatus = QStringLiteral("二维码已过期，请重新获取"); emit qrChanged();
+                    m_qrStatus = QStringLiteral("二维码已过期，请重新获取");
+                    endQrSession(qrGeneration);
+                    emit qrChanged();
                 } else if (code == QLatin1String("803")) {
                     m_poll.stop(); m_polling = false;
                     // 803 = 授权成功。出码已改为明文通道优先，轮询与出码同通道（m_qrEapi=false），
@@ -601,6 +730,7 @@ void AuthManager::pollQr()
                                            redactBody(r.body)));
                     if (cookieValue(cookie, {QStringLiteral("MUSIC_U")}).isEmpty()) {
                         m_qrStatus = QStringLiteral("授权成功但未取到 MUSIC_U，请改用密码方式登录或重新扫码");
+                        endQrSession(qrGeneration);
                         emit qrChanged();
                         emit toast(m_qrStatus);
                         return;
@@ -612,8 +742,7 @@ void AuthManager::pollQr()
                     const QString nick = Json::firstString(profile, {QStringLiteral("nickname")});
                     const QString avatar = Json::firstString(profile, {QStringLiteral("avatarUrl")});
                     saveSession(sourceId, cookie, uid, nick, avatar,
-                                QStringLiteral("二维码登录成功"));
-                    syncUserLibrary(sourceId);
+                                QStringLiteral("二维码登录成功"), loginGeneration);
                 } else if (code == QLatin1String("802")) {
                     m_qrStatus = QStringLiteral("已扫码，请在手机上确认登录"); emit qrChanged();
                 } else if (code == QLatin1String("801")) {
@@ -621,10 +750,9 @@ void AuthManager::pollQr()
                 } else if (code == QLatin1String("8821") || code == QLatin1String("8816")
                            || code == QLatin1String("460")) {
                     // 账号级风控终态：继续轮询只会让风控更重。立刻停，并明确引导改用密码方式登录
-                    m_poll.stop();
-                    m_polling = false;
                     m_qrStatus = neeQrError(code, Json::firstString(root, {
                         QStringLiteral("message"), QStringLiteral("msg")}));
+                    endQrSession(qrGeneration);
                     emit qrChanged();
                     emit toast(m_qrStatus);
                 } else {
@@ -633,30 +761,30 @@ void AuthManager::pollQr()
         };
         // 轮询必须与出码用同一条通道：eapi 出码就 eapi 轮询，退回明文时也一起退回。
         // type 必须与出码一致（3），否则服务端认不出这个二维码属于哪种登录流程
-        if (m_qrEapi) {
+        if (useEapi) {
             neteaseEapiPost(QStringLiteral("/api/login/qrcode/client/login"),
-                            QJsonObject{{QStringLiteral("key"), m_qrKey},
+                            QJsonObject{{QStringLiteral("key"), pollKey},
                                         {QStringLiteral("type"), 3}},
                             onCheck);
             return;
         }
-        const QString keyEnc = QString::fromLatin1(QUrl::toPercentEncoding(m_qrKey));
+        const QString keyEnc = QString::fromLatin1(QUrl::toPercentEncoding(pollKey));
         neteaseWebPost(
             QStringLiteral("/api/login/qrcode/client/login?key=%1&type=3").arg(keyEnc),
             QByteArrayLiteral("key=") + keyEnc.toUtf8() + QByteArrayLiteral("&type=3"),
             onCheck);
         return;
     }
-    if (!m_polling || m_qrSource.isEmpty()) { m_poll.stop(); return; }
-    MusicSource *s = SourceManager::instance()->source(m_qrSource);
-    if (!s || !s->desc().login.qrCheck.valid()) { m_poll.stop(); return; }
+    MusicSource *s = SourceManager::instance()->source(sourceId);
+    if (!s || !s->desc().login.qrCheck.valid()) { endQrSession(qrGeneration); return; }
     const QVariantMap qr = s->desc().login.qr;
+    const QString pollKey = m_qrKey;
     QVariantMap vars = s->baseVars();
-    vars.insert(QStringLiteral("key"), m_qrKey);
-    const QString sourceId = m_qrSource;
+    vars.insert(QStringLiteral("key"), pollKey);
     s->callLogin(QStringLiteral("qrCheck"), vars,
-        [this, sourceId, qr](const HttpClient::Reply &r) {
-            if (!m_polling || m_qrSource != sourceId) return;
+        [this, sourceId, loginGeneration, qrGeneration, pollKey, qr](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("service") || m_qrKey != pollKey) return;
             const QJsonValue root = Json::rootOf(r.json);
             const QString status = Json::firstString(root, {
                 qr.value(QStringLiteral("statusPath")).toString(), QStringLiteral("code"),
@@ -677,12 +805,11 @@ void AuthManager::pollQr()
                 const QString nickPath = qr.value(QStringLiteral("nickPath")).toString();
                 const QString uid = uidPath.isEmpty() ? QString() : Json::stringAt(root, uidPath);
                 const QString nick = nickPath.isEmpty() ? QString() : Json::stringAt(root, nickPath);
-                saveSession(sourceId, cookie, uid, nick, QString(), QStringLiteral("二维码登录成功"));
-                syncUserLibrary(sourceId);
+                saveSession(sourceId, cookie, uid, nick, QString(),
+                            QStringLiteral("二维码登录成功"), loginGeneration);
             } else if (expired.contains(status)) {
-                m_poll.stop();
-                m_polling = false;
                 m_qrStatus = QStringLiteral("二维码已过期，请重新获取");
+                endQrSession(qrGeneration);
                 emit qrChanged();
             } else {
                 emit qrChanged();
@@ -738,32 +865,34 @@ QString qqQrPollUrl(const QString &loginSig, const QString &qrToken)
 
 void AuthManager::startQqQr()
 {
+    const QString sourceId = m_qrSource;
+    const quint64 loginGeneration = m_qrLoginGeneration;
+    const quint64 qrGeneration = m_qrGeneration;
     m_qrMode = QStringLiteral("qq");
-    m_qrSource = QStringLiteral("qq");
-    m_qqQrsig.clear();
-    m_qqLoginSig.clear();
-    m_qrImagePath.clear();
-    m_qrHint = QStringLiteral("正在获取二维码…");
-    m_qrStatus = QStringLiteral("准备中");
     emit qrChanged();
 
     const QString xlogin = qqXloginUrl();
     HttpClient::instance()->request(QStringLiteral("GET"), QUrl(xlogin),
                                     browserHeaders(QStringLiteral("https://y.qq.com/")),
                                     QByteArray(),
-        [this, xlogin](const HttpClient::Reply &r) {
-            if (m_qrMode != QLatin1String("qq")) return;
-            m_qqLoginSig = cookieValue(cookiesFromReply(r, QVariantMap(), QJsonValue()),
-                                           {QStringLiteral("pt_login_sig")});
+        [this, sourceId, loginGeneration, qrGeneration, xlogin](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("qq")) return;
+            const QString loginSig = cookieValue(cookiesFromReply(r, QVariantMap(), QJsonValue()),
+                                                  {QStringLiteral("pt_login_sig")});
+            m_qqLoginSig = loginSig;
             // 二维码图片接口对参数与 Referer 都敏感，必须和 ptlogin iframe 里抓到的一致
             HttpClient::instance()->request(QStringLiteral("GET"), QUrl(qqQrShowUrl()),
                                             browserHeaders(xlogin), QByteArray(),
-                [this](const HttpClient::Reply &ir) {
-                    if (m_qrMode != QLatin1String("qq")) return;
-                    m_qqQrsig = cookieValue(cookiesFromReply(ir, QVariantMap(), QJsonValue()),
-                                                 {QStringLiteral("qrsig")});
-                    if (!ir.ok || ir.body.isEmpty() || m_qqQrsig.isEmpty()) {
+                [this, sourceId, loginGeneration, qrGeneration, loginSig](const HttpClient::Reply &ir) {
+                    if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                        || m_qrMode != QLatin1String("qq") || m_qqLoginSig != loginSig) return;
+                    const QString qrsig = cookieValue(cookiesFromReply(ir, QVariantMap(), QJsonValue()),
+                                                       {QStringLiteral("qrsig")});
+                    m_qqQrsig = qrsig;
+                    if (!ir.ok || ir.body.isEmpty() || qrsig.isEmpty()) {
                         m_qrStatus = QStringLiteral("二维码获取失败：ptlogin 未返回二维码");
+                        endQrSession(qrGeneration);
                         emit qrChanged();
                         return;
                     }
@@ -771,6 +900,7 @@ void AuthManager::startQqQr()
                     QFile f(path);
                     if (!f.open(QIODevice::WriteOnly)) {
                         m_qrStatus = QStringLiteral("二维码保存失败");
+                        endQrSession(qrGeneration);
                         emit qrChanged();
                         return;
                     }
@@ -787,18 +917,28 @@ void AuthManager::startQqQr()
 
 void AuthManager::pollQqQr()
 {
-    if (m_qrSource.isEmpty() || m_qqQrsig.isEmpty()) { m_poll.stop(); m_polling = false; return; }
     const QString sourceId = m_qrSource;
-    const QString token = QString::number(Qq::hash33(m_qqQrsig));
+    const quint64 loginGeneration = m_qrLoginGeneration;
+    const quint64 qrGeneration = m_qrGeneration;
+    const QString qrsig = m_qqQrsig;
+    const QString loginSig = m_qqLoginSig;
+    if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+        || m_qrMode != QLatin1String("qq") || qrsig.isEmpty()) {
+        endQrSession(qrGeneration);
+        return;
+    }
+    const QString token = QString::number(Qq::hash33(qrsig));
     // ptqrtoken = hash33(qrsig)，与服务端校验不一致时 ptlogin 直接返回空响应
-    const QString poll = qqQrPollUrl(m_qqLoginSig, token);
+    const QString poll = qqQrPollUrl(loginSig, token);
     QVariantMap headers = browserHeaders(qqXloginUrl());
     headers.insert(QStringLiteral("Cookie"),
-                   QStringLiteral("pt_login_sig=%1; qrsig=%2").arg(m_qqLoginSig, m_qqQrsig));
+                   QStringLiteral("pt_login_sig=%1; qrsig=%2").arg(loginSig, qrsig));
 
     HttpClient::instance()->request(QStringLiteral("GET"), QUrl(poll), headers, QByteArray(),
-        [this, sourceId](const HttpClient::Reply &r) {
-            if (!m_polling || m_qrSource != sourceId || m_qrMode != QLatin1String("qq")) return;
+        [this, sourceId, loginGeneration, qrGeneration, qrsig, loginSig](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("qq") || m_qqQrsig != qrsig
+                || m_qqLoginSig != loginSig || m_qqGrantStarted) return;
             if (!r.ok) {
                 m_qrStatus = QStringLiteral("轮询失败：") + shortNetworkError(r.error);
                 emit qrChanged();
@@ -810,9 +950,11 @@ void AuthManager::pollQqQr()
             if (code == QLatin1String("0")) {
                 m_poll.stop();
                 m_polling = false;
+                m_qqGrantStarted = true;
                 m_qrStatus = QStringLiteral("授权成功，正在同步账号…");
                 emit qrChanged();
-                qqFollowGrantChain(f.value(2), 0);
+                qqFollowGrantChain(f.value(2), 0, sourceId, loginGeneration,
+                                   qrGeneration, qrsig, loginSig);
             } else if (code == QLatin1String("66")) {
                 m_qrStatus = QStringLiteral("等待扫码");
                 emit qrChanged();
@@ -820,20 +962,17 @@ void AuthManager::pollQqQr()
                 m_qrStatus = QStringLiteral("已扫码，请在手机上确认登录");
                 emit qrChanged();
             } else if (code == QLatin1String("65")) {
-                m_poll.stop();
-                m_polling = false;
                 m_qrStatus = QStringLiteral("二维码已过期，请重新获取");
+                endQrSession(qrGeneration);
                 emit qrChanged();
             } else if (code == QLatin1String("68")) {
                 // ptqrlogin 的 68 = 用户在手机上拒绝/取消，说成「登录失败」会把该做的事藏起来
-                m_poll.stop();
-                m_polling = false;
                 m_qrStatus = QStringLiteral("已在手机上取消登录，请重新获取二维码");
+                endQrSession(qrGeneration);
                 emit qrChanged();
             } else {
-                m_poll.stop();
-                m_polling = false;
                 m_qrStatus = QStringLiteral("登录失败（ptqrlogin %1）").arg(code);
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 emit toast(m_qrStatus);
             }
@@ -842,40 +981,57 @@ void AuthManager::pollQqQr()
 
 // 授权码不在 ptqrlogin 的响应里，要顺着 ptuiCB 给出的地址一跳跳重定向才能拿到，
 // 因此这里必须关掉 HttpClient 的自动跳转，自己从 Location 里找 code。
-void AuthManager::qqFollowGrantChain(const QString &url, int hop)
+void AuthManager::qqFollowGrantChain(const QString &url, int hop, const QString &sourceId,
+                                     quint64 loginGeneration, quint64 qrGeneration,
+                                     const QString &qrsig, const QString &loginSig)
 {
-    if (m_qrMode != QLatin1String("qq") || m_qrSource.isEmpty()) return;
-    const QString sourceId = m_qrSource;
-    const auto fail = [this](const QString &reason) {
+    if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+        || m_qrMode != QLatin1String("qq") || m_qqQrsig != qrsig
+        || m_qqLoginSig != loginSig) return;
+    const auto fail = [this, sourceId, loginGeneration, qrGeneration](const QString &reason) {
+        if (!qrCurrent(sourceId, loginGeneration, qrGeneration)) return;
         m_qrStatus = QStringLiteral("登录失败：%1").arg(reason);
+        endQrSession(qrGeneration);
         emit qrChanged();
         emit toast(m_qrStatus);
     };
     if (hop > 8) { fail(QStringLiteral("授权跳转链路过长")); return; }
     const QUrl here(url);
     const QString code = Qq::authCodeFromUrl(here);
-    if (!code.isEmpty()) { qqExchange(code); return; }
+    if (!code.isEmpty()) {
+        qqExchange(code, sourceId, loginGeneration, qrGeneration, qrsig, loginSig);
+        return;
+    }
     if (url.isEmpty()) { fail(QStringLiteral("未取得授权跳转地址")); return; }
 
     QVariantMap headers = browserHeaders(QStringLiteral("https://y.qq.com/"));
     headers.insert(QStringLiteral("Cookie"),
-                   QStringLiteral("pt_login_sig=%1; qrsig=%2").arg(m_qqLoginSig, m_qqQrsig));
+                   QStringLiteral("pt_login_sig=%1; qrsig=%2").arg(loginSig, qrsig));
     HttpClient::instance()->request(QStringLiteral("GET"), here, headers, QByteArray(),
-        [this, sourceId, here, hop](const HttpClient::Reply &r) {
-            // 用户可能已经关掉登录页或改扫其他平台，这条链路必须整个丢弃
-            if (m_qrMode != QLatin1String("qq") || m_qrSource != sourceId) return;
+        [this, sourceId, loginGeneration, qrGeneration, qrsig, loginSig,
+         here, hop](const HttpClient::Reply &r) {
+            // 成功 poll 后 polling 已为 false，但同一 qrGeneration 的授权链仍然有效。
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("qq") || m_qqQrsig != qrsig
+                || m_qqLoginSig != loginSig) return;
             const QString location = r.headers.value(QStringLiteral("location"));
             if (location.isEmpty()) {
-                qqFollowGrantChain(QString(), hop + 1);
+                qqFollowGrantChain(QString(), hop + 1, sourceId, loginGeneration,
+                                   qrGeneration, qrsig, loginSig);
                 return;
             }
-            qqFollowGrantChain(here.resolved(QUrl(location)).toString(), hop + 1);
+            qqFollowGrantChain(here.resolved(QUrl(location)).toString(), hop + 1,
+                               sourceId, loginGeneration, qrGeneration, qrsig, loginSig);
         }, -1, false);
 }
 
-void AuthManager::qqExchange(const QString &code)
+void AuthManager::qqExchange(const QString &code, const QString &sourceId,
+                             quint64 loginGeneration, quint64 qrGeneration,
+                             const QString &qrsig, const QString &loginSig)
 {
-    const QString sourceId = m_qrSource;
+    if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+        || m_qrMode != QLatin1String("qq") || m_qqQrsig != qrsig
+        || m_qqLoginSig != loginSig) return;
     QVariantMap headers = browserHeaders(QStringLiteral("https://y.qq.com/portal/wx_redirect.html"));
     headers.insert(QStringLiteral("Origin"), QStringLiteral("https://y.qq.com"));
     headers.insert(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
@@ -883,10 +1039,13 @@ void AuthManager::qqExchange(const QString &code)
     HttpClient::instance()->request(QStringLiteral("POST"),
                                     QUrl(QStringLiteral("https://u.y.qq.com/cgi-bin/musicu.fcg")),
                                     headers, body,
-        [this, sourceId](const HttpClient::Reply &r) {
-            if (m_qrSource != sourceId || m_qrMode != QLatin1String("qq")) return;
-            const auto fail = [this](const QString &reason) {
+        [this, sourceId, loginGeneration, qrGeneration, qrsig, loginSig](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("qq") || m_qqQrsig != qrsig
+                || m_qqLoginSig != loginSig) return;
+            const auto fail = [this, sourceId, loginGeneration, qrGeneration](const QString &reason) {
                 m_qrStatus = QStringLiteral("登录失败：%1").arg(reason);
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 emit toast(m_qrStatus);
             };
@@ -908,12 +1067,13 @@ void AuthManager::qqExchange(const QString &code)
                                                            QStringLiteral("nickname")});
             const QString avatar = Json::firstString(data, {QStringLiteral("logo"),
                                                              QStringLiteral("figureurl")});
+            m_qrStatus = QStringLiteral("登录成功");
+            emit qrChanged();
             saveSession(sourceId,
                         Qq::sessionCookie(musicid, key,
                                           Json::firstString(data, {QStringLiteral("openid")}),
                                           Json::firstString(data, {QStringLiteral("access_token")})),
-                        musicid, nick, avatar, QStringLiteral("二维码登录成功"));
-            syncUserLibrary(sourceId);
+                        musicid, nick, avatar, QStringLiteral("二维码登录成功"), loginGeneration);
         });
 }
 
@@ -932,12 +1092,10 @@ QVariantMap kgQrParams()
 
 void AuthManager::startKgQr()
 {
+    const QString sourceId = m_qrSource;
+    const quint64 loginGeneration = m_qrLoginGeneration;
+    const quint64 qrGeneration = m_qrGeneration;
     m_qrMode = QStringLiteral("kugou");
-    m_qrSource = QStringLiteral("kugou");
-    m_kgQrcode.clear();
-    m_qrImagePath.clear();
-    m_qrHint = QStringLiteral("正在获取二维码…");
-    m_qrStatus = QStringLiteral("准备中");
     emit qrChanged();
 
     QVariantMap p = kgQrParams();
@@ -950,21 +1108,25 @@ void AuthManager::startKgQr()
     HttpClient::instance()->request(QStringLiteral("GET"), QUrl(url),
                                     browserHeaders(QStringLiteral("https://www.kugou.com/")),
                                     QByteArray(),
-        [this](const HttpClient::Reply &r) {
-            if (m_qrMode != QLatin1String("kugou")) return;
+        [this, sourceId, loginGeneration, qrGeneration](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("kugou")) return;
             if (!r.ok) {
                 m_qrStatus = QStringLiteral("二维码获取失败：") + shortNetworkError(r.error);
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 return;
             }
             const QJsonValue root = Json::rootOf(r.json);
-            m_kgQrcode = Json::firstString(root, {QStringLiteral("data.qrcode"),
-                                                  QStringLiteral("qrcode")});
+            const QString qrcode = Json::firstString(root, {QStringLiteral("data.qrcode"),
+                                                            QStringLiteral("qrcode")});
             const QString img = Json::firstString(root, {QStringLiteral("data.qrcode_img"),
                                                          QStringLiteral("qrcode_img")});
-            if (m_kgQrcode.isEmpty() || !img.startsWith(QStringLiteral("data:image"),
-                                                       Qt::CaseInsensitive)) {
+            m_kgQrcode = qrcode;
+            if (qrcode.isEmpty() || !img.startsWith(QStringLiteral("data:image"),
+                                                    Qt::CaseInsensitive)) {
                 m_qrStatus = QStringLiteral("二维码获取失败：酷狗未返回二维码");
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 return;
             }
@@ -974,6 +1136,7 @@ void AuthManager::startKgQr()
             QFile f(path);
             if (png.isEmpty() || !f.open(QIODevice::WriteOnly)) {
                 m_qrStatus = QStringLiteral("二维码保存失败");
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 return;
             }
@@ -989,18 +1152,26 @@ void AuthManager::startKgQr()
 
 void AuthManager::pollKgQr()
 {
-    if (m_qrSource.isEmpty() || m_kgQrcode.isEmpty()) { m_poll.stop(); m_polling = false; return; }
     const QString sourceId = m_qrSource;
+    const quint64 loginGeneration = m_qrLoginGeneration;
+    const quint64 qrGeneration = m_qrGeneration;
+    const QString qrcode = m_kgQrcode;
+    if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+        || m_qrMode != QLatin1String("kugou") || qrcode.isEmpty()) {
+        endQrSession(qrGeneration);
+        return;
+    }
     QVariantMap p = kgQrParams();
-    p.insert(QStringLiteral("qrcode"), m_kgQrcode);
+    p.insert(QStringLiteral("qrcode"), qrcode);
     const QString url = Kugou::signedUrl(
         QStringLiteral("https://login-user.kugou.com/v2/get_userinfo_qrcode"), p);
 
     HttpClient::instance()->request(QStringLiteral("GET"), QUrl(url),
                                     browserHeaders(QStringLiteral("https://www.kugou.com/")),
                                     QByteArray(),
-        [this, sourceId](const HttpClient::Reply &r) {
-            if (!m_polling || m_qrMode != QLatin1String("kugou") || m_qrSource != sourceId) return;
+        [this, sourceId, loginGeneration, qrGeneration, qrcode](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("kugou") || m_kgQrcode != qrcode) return;
             if (!r.ok) {
                 m_qrStatus = QStringLiteral("轮询失败：") + shortNetworkError(r.error);
                 emit qrChanged();
@@ -1020,13 +1191,15 @@ void AuthManager::pollKgQr()
                                                                 QStringLiteral("user_id")});
                 if (token.isEmpty()) {
                     m_qrStatus = QStringLiteral("登录失败：酷狗未返回 token");
+                    endQrSession(qrGeneration);
+                    emit qrChanged();
                     emit toast(m_qrStatus);
                     return;
                 }
                 // 酷狗的用户信息接口要 RSA 加密，昵称留给后续账号接口同步时补
                 saveSession(sourceId, Kugou::sessionCookie(token, userid), userid,
-                            QString(), QString(), QStringLiteral("二维码登录成功"));
-                syncUserLibrary(sourceId);
+                            QString(), QString(), QStringLiteral("二维码登录成功"),
+                            loginGeneration);
             } else if (st == QLatin1String("2")) {
                 m_qrStatus = QStringLiteral("已扫码，请在手机上确认登录");
                 emit qrChanged();
@@ -1034,9 +1207,8 @@ void AuthManager::pollKgQr()
                 m_qrStatus = QStringLiteral("等待扫码");
                 emit qrChanged();
             } else if (st == QLatin1String("0")) {
-                m_poll.stop();
-                m_polling = false;
                 m_qrStatus = QStringLiteral("二维码已过期，请重新获取");
+                endQrSession(qrGeneration);
                 emit qrChanged();
             } else {
                 // 未识别的状态码（含「在手机取消」这种没有公开取值的情况）必须回显，
@@ -1048,9 +1220,8 @@ void AuthManager::pollKgQr()
                 if (msg.contains(QStringLiteral("取消"))
                     || msg.contains(QStringLiteral("拒绝"))
                     || msg.contains(QStringLiteral("cancel"), Qt::CaseInsensitive)) {
-                    m_poll.stop();
-                    m_polling = false;
                     m_qrStatus = QStringLiteral("已在手机上取消登录，请重新获取二维码");
+                    endQrSession(qrGeneration);
                 } else {
                     m_qrStatus = QStringLiteral("等待扫码（接口返回 %1）")
                                      .arg(st.isEmpty() ? QStringLiteral("空") : st);
@@ -1060,92 +1231,145 @@ void AuthManager::pollKgQr()
         });
 }
 
-void AuthManager::saveSession(const QString &sourceId, const QString &cookie,
+bool AuthManager::saveSession(const QString &sourceId, const QString &cookie,
                               const QString &uid, const QString &nickname,
-                              const QString &avatar, const QString &message)
+                              const QString &avatar, const QString &message,
+                              quint64 expectedGeneration)
 {
-    Account a = account(sourceId);
+    const bool current = !sourceId.isEmpty()
+        && SourceConfig::instance()->ids().contains(sourceId)
+        && expectedGeneration != 0
+        && currentLoginGeneration(sourceId) == expectedGeneration;
+    const QString normalizedCookie = onlyCookiePairs(cookie);
+    if (!current) return false;
+    if (normalizedCookie.isEmpty()) {
+        const QString failed = message + QStringLiteral("（服务端未返回登录态，请重新登录）");
+        emit loginStateChanged(sourceId, false, failed);
+        emit toast(failed);
+        failQrSession(m_qrSource == sourceId ? m_qrGeneration : 0, failed);
+        return false;
+    }
+
+    // 授权已经成功，后续资料/同步仍沿用登录代次；二维码本身则必须进入终态。
+    if (m_qrGeneration != 0 && m_qrSource == sourceId
+        && m_qrLoginGeneration == expectedGeneration) {
+        endQrSession(m_qrGeneration);
+    }
+
+    const Account previous = account(sourceId);
+    Account a = previous;
     a.source = sourceId;
-    a.cookie = cookie;
+    a.cookie = normalizedCookie;
     a.uid = uid;
     a.nickname = nickname;
     a.avatar = avatar;
-    a.logged = !cookie.trimmed().isEmpty();
-    a.status = a.logged ? (nickname.isEmpty() ? QStringLiteral("已登录") : nickname)
-                        : QStringLiteral("登录态无效");
+    a.logged = true;
+    a.status = nickname.isEmpty() ? QStringLiteral("已登录") : nickname;
     Logger::write(QStringLiteral("I"),
-                  QStringLiteral("[保存会话] source=%1 logged=%2 cookieLen=%3 uid=%4 nick=%5")
-                      .arg(sourceId, a.logged ? QStringLiteral("1") : QStringLiteral("0"),
-                           QString::number(cookie.size()), uid, nickname));
+                  QStringLiteral("[保存会话] source=%1 logged=1 cookieLen=%2 uid=%3 nick=%4")
+                      .arg(sourceId, QString::number(normalizedCookie.size()), uid, nickname));
     Library::instance()->saveAccount(a);
-    bool verifyLogged = false;
-    QString verifyCookie;
-    for (const Account &va : Library::instance()->accounts())
-        if (va.source == sourceId) { verifyLogged = va.logged; verifyCookie = va.cookie; break; }
-    Logger::write(QStringLiteral("I"),
-                  QStringLiteral("[保存会话] 写库后核对：logged=%1 cookieLen=%2")
-                      .arg(verifyLogged ? QStringLiteral("1") : QStringLiteral("0"),
-                           QString::number(verifyCookie.size())));
-    // 数据库打不开（如真机覆盖安装后 SELinux 标签错乱、磁盘满）时 saveAccount 直接
-    // 静默返回，内存里看着登录成功、写库核对却全 0。此时绝不能再 emit「登录成功」——
-    // 否则用户以为 persists 了，重启后发现登录态丢失、歌单同步也是空的，无从排查。
-    // 用写库后的真实状态为准：登录时核对 cookie 内容完全一致（只比长度会在旧登录态
-    // 恰好同长度时误判成功）；退出登录（cookie 空）时核对库里已确实置为未登录。
-    const bool persisted = a.logged
-                         ? (verifyLogged && verifyCookie == cookie)
-                         : !verifyLogged;
-    refresh();
-    if (!persisted) {
-        const QString failed = message + QStringLiteral("（登录态写入本地失败，重启后可能丢失）");
-        Logger::write(QStringLiteral("W"),
-                      QStringLiteral("[保存会话] 写库失败，登录态未持久化：source=%1 logged=%2 cookieLen=%3")
-                          .arg(sourceId, a.logged ? QStringLiteral("1") : QStringLiteral("0"),
-                               QString::number(cookie.size())));
-        // 登录失败：即便库里残留旧登录态也按未登录处理，避免 UI 显示错账号；
-        // 退出失败：如实显示库里的登录态（仍为 true），与「退出未生效」提示一致。
-        emit loginStateChanged(sourceId, a.logged ? false : verifyLogged, failed);
-        emit toast(a.logged
-                   ? QStringLiteral("登录已通过，但无法保存到本地，请检查应用存储权限或重新安装")
-                   : QStringLiteral("退出未生效，本地登录态仍在，请检查应用存储权限"));
-        return;
+
+    bool found = false;
+    bool persisted = false;
+    for (const Account &va : Library::instance()->accounts()) {
+        if (va.source != sourceId) continue;
+        found = true;
+        persisted = va.logged && va.cookie == normalizedCookie && va.uid == uid;
+        break;
     }
-    emit loginStateChanged(sourceId, a.logged, message);
+    Logger::write(QStringLiteral("I"),
+                  QStringLiteral("[保存会话] 写库后核对：found=%1 persisted=%2")
+                      .arg(found ? QStringLiteral("1") : QStringLiteral("0"),
+                           persisted ? QStringLiteral("1") : QStringLiteral("0")));
+    // 写库核对失败时不能把“服务器已授权”误报成“本地登录成功”。写库后若代次已
+    // 被切换，恢复快照并丢弃结果，避免旧账号覆盖新账号。
+    if (!persisted || currentLoginGeneration(sourceId) != expectedGeneration) {
+        if (persisted && currentLoginGeneration(sourceId) != expectedGeneration)
+            Library::instance()->saveAccount(previous);
+        refresh();
+        if (currentLoginGeneration(sourceId) == expectedGeneration) {
+            const QString failed = message + QStringLiteral("（登录态写入本地失败，重启后可能丢失）");
+            emit loginStateChanged(sourceId, false, failed);
+            emit toast(QStringLiteral("登录已通过，但无法保存到本地，请检查应用存储权限或重新安装"));
+            failQrSession(m_qrSource == sourceId ? m_qrGeneration : 0, failed);
+        }
+        return false;
+    }
+
+    refresh();
+    emit loginStateChanged(sourceId, true, message);
     emit toast(message);
+    // 先补资料再同步，保证同步快照的是最终 uid；两步都必须留在同一登录代次。
+    fetchUserInfo(sourceId, normalizedCookie, uid, expectedGeneration, [this, sourceId, expectedGeneration]() {
+        if (currentLoginGeneration(sourceId) != expectedGeneration) return;
+        const Account a = account(sourceId);
+        if (!a.logged || a.cookie.isEmpty()) return;
+        syncUserLibrary(sourceId);
+    });
+    return true;
 }
 
 // 预留扩展点：config-driven 的用户资料补全。sources.json 里给某个平台配
 // login.userInfo 端点后即可启用（当前所有平台都未配置，所以这里会立即返回）。
 // 不是死代码，别删——QQ/酷狗等账号 API 落地时直接靠它补昵称/头像。
-void AuthManager::fetchUserInfo(const QString &sourceId, const QString &cookie, const QString &uid)
+void AuthManager::fetchUserInfo(const QString &sourceId, const QString &cookie, const QString &uid,
+                                quint64 expectedGeneration, const std::function<void()> &done)
 {
+    const auto stillCurrent = [this, sourceId, cookie, uid, expectedGeneration]() {
+        if (expectedGeneration == 0 || currentLoginGeneration(sourceId) != expectedGeneration)
+            return false;
+        const Account a = account(sourceId);
+        return a.source == sourceId && a.logged && a.cookie == cookie && a.uid == uid;
+    };
+    if (!stillCurrent()) return;
+
     MusicSource *s = SourceManager::instance()->source(sourceId);
-    if (!s || !s->desc().login.userInfo.valid()) return;
+    if (!s || !s->desc().login.userInfo.valid()) {
+        done();
+        return;
+    }
     QVariantMap vars = s->baseVars();
     vars.insert(QStringLiteral("cookie"), cookie);
     vars.insert(QStringLiteral("uid"), uid);
     const Endpoint ep = s->desc().login.userInfo;
-    s->call(ep, vars, [this, sourceId, cookie, ep](const HttpClient::Reply &r) {
-        if (!r.ok) return;
-        const QJsonValue root = Json::rootOf(r.json);
-        const QString infoUid = Json::firstString(root, {
-            ep.fields.value(QStringLiteral("uid")).toString(), QStringLiteral("uid"), QStringLiteral("data.uid")
-        });
-        const QString nick = Json::firstString(root, {
-            ep.fields.value(QStringLiteral("nickname")).toString(), QStringLiteral("nickname"), QStringLiteral("data.nick")
-        });
-        const QString avatar = Json::firstString(root, {
-            ep.fields.value(QStringLiteral("avatar")).toString(), QStringLiteral("avatar"), QStringLiteral("data.avatar")
-        });
-        Account a = account(sourceId);
-        if (!infoUid.isEmpty()) a.uid = infoUid;
-        if (!nick.isEmpty()) a.nickname = nick;
-        if (!avatar.isEmpty()) a.avatar = avatar;
-        a.cookie = cookie;
-        a.logged = true;
-        a.status = a.nickname.isEmpty() ? QStringLiteral("已登录") : a.nickname;
-        Library::instance()->saveAccount(a);
-        refresh();
-        emit loginStateChanged(sourceId, true, QStringLiteral("账号信息已更新"));
+    s->call(ep, vars, [this, sourceId, cookie, uid, ep, expectedGeneration, done,
+                      stillCurrent](const HttpClient::Reply &r) {
+        if (!stillCurrent()) return;
+        if (r.ok) {
+            const QJsonValue root = Json::rootOf(r.json);
+            const QString infoUid = Json::firstString(root, {
+                ep.fields.value(QStringLiteral("uid")).toString(), QStringLiteral("uid"), QStringLiteral("data.uid")
+            });
+            const QString nick = Json::firstString(root, {
+                ep.fields.value(QStringLiteral("nickname")).toString(), QStringLiteral("nickname"), QStringLiteral("data.nick")
+            });
+            const QString avatar = Json::firstString(root, {
+                ep.fields.value(QStringLiteral("avatar")).toString(), QStringLiteral("avatar"), QStringLiteral("data.avatar")
+            });
+            if (!stillCurrent()) return;
+            Account a = account(sourceId);
+            if (!infoUid.isEmpty()) a.uid = infoUid;
+            if (!nick.isEmpty()) a.nickname = nick;
+            if (!avatar.isEmpty()) a.avatar = avatar;
+            a.cookie = cookie;
+            a.logged = true;
+            a.status = a.nickname.isEmpty() ? QStringLiteral("已登录") : a.nickname;
+            Library::instance()->saveAccount(a);
+            if (expectedGeneration == 0
+                || currentLoginGeneration(sourceId) != expectedGeneration) return;
+            bool persisted = false;
+            for (const Account &va : Library::instance()->accounts()) {
+                if (va.source == sourceId) {
+                    persisted = va.logged && va.cookie == a.cookie && va.uid == a.uid;
+                    break;
+                }
+            }
+            if (!persisted) return;
+            refresh();
+            emit loginStateChanged(sourceId, true, QStringLiteral("账号信息已更新"));
+        }
+        done();
     });
 }
 
@@ -1160,11 +1384,19 @@ void AuthManager::sendPhoneCode(const QString &sourceId, const QString &phone, c
         emit toast(QStringLiteral("该平台未配置验证码发送端点"));
         return;
     }
+    const quint64 generation = invalidateLogin(sourceId);
+    const QString normalizedPhone = phone.trimmed();
     QVariantMap vars = s->baseVars();
-    vars.insert(QStringLiteral("phone"), phone);
-    s->callLogin(QStringLiteral("phoneSend"), vars, [this](const HttpClient::Reply &r) {
-        emit toast(r.ok ? QStringLiteral("验证码已发送") : QStringLiteral("发送失败：") + r.error);
-    });
+    vars.insert(QStringLiteral("phone"), normalizedPhone);
+    s->callLogin(QStringLiteral("phoneSend"), vars,
+        [this, sourceId, normalizedPhone, generation](const HttpClient::Reply &r) {
+            if (currentLoginGeneration(sourceId) != generation) return;
+            if (r.ok) {
+                m_phoneCodeGenerations.insert(sourceId, generation);
+                m_phoneCodePhones.insert(sourceId, normalizedPhone);
+            }
+            emit toast(r.ok ? QStringLiteral("验证码已发送") : QStringLiteral("发送失败：") + r.error);
+        });
 }
 
 void AuthManager::loginByPhone(const QString &sourceId, const QString &phone, const QString &code)
@@ -1178,11 +1410,22 @@ void AuthManager::loginByPhone(const QString &sourceId, const QString &phone, co
         emit loginStateChanged(sourceId, false, QStringLiteral("该平台未配置手机号登录端点"));
         return;
     }
+    const QString normalizedPhone = phone.trimmed();
+    // 发码与提交验证码是同一流程；换手机号时必须重新发码，不能复用旧票据。
+    quint64 generation = m_phoneCodeGenerations.value(sourceId, 0);
+    if (generation == 0 || currentLoginGeneration(sourceId) != generation
+        || m_phoneCodePhones.value(sourceId) != normalizedPhone)
+        generation = invalidateLogin(sourceId);
+    quint64 &attemptSequence = m_phoneAttemptSequences[sourceId];
+    attemptSequence = nextGeneration(attemptSequence);
+    const quint64 attempt = attemptSequence;
     QVariantMap vars = s->baseVars();
-    vars.insert(QStringLiteral("phone"), phone);
+    vars.insert(QStringLiteral("phone"), normalizedPhone);
     vars.insert(QStringLiteral("code"), code);
     s->callLogin(QStringLiteral("phoneLogin"), vars,
-        [this, sourceId](const HttpClient::Reply &r) {
+        [this, sourceId, generation, attempt](const HttpClient::Reply &r) {
+            if (currentLoginGeneration(sourceId) != generation
+                || m_phoneAttemptSequences.value(sourceId, 0) != attempt) return;
             if (!r.ok) {
                 emit loginStateChanged(sourceId, false, QStringLiteral("登录失败：") + r.error);
                 return;
@@ -1191,8 +1434,12 @@ void AuthManager::loginByPhone(const QString &sourceId, const QString &phone, co
             const QString cookie = cookiesFromReply(r, QVariantMap(), root);
             const QString uid = Json::firstString(root, {QStringLiteral("uid"), QStringLiteral("data.uid"), QStringLiteral("userId")});
             const QString nick = Json::firstString(root, {QStringLiteral("nickname"), QStringLiteral("data.nickname")});
-            saveSession(sourceId, cookie, uid, nick, QString(), QStringLiteral("手机号登录成功"));
-            syncUserLibrary(sourceId);
+            if (saveSession(sourceId, cookie, uid, nick, QString(),
+                            QStringLiteral("手机号登录成功"), generation)
+                && m_phoneCodeGenerations.value(sourceId, 0) == generation) {
+                m_phoneCodeGenerations.remove(sourceId);
+                m_phoneCodePhones.remove(sourceId);
+            }
         });
 }
 
@@ -1643,6 +1890,7 @@ void AuthManager::loginKugouPassword(const QString &account, const QString &pass
     //   pk     = RSA_NO_PADDING({clienttime_ms,key:tempKey}) 的大写 hex
     //   query  = 设备参数 + signature（App 盐，body 原文参与签名）
     const QString sourceId = QStringLiteral("kugou");
+    const quint64 generation = invalidateLogin(sourceId);
     const QString tempKey = KugouLoginCrypto::randomTempKey();
     const QByteArray key = KugouLoginCrypto::keyFromTempKey(tempKey);
     const QByteArray iv = KugouLoginCrypto::ivFromKey(key);
@@ -1712,7 +1960,8 @@ void AuthManager::loginKugouPassword(const QString &account, const QString &pass
     headers.insert(QStringLiteral("clienttime"), p.value(QStringLiteral("clienttime")));
 
     HttpClient::instance()->request(QStringLiteral("POST"), QUrl(url), headers, body,
-        [this, sourceId, key, iv](const HttpClient::Reply &r) {
+        [this, sourceId, generation, key, iv](const HttpClient::Reply &r) {
+            if (currentLoginGeneration(sourceId) != generation) return;
             if (!r.ok) {
                 const QString msg = QStringLiteral("酷狗登录请求失败：") + shortNetworkError(r.error);
                 emit loginStateChanged(sourceId, false, msg);
@@ -1779,8 +2028,7 @@ void AuthManager::loginKugouPassword(const QString &account, const QString &pass
                     cookieParts << QStringLiteral("%1=%2").arg(k, v.toVariant().toString());
             }
             saveSession(sourceId, cookieParts.join(QStringLiteral("; ")), userid,
-                        QString(), QString(), QStringLiteral("密码登录成功"));
-            syncUserLibrary(sourceId);
+                        QString(), QString(), QStringLiteral("密码登录成功"), generation);
         }, -1, true, QStringLiteral("kugou.com"));
 }
 
@@ -1792,6 +2040,7 @@ void AuthManager::loginByPassword(const QString &sourceId, const QString &accoun
         emit loginStateChanged(sourceId, false, QStringLiteral("账号和密码都不能为空"));
         return;
     }
+    const quint64 generation = invalidateLogin(sourceId);
     // 进度提示只走 toast：loginStateChanged 是「登录结果」，ok=false 会被界面当成「登录失败」闪一下
     emit toast(QStringLiteral("正在登录 %1…")
                    .arg(SourceConfig::instance()->nameOf(sourceId)));
@@ -1840,7 +2089,8 @@ void AuthManager::loginByPassword(const QString &sourceId, const QString &accoun
     //          个密码会一直回 502「账号或密码错误」，这就是「密码登录也失败」的直接原因）
     //   body : type=1 / https=true / phone / countrycode=86 / password=md5 / remember=true
     //   Cookie: 设备指纹 + 匿名令牌 MUSIC_A + __csrf（与 body 的 csrf_token 一致）
-    neteaseBootstrap([this, sourceId, acc, phone, md5, isEmail](bool bootOk) {
+    neteaseBootstrap([this, sourceId, generation, acc, phone, md5, isEmail](bool bootOk) {
+        if (currentLoginGeneration(sourceId) != generation) return;
         if (!bootOk) {
             const QString msg = QStringLiteral("获取匿名设备令牌失败（网络异常），请稍后重试");
             emit loginStateChanged(sourceId, false, msg);
@@ -1867,9 +2117,11 @@ void AuthManager::loginByPassword(const QString &sourceId, const QString &accoun
 
         // 主端点不通（个别账号/灰度环境仍走老路径）时自动回退一次，别让用户只看到一个 502
         auto send = std::make_shared<std::function<void(const QString &)>>();
-        *send = [this, sourceId, payload, send](const QString &path) {
+        *send = [this, sourceId, generation, payload, send](const QString &path) {
+            if (currentLoginGeneration(sourceId) != generation) return;
             weapiPost(path, payload, neteaseCookieHeader(),
-            [this, sourceId, path, send](const HttpClient::Reply &r) {
+            [this, sourceId, generation, path, send](const HttpClient::Reply &r) {
+                if (currentLoginGeneration(sourceId) != generation) return;
                 if (!r.ok) {
                     const QString msg = QStringLiteral("登录失败：") + shortNetworkError(r.error);
                     emit loginStateChanged(sourceId, false, msg);
@@ -1902,8 +2154,8 @@ void AuthManager::loginByPassword(const QString &sourceId, const QString &accoun
                                                                 QStringLiteral("id")});
                 const QString nick = Json::firstString(profile, {QStringLiteral("nickname")});
                 const QString avatar = Json::firstString(profile, {QStringLiteral("avatarUrl")});
-                saveSession(sourceId, cookie, uid, nick, avatar, QStringLiteral("密码登录成功"));
-                syncUserLibrary(sourceId);
+                saveSession(sourceId, cookie, uid, nick, avatar,
+                            QStringLiteral("密码登录成功"), generation);
             });
         };
         (*send)(endpoint);
@@ -1917,6 +2169,7 @@ void AuthManager::loginByPassword(const QString &sourceId, const QString &accoun
 // 登录官网后，把 Cookie（至少含 MUSIC_U）粘回来，由应用保存登录态并同步歌单。
 void AuthManager::loginByCookie(const QString &sourceId, const QString &rawCookie)
 {
+    const quint64 generation = invalidateLogin(sourceId);
     // 浏览器开发者工具既能「Copy value」也能「Copy as cURL / 复制整行」，
     // 后者会带 "Cookie: " 前缀；不剥掉的话 onlyCookiePairs 会因为键名含空格
     // 把第一对（往往正是 MUSIC_U）丢掉。
@@ -1973,12 +2226,13 @@ void AuthManager::loginByCookie(const QString &sourceId, const QString &rawCooki
 
     // 保存登录态不依赖资料接口：即使 /account/get 被风控挡了，Cookie 仍然是有效的，
     // 先落盘、再异步补昵称/头像，避免用户白等一次请求。
-    auto commit = [this, sourceId, cookie](const QString &uid, const QString &nick,
-                                           const QString &avatar) {
+    auto commit = [this, sourceId, cookie, generation](const QString &uid, const QString &nick,
+                                                       const QString &avatar) {
+        if (currentLoginGeneration(sourceId) != generation) return;
         saveSession(sourceId, cookie, uid, nick, avatar,
                     nick.isEmpty() ? QStringLiteral("网页登录成功，登录态已导入")
-                                   : QStringLiteral("网页登录成功：") + nick);
-        syncUserLibrary(sourceId);
+                                   : QStringLiteral("网页登录成功：") + nick,
+                    generation);
     };
 
     if (sourceId != QLatin1String("netease")) {
@@ -2000,7 +2254,8 @@ void AuthManager::loginByCookie(const QString &sourceId, const QString &rawCooki
     payload.insert(QStringLiteral("csrf_token"),
                    cookieValue(cookie, {QStringLiteral("__csrf")}));
     weapiPost(QStringLiteral("/weapi/w/nuser/account/get"), payload, cookie,
-        [this, sourceId, cookie, commit](const HttpClient::Reply &r) {
+        [this, sourceId, generation, cookie, commit](const HttpClient::Reply &r) {
+            if (currentLoginGeneration(sourceId) != generation) return;
             QString uid, nick, avatar;
             if (r.ok) {
                 const QJsonValue root = Json::rootOf(r.json);
@@ -2091,11 +2346,11 @@ static void mergeCookieJar(QString &jar, const QString &add)
 
 void AuthManager::startMiguQr()
 {
+    const QString sourceId = QStringLiteral("migu");
+    const quint64 loginGeneration = invalidateLogin(sourceId);
+    if (!beginQrSession(sourceId, loginGeneration)) return;
+    const quint64 qrGeneration = m_qrGeneration;
     m_qrMode = QStringLiteral("migu");
-    m_qrSource = QStringLiteral("migu");
-    m_mgSession.clear();
-    m_mgCookie.clear();
-    m_qrImagePath.clear();
     m_qrHint = QStringLiteral("正在获取二维码…");
     m_qrStatus = QStringLiteral("准备中");
     emit qrChanged();
@@ -2105,38 +2360,45 @@ void AuthManager::startMiguQr()
     HttpClient::instance()->request(QStringLiteral("GET"),
         QUrl(QStringLiteral("https://passport.migu.cn/api/qrcWeb/qrcLogin?sourceid=208003")),
         h, QByteArray(),
-        [this](const HttpClient::Reply &r) {
-            if (m_qrMode != QLatin1String("migu")) return;
+        [this, sourceId, loginGeneration, qrGeneration](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("migu")) return;
             if (!r.ok) {
                 m_qrStatus = QStringLiteral("二维码获取失败：") + shortNetworkError(r.error);
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 return;
             }
             const QJsonValue root = Json::rootOf(r.json);
-            m_mgCookie = cookiesFromReply(r, QVariantMap(), QJsonValue());
+            const QString cookie = cookiesFromReply(r, QVariantMap(), QJsonValue());
             const QString status = Json::stringAt(root, QStringLiteral("status"));
             const QString dataUri = Json::firstString(root, {QStringLiteral("result.qrcUrl")});
-            m_mgSession = Json::firstString(root, {QStringLiteral("result.qrc_sessionid")});
-            if (status != QLatin1String("2000") || dataUri.isEmpty() || m_mgSession.isEmpty()) {
+            const QString session = Json::firstString(root, {QStringLiteral("result.qrc_sessionid")});
+            if (status != QLatin1String("2000") || dataUri.isEmpty() || session.isEmpty()) {
                 const QString msg = Json::firstString(root, {QStringLiteral("message")});
                 m_qrStatus = QStringLiteral("二维码获取失败：") +
                              (msg.isEmpty() ? QStringLiteral("门户未返回二维码") : msg);
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 emit toast(m_qrStatus);
                 return;
             }
+            m_mgCookie = cookie;
+            m_mgSession = session;
             // 门户直接下发 data:image/jpeg;base64，转存成本地 PNG 交给 QML 显示
             const QByteArray raw = QByteArray::fromBase64(
                 dataUri.mid(dataUri.indexOf(QLatin1Char(',')) + 1).toUtf8());
             QImage img;
             if (!img.loadFromData(raw)) {
                 m_qrStatus = QStringLiteral("二维码图片解析失败");
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 return;
             }
             const QString path = Settings::filePath(QStringLiteral("qr_migu.png"));
             if (!img.save(path, "PNG")) {
                 m_qrStatus = QStringLiteral("二维码图片保存失败");
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 return;
             }
@@ -2150,17 +2412,25 @@ void AuthManager::startMiguQr()
 
 void AuthManager::pollMiguQr()
 {
-    if (m_mgSession.isEmpty()) { m_poll.stop(); m_polling = false; return; }
     const QString sourceId = m_qrSource;
+    const quint64 loginGeneration = m_qrLoginGeneration;
+    const quint64 qrGeneration = m_qrGeneration;
+    const QString session = m_mgSession;
+    if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+        || m_qrMode != QLatin1String("migu") || session.isEmpty()) {
+        endQrSession(qrGeneration);
+        return;
+    }
     QVariantMap h = miguHeaders(miguQrReferer());
     h.remove(QStringLiteral("Content-Type"));
     if (!m_mgCookie.isEmpty()) h.insert(QStringLiteral("Cookie"), m_mgCookie);
     const QUrl url(QStringLiteral("https://passport.migu.cn/api/qrcWeb/qrcquery?qrc_sessionid=")
-                   + m_mgSession);
+                   + session);
 
     HttpClient::instance()->request(QStringLiteral("GET"), url, h, QByteArray(),
-        [this, sourceId](const HttpClient::Reply &r) {
-            if (!m_polling || m_qrMode != QLatin1String("migu")) return;
+        [this, sourceId, loginGeneration, qrGeneration, session](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("migu") || m_mgSession != session) return;
             if (!r.ok) {
                 m_qrStatus = QStringLiteral("轮询失败：") + shortNetworkError(r.error);
                 emit qrChanged();
@@ -2171,9 +2441,8 @@ void AuthManager::pollMiguQr()
             if (!root.isObject()) {
                 // 门户偶发空回复：不要把「等待扫码」误判成失败，连续失败再报
                 if (++m_qrEmptyStreak < 3) return;
-                m_poll.stop();
-                m_polling = false;
                 m_qrStatus = QStringLiteral("登录失败：门户返回了无法解析的响应");
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 emit toast(m_qrStatus);
                 return;
@@ -2201,18 +2470,16 @@ void AuthManager::pollMiguQr()
                 return;
             }
             if (status == QLatin1String("4072")) {
-                m_poll.stop();
-                m_polling = false;
                 m_qrStatus = QStringLiteral("二维码已过期，请重新获取");
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 return;
             }
             if (status != QLatin1String("2000")) {
-                m_poll.stop();
-                m_polling = false;
                 const QString msg = Json::firstString(root, {QStringLiteral("message")});
                 m_qrStatus = QStringLiteral("登录失败（%1）：%2")
                                  .arg(status, msg.isEmpty() ? QStringLiteral("门户拒绝了本次登录") : msg);
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 emit toast(m_qrStatus);
                 return;
@@ -2245,20 +2512,24 @@ void AuthManager::pollMiguQr()
             }
 
             if (m_mgCookie.trimmed().isEmpty()) {
-                emit loginStateChanged(sourceId, false,
-                    QStringLiteral("扫码已确认，但门户没有下发登录态 Cookie，请改用密码登录"));
-                emit toast(QStringLiteral("未取得咪咕登录态，请改用密码登录"));
+                m_qrStatus = QStringLiteral("扫码已确认，但门户没有下发登录态 Cookie，请改用密码登录");
+                endQrSession(qrGeneration);
+                emit loginStateChanged(sourceId, false, m_qrStatus);
+                emit qrChanged();
+                emit toast(m_qrStatus);
                 return;
             }
             saveSession(sourceId, m_mgCookie, uid, nick, avatar,
                         nick.isEmpty() ? QStringLiteral("咪咕已登录（扫码）")
-                                       : QStringLiteral("咪咕登录成功：") + nick);
+                                       : QStringLiteral("咪咕登录成功：") + nick,
+                        loginGeneration);
         });
 }
 
 void AuthManager::loginMiguPassword(const QString &sourceId, const QString &account,
                                     const QString &password)
 {
+    const quint64 generation = invalidateLogin(sourceId);
     const QString referer = QStringLiteral(
         "https://passport.migu.cn/login?sourceid=208003&apptype=0"
         "&relayState=https%3A%2F%2Fmusic.migu.cn%2Fv3%2F");
@@ -2266,7 +2537,8 @@ void AuthManager::loginMiguPassword(const QString &sourceId, const QString &acco
     HttpClient::instance()->request(QStringLiteral("POST"),
         QUrl(QStringLiteral("https://passport.migu.cn/password/publickey")),
         miguHeaders(referer), QByteArray("sourceID=208003&appType=0"),
-        [this, sourceId, account, password, referer](const HttpClient::Reply &pk) {
+        [this, sourceId, generation, account, password, referer](const HttpClient::Reply &pk) {
+            if (currentLoginGeneration(sourceId) != generation) return;
             if (!pk.ok) {
                 const QString msg = QStringLiteral("取咪咕登录公钥失败：") + shortNetworkError(pk.error);
                 emit loginStateChanged(sourceId, false, msg);
@@ -2303,7 +2575,8 @@ void AuthManager::loginMiguPassword(const QString &sourceId, const QString &acco
             // 交给 Qt 自动跟随只能拿到最后一跳，容易漏掉登录票据
             HttpClient::instance()->request(QStringLiteral("POST"),
                 QUrl(QStringLiteral("https://passport.migu.cn/authn")), miguHeaders(referer), form,
-                [this, sourceId](const HttpClient::Reply &r) {
+                [this, sourceId, generation](const HttpClient::Reply &r) {
+                    if (currentLoginGeneration(sourceId) != generation) return;
                     const bool redirect = r.status >= 300 && r.status < 400;
                     QString cookie = cookiesFromReply(r, QVariantMap(), QJsonValue());
                     if (r.ok && r.json.isObject()) {
@@ -2331,23 +2604,22 @@ void AuthManager::loginMiguPassword(const QString &sourceId, const QString &acco
 
                     if (!redirect) {   // 异步接口直接回 2000，本地会话 Cookie 已经在手
                         saveSession(sourceId, cookie, QString(), QStringLiteral("咪咕用户"),
-                                    QString(), QStringLiteral("密码登录成功"));
-                        syncUserLibrary(sourceId);
+                                    QString(), QStringLiteral("密码登录成功"), generation);
                         return;
                     }
                     // 3xx：再走一跳把 music.migu.cn 侧的 Cookie 一并收下
                     const QString location = r.headers.value(QStringLiteral("location"));
                     if (location.isEmpty() || cookie.trimmed().isEmpty()) {
                         saveSession(sourceId, cookie, QString(), QStringLiteral("咪咕用户"),
-                                    QString(), QStringLiteral("密码登录成功"));
-                        syncUserLibrary(sourceId);
+                                    QString(), QStringLiteral("密码登录成功"), generation);
                         return;
                     }
                     QVariantMap h = miguHeaders(QStringLiteral("https://passport.migu.cn/"));
                     h.insert(QStringLiteral("Cookie"), cookie);
                     HttpClient::instance()->request(QStringLiteral("GET"), QUrl(location), h,
                         QByteArray(),
-                        [this, sourceId, cookie](const HttpClient::Reply &fin) {
+                        [this, sourceId, generation, cookie](const HttpClient::Reply &fin) {
+                            if (currentLoginGeneration(sourceId) != generation) return;
                             QString all = cookie;
                             for (const QString &c : fin.setCookies) {
                                 const QString kv = c.section(QLatin1Char(';'), 0, 0).trimmed();
@@ -2363,8 +2635,7 @@ void AuthManager::loginMiguPassword(const QString &sourceId, const QString &acco
                                 all = parts.join(QStringLiteral("; "));
                             }
                             saveSession(sourceId, all, QString(), QStringLiteral("咪咕用户"),
-                                        QString(), QStringLiteral("密码登录成功"));
-                            syncUserLibrary(sourceId);
+                                        QString(), QStringLiteral("密码登录成功"), generation);
                         },
                         -1, false);
                 },
@@ -2507,9 +2778,11 @@ void AuthManager::refreshKuwoCaptcha()
 
 // 统一收口：data.cookies → 本地登录态。昵称/头像站点也放在 Cookie 里（uname3 / pic3），
 // 所以不必再补一次资料请求；酷我的 www 用户接口对非浏览器指纹是拒绝的。
-void AuthManager::finishKuwoLogin(const HttpClient::Reply &r, const QString &okMessage)
+void AuthManager::finishKuwoLogin(const HttpClient::Reply &r, const QString &okMessage,
+                                  quint64 expectedGeneration)
 {
     constexpr auto kSource = "kuwo";
+    if (currentLoginGeneration(QString::fromLatin1(kSource)) != expectedGeneration) return;
     const QJsonValue root = Json::rootOf(r.json);
     const QString cookie = kuwoCookies(root, r);
     if (cookie.isEmpty()) {
@@ -2522,6 +2795,7 @@ void AuthManager::finishKuwoLogin(const HttpClient::Reply &r, const QString &okM
     m_captchaToken.clear();
     m_captchaImagePath.clear();     // 这张码已经消费掉了，界面下次进入要重新取
     m_kwTm.clear();
+    m_kwPhone.clear();
     emit captchaChanged();
 
     const QString uid = cookieValue(cookie, {QStringLiteral("userid")});
@@ -2529,13 +2803,19 @@ void AuthManager::finishKuwoLogin(const HttpClient::Reply &r, const QString &okM
                                        QStringLiteral("UserName")});
     if (!nick.isEmpty()) nick = QUrl::fromPercentEncoding(nick.toUtf8());
     const QString avatar = cookieValue(cookie, {QStringLiteral("pic3"), QStringLiteral("pic")});
-    saveSession(QString::fromLatin1(kSource), cookie, uid, nick, avatar, okMessage);
+    if (saveSession(QString::fromLatin1(kSource), cookie, uid, nick, avatar,
+                    okMessage, expectedGeneration)
+        && m_phoneCodeGenerations.value(QString::fromLatin1(kSource), 0) == expectedGeneration) {
+        m_phoneCodeGenerations.remove(QString::fromLatin1(kSource));
+        m_phoneCodePhones.remove(QString::fromLatin1(kSource));
+    }
 }
 
 void AuthManager::loginKuwoPassword(const QString &account, const QString &password,
                                     const QString &captcha)
 {
     constexpr auto kSource = "kuwo";
+    const quint64 generation = invalidateLogin(QString::fromLatin1(kSource));
     const QString code = captcha.trimmed();
     if (code.isEmpty()) {
         emit loginStateChanged(QString::fromLatin1(kSource), false,
@@ -2557,7 +2837,8 @@ void AuthManager::loginKuwoPassword(const QString &account, const QString &passw
     HttpClient::instance()->request(QStringLiteral("POST"),
         QUrl(QStringLiteral("https://wapi.kuwo.cn/api/www/login/loginByKw")),
         kuwoApiHeaders(), QJsonDocument(body).toJson(QJsonDocument::Compact),
-        [this](const HttpClient::Reply &r) {
+        [this, generation](const HttpClient::Reply &r) {
+            if (currentLoginGeneration(QStringLiteral("kuwo")) != generation) return;
             if (!r.ok) {
                 const QString msg = QStringLiteral("登录失败：") + shortNetworkError(r.error);
                 emit loginStateChanged(QStringLiteral("kuwo"), false, msg);
@@ -2568,7 +2849,7 @@ void AuthManager::loginKuwoPassword(const QString &account, const QString &passw
             const QJsonValue root = Json::rootOf(r.json);
             const QString c = Json::stringAt(root, QStringLiteral("code"));
             if (c == QLatin1String("200")) {
-                finishKuwoLogin(r, QStringLiteral("酷我登录成功"));
+                finishKuwoLogin(r, QStringLiteral("酷我登录成功"), generation);
                 return;
             }
             m_captchaText.clear();
@@ -2582,6 +2863,7 @@ void AuthManager::loginKuwoPassword(const QString &account, const QString &passw
 
 void AuthManager::sendKuwoSms(const QString &phone, const QString &captcha)
 {
+    const quint64 generation = invalidateLogin(QStringLiteral("kuwo"));
     if (phone.size() != 11 || !phone.at(0).isDigit()) {
         const QString msg = QStringLiteral("请输入 11 位中国大陆手机号");
         emit loginStateChanged(QStringLiteral("kuwo"), false, msg);
@@ -2597,6 +2879,7 @@ void AuthManager::sendKuwoSms(const QString &phone, const QString &captcha)
     }
     m_captchaText = captcha.trimmed();
     m_kwPhone = phone;
+    m_kwTm.clear();
     QJsonObject body{
         {QStringLiteral("mobile"), phone},
         {QStringLiteral("verifyCode"), m_captchaText},
@@ -2606,7 +2889,8 @@ void AuthManager::sendKuwoSms(const QString &phone, const QString &captcha)
     HttpClient::instance()->request(QStringLiteral("POST"),
         QUrl(QStringLiteral("https://wapi.kuwo.cn/api/sms/mobileLoginCode")),
         kuwoApiHeaders(), QJsonDocument(body).toJson(QJsonDocument::Compact),
-        [this](const HttpClient::Reply &r) {
+        [this, generation](const HttpClient::Reply &r) {
+            if (currentLoginGeneration(QStringLiteral("kuwo")) != generation) return;
             if (!r.ok) {
                 const QString msg = QStringLiteral("短信验证码发送失败：") + shortNetworkError(r.error);
                 emit loginStateChanged(QStringLiteral("kuwo"), false, msg);
@@ -2618,6 +2902,8 @@ void AuthManager::sendKuwoSms(const QString &phone, const QString &captcha)
             if (c == QLatin1String("200")) {
                 // tm 是这次发码的票据，登录时要原样带回；图形验证码也要保留到登录那一步
                 m_kwTm = Json::stringAt(root, QStringLiteral("data.tm"));
+                m_phoneCodeGenerations.insert(QStringLiteral("kuwo"), generation);
+                m_phoneCodePhones.insert(QStringLiteral("kuwo"), m_kwPhone);
                 emit toast(QStringLiteral("短信验证码已发送"));
                 return;
             }
@@ -2632,6 +2918,16 @@ void AuthManager::sendKuwoSms(const QString &phone, const QString &captcha)
 
 void AuthManager::loginKuwoPhone(const QString &phone, const QString &smsCode)
 {
+    const quint64 pendingGeneration = m_phoneCodeGenerations.value(QStringLiteral("kuwo"), 0);
+    const bool continuesSms = pendingGeneration != 0
+        && currentLoginGeneration(QStringLiteral("kuwo")) == pendingGeneration
+        && m_kwPhone == phone && !m_kwTm.isEmpty()
+        && m_phoneCodePhones.value(QStringLiteral("kuwo")) == phone;
+    const quint64 generation = continuesSms
+        ? pendingGeneration : invalidateLogin(QStringLiteral("kuwo"));
+    quint64 &attemptSequence = m_phoneAttemptSequences[QStringLiteral("kuwo")];
+    attemptSequence = nextGeneration(attemptSequence);
+    const quint64 attempt = attemptSequence;
     if (phone.size() != 11) {
         const QString msg = QStringLiteral("请输入 11 位中国大陆手机号");
         emit loginStateChanged(QStringLiteral("kuwo"), false, msg);
@@ -2658,7 +2954,9 @@ void AuthManager::loginKuwoPhone(const QString &phone, const QString &smsCode)
     HttpClient::instance()->request(QStringLiteral("POST"),
         QUrl(QStringLiteral("https://wapi.kuwo.cn/api/www/login/loginByMobile")),
         kuwoApiHeaders(), QJsonDocument(body).toJson(QJsonDocument::Compact),
-        [this](const HttpClient::Reply &r) {
+        [this, generation, attempt](const HttpClient::Reply &r) {
+            if (currentLoginGeneration(QStringLiteral("kuwo")) != generation
+                || m_phoneAttemptSequences.value(QStringLiteral("kuwo"), 0) != attempt) return;
             if (!r.ok) {
                 const QString msg = QStringLiteral("登录失败：") + shortNetworkError(r.error);
                 emit loginStateChanged(QStringLiteral("kuwo"), false, msg);
@@ -2668,7 +2966,7 @@ void AuthManager::loginKuwoPhone(const QString &phone, const QString &smsCode)
             const QJsonValue root = Json::rootOf(r.json);
             const QString c = Json::stringAt(root, QStringLiteral("code"));
             if (c == QLatin1String("200")) {
-                finishKuwoLogin(r, QStringLiteral("酷我手机号登录成功"));
+                finishKuwoLogin(r, QStringLiteral("酷我手机号登录成功"), generation);
                 return;
             }
             m_captchaText.clear();
@@ -2693,11 +2991,10 @@ void AuthManager::loginKuwoPhone(const QString &phone, const QString &smsCode)
 void AuthManager::startQishuiQr()
 {
     const QString sourceId = QStringLiteral("qishui");
+    const quint64 loginGeneration = invalidateLogin(sourceId);
+    if (!beginQrSession(sourceId, loginGeneration)) return;
+    const quint64 qrGeneration = m_qrGeneration;
     m_qrMode = sourceId;
-    m_qrSource = sourceId;
-    m_qsToken.clear();
-    m_qsCookies.clear();
-    m_qrImagePath.clear();
     emit qrChanged();
 
     const UserApiConfig cfg = UserApi::instance()->config(sourceId);
@@ -2728,10 +3025,12 @@ void AuthManager::startQishuiQr()
         headers.insert(QStringLiteral("Accept"), QStringLiteral("application/json, text/plain, */*"));
         HttpClient::instance()->request(
             QStringLiteral("GET"), url, headers, QByteArray(),
-            [this, sourceId](const HttpClient::Reply &r) {
-                if (m_qrMode != QLatin1String("qishui")) return;
+            [this, sourceId, loginGeneration, qrGeneration](const HttpClient::Reply &r) {
+                if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                    || m_qrMode != QLatin1String("qishui") || !m_qsBase.isEmpty()) return;
                 if (!r.ok) {
                     m_qrStatus = QStringLiteral("二维码获取失败：") + shortNetworkError(r.error);
+                    endQrSession(qrGeneration);
                     emit qrChanged();
                     return;
                 }
@@ -2754,6 +3053,7 @@ void AuthManager::startQishuiQr()
                     QStringLiteral("login_url"), QStringLiteral("url")});
                 if (m_qsToken.isEmpty() || qr.isEmpty()) {
                     m_qrStatus = QStringLiteral("账号接口未返回二维码（缺 token 或 qrcode 字段）");
+                    endQrSession(qrGeneration);
                     emit qrChanged();
                     emit toast(m_qrStatus);
                     return;
@@ -2761,6 +3061,11 @@ void AuthManager::startQishuiQr()
                 m_qrHint = QStringLiteral("请用汽水音乐 App 扫一扫（抖音 App 不识别该码）");
                 m_qrStatus = QStringLiteral("等待扫码");
                 if (!saveQrDataUrl(qr, sourceId)) generateQrImage(qr, sourceId);
+                if (m_qrImagePath.isEmpty()) {
+                    endQrSession(qrGeneration);
+                    emit qrChanged();
+                    return;
+                }
                 // generateQrImage 只负责画图；轮询由这里显式启动（token 已在手）
                 startQrPolling();
                 emit qrChanged();
@@ -2776,10 +3081,12 @@ void AuthManager::startQishuiQr()
 
     HttpClient::instance()->request(
         QStringLiteral("GET"), QUrl(base + QStringLiteral("/auth/qrcode")), QVariantMap(),
-        QByteArray(), [this](const HttpClient::Reply &r) {
-            if (m_qrMode != QLatin1String("qishui")) return;
+        QByteArray(), [this, sourceId, loginGeneration, qrGeneration, base](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("qishui") || m_qsBase != base) return;
             if (!r.ok) {
                 m_qrStatus = QStringLiteral("二维码获取失败：") + shortNetworkError(r.error);
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 return;
             }
@@ -2794,6 +3101,7 @@ void AuthManager::startQishuiQr()
                 QStringLiteral("url"), QStringLiteral("login_url")});
             if (m_qsToken.isEmpty() || url.isEmpty()) {
                 m_qrStatus = QStringLiteral("账号 API 服务未返回二维码（缺 token 或 qrcode 字段）");
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 emit toast(m_qrStatus);
                 return;
@@ -2801,6 +3109,11 @@ void AuthManager::startQishuiQr()
             m_qrHint = QStringLiteral("请用汽水音乐 App 扫码");
             m_qrStatus = QStringLiteral("等待扫码");
             generateQrImage(url, QStringLiteral("qishui"));
+            if (m_qrImagePath.isEmpty()) {
+                endQrSession(qrGeneration);
+                emit qrChanged();
+                return;
+            }
             // generateQrImage 只负责画图；轮询由这里显式启动（token 已在手）
             startQrPolling();
             emit qrChanged();
@@ -2809,15 +3122,20 @@ void AuthManager::startQishuiQr()
 
 void AuthManager::pollQishuiQr()
 {
-    if (!m_polling || m_qsToken.isEmpty()) {
-        m_poll.stop();
-        m_polling = false;
+    const QString sourceId = m_qrSource;
+    const quint64 loginGeneration = m_qrLoginGeneration;
+    const quint64 qrGeneration = m_qrGeneration;
+    // token/base 也必须属于本轮；旧请求返回时不能借新会话的 Cookie 继续换号。
+    const QString token = m_qsToken;
+    const QString base = m_qsBase;
+    if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+        || m_qrMode != QLatin1String("qishui")) {
+        endQrSession(qrGeneration);
         return;
     }
+    // 已进入成功后的资料/换号链时不再发新 poll，但不能因此否定仍在飞的链。
+    if (!m_polling || token.isEmpty()) return;
     // 未配置自建账号 API 服务 → 官方 passport/web/check_qrconnect；已配置 → 服务侧 /auth/qrcode/status
-    // 记下本轮 token：刷新二维码后，上一轮还在飞的请求（最长 20s）会带着旧 token 回来，
-    // 若直接按「旧码已过期」处理，会把刚生成的新一轮轮询直接停掉，表现为「刚刷新就过期」。
-    const QString token = m_qsToken;
     if (m_qsBase.isEmpty()) {
         QUrl url(QStringLiteral("https://api.qishui.com/passport/web/check_qrconnect/"));
         QUrlQuery query;
@@ -2842,10 +3160,11 @@ void AuthManager::pollQishuiQr()
         const QByteArray formBody = bodyQuery.toString().toUtf8();
         HttpClient::instance()->request(
             QStringLiteral("POST"), url, headers, formBody,
-            [this, token](const HttpClient::Reply &r) {
-                if (m_qrMode != QLatin1String("qishui") || !m_polling) return;
-                if (token != m_qsToken) return;   // 旧码的迟到应答，丢弃
-                if (m_qsBase.isEmpty()) {
+            [this, sourceId, loginGeneration, qrGeneration, token, base](const HttpClient::Reply &r) {
+                if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                    || m_qrMode != QLatin1String("qishui") || m_qsToken != token
+                    || m_qsBase != base) return;
+                if (base.isEmpty()) {
                     // 官方 passport 链路：确认后 sessionid 可能在 Set-Cookie，也可能在
                     // data.auth.sessionid，统一交给 parseQishuiPoll 收口
                     QMap<QString, QString> cookies = m_qsCookies;
@@ -2858,17 +3177,20 @@ void AuthManager::pollQishuiQr()
                     m_qsCookies = cookies;
                     const QishuiPoll poll = parseQishuiPoll(r, cookies);
                     handleQishuiPollReply(r, poll.sessionId, poll.status,
-                                          poll.errorCode, poll.description);
+                                          poll.errorCode, poll.description, sourceId,
+                                          loginGeneration, qrGeneration, token);
                     return;
                 }
-                const QJsonObject body{{QStringLiteral("token"), m_qsToken}};
+                const QJsonObject body{{QStringLiteral("token"), token}};
                 QVariantMap jsonHeaders;
                 jsonHeaders.insert(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
                 HttpClient::instance()->request(
-                    QStringLiteral("POST"), QUrl(m_qsBase + QStringLiteral("/auth/qrcode/status")), jsonHeaders,
+                    QStringLiteral("POST"), QUrl(base + QStringLiteral("/auth/qrcode/status")), jsonHeaders,
                     QJsonDocument(body).toJson(QJsonDocument::Compact),
-                    [this](const HttpClient::Reply &r) {
-                        if (m_qrMode != QLatin1String("qishui") || !m_polling) return;
+                    [this, sourceId, loginGeneration, qrGeneration, token, base](const HttpClient::Reply &r) {
+                        if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                            || m_qrMode != QLatin1String("qishui") || m_qsToken != token
+                            || m_qsBase != base) return;
                         if (!r.ok) {
                             // 单次网络抖动不该终止会话，继续下一轮
                             m_qrStatus = QStringLiteral("轮询失败，正在重试：") + shortNetworkError(r.error);
@@ -2888,20 +3210,23 @@ void AuthManager::pollQishuiQr()
                             QStringLiteral("description"), QStringLiteral("message")});
                         const int code =
                             data.value(QStringLiteral("error_code")).toInt();
-                        handleQishuiPollReply(r, session, st, code, desc);
+                        handleQishuiPollReply(r, session, st, code, desc, sourceId,
+                                              loginGeneration, qrGeneration, token);
                     });
                 return;
             });
         return;
     }
-    const QJsonObject body{{QStringLiteral("token"), m_qsToken}};
+    const QJsonObject body{{QStringLiteral("token"), token}};
     QVariantMap headers;
     headers.insert(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
     HttpClient::instance()->request(
-        QStringLiteral("POST"), QUrl(m_qsBase + QStringLiteral("/auth/qrcode/status")), headers,
-        QJsonDocument(body).toJson(QJsonDocument::Compact), [this, token](const HttpClient::Reply &r) {
-            if (m_qrMode != QLatin1String("qishui") || !m_polling) return;
-            if (token != m_qsToken) return;   // 旧码的迟到应答，丢弃
+        QStringLiteral("POST"), QUrl(base + QStringLiteral("/auth/qrcode/status")), headers,
+        QJsonDocument(body).toJson(QJsonDocument::Compact),
+        [this, sourceId, loginGeneration, qrGeneration, token, base](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("qishui") || m_qsToken != token
+                || m_qsBase != base) return;
             if (!r.ok) {
                 // 单次网络抖动不该终止会话，继续下一轮
                 m_qrStatus = QStringLiteral("轮询失败，正在重试：") + shortNetworkError(r.error);
@@ -2925,20 +3250,26 @@ void AuthManager::pollQishuiQr()
             if (!session.isEmpty()) {
                 m_poll.stop();
                 m_polling = false;
+                m_qsToken.clear();
                 m_qrStatus = QStringLiteral("扫码成功，正在读取账号…");
                 emit qrChanged();
-                finishQishuiLogin(session);
+                finishQishuiLogin(session, sourceId, loginGeneration, qrGeneration,
+                                  base, token);
                 return;
             }
-            handleQishuiPollReply(r, session, st, code, desc);
+            handleQishuiPollReply(r, session, st, code, desc, sourceId,
+                                  loginGeneration, qrGeneration, token);
         });
 }
 
 void AuthManager::handleQishuiPollReply(const HttpClient::Reply &r, const QString &sessionId,
                                        const QString &st, int errorCode,
-                                       const QString &description)
+                                       const QString &description, const QString &sourceId,
+                                       quint64 loginGeneration, quint64 qrGeneration,
+                                       const QString &token)
 {
-    if (m_qrMode != QLatin1String("qishui") || !m_polling) return;
+    if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+        || m_qrMode != QLatin1String("qishui") || m_qsToken != token) return;
     if (!r.ok) {
         // 单次网络抖动不该终止会话，继续下一轮
         m_qrStatus = QStringLiteral("轮询失败，正在重试：") + shortNetworkError(r.error);
@@ -2952,9 +3283,12 @@ void AuthManager::handleQishuiPollReply(const HttpClient::Reply &r, const QStrin
     if (!sessionId.isEmpty()) {
         m_poll.stop();
         m_polling = false;
+        // 消费本轮 token：仍在飞的同轮 poll 回调从此失效，资料请求使用本地快照。
+        m_qsToken.clear();
         m_qrStatus = QStringLiteral("扫码成功，正在读取账号…");
         emit qrChanged();
-        finishQishuiLogin(sessionId);
+        finishQishuiLogin(sessionId, sourceId, loginGeneration, qrGeneration,
+                          m_qsBase, token);
         return;
     }
     // error_code=7「访问太频繁」：服务端限的是请求频次，不是二维码状态。实测每 2 秒
@@ -2978,10 +3312,8 @@ void AuthManager::handleQishuiPollReply(const HttpClient::Reply &r, const QStrin
         || st.contains(QLatin1String("expire")) || st.contains(QStringLiteral("过期"))
         || st.contains(QLatin1String("timeout")) || st.contains(QLatin1String("invalid"))
         || st.contains(QLatin1String("cancel"))) {
-        m_poll.stop();
-        m_polling = false;
-        m_qrImagePath.clear();
         m_qrStatus = QStringLiteral("二维码已过期，请重新获取");
+        endQrSession(qrGeneration);
         emit qrChanged();
         return;
     }
@@ -2998,14 +3330,18 @@ void AuthManager::handleQishuiPollReply(const HttpClient::Reply &r, const QStrin
 }
 
 // 用 sessionid 换账号资料：资料只是锦上添花，拿不到也要把会话存下来
-void AuthManager::finishQishuiLogin(const QString &sessionId)
+void AuthManager::finishQishuiLogin(const QString &sessionId, const QString &sourceId,
+                                   quint64 loginGeneration, quint64 qrGeneration,
+                                   const QString &base, const QString &token)
 {
-    const QString sourceId = QStringLiteral("qishui");
+    if (sessionId.isEmpty() || token.isEmpty()
+        || !qrCurrent(sourceId, loginGeneration, qrGeneration)
+        || m_qrMode != QLatin1String("qishui") || m_qsBase != base) return;
     QString cookie = QStringLiteral("sessionid=") + sessionId;
     QString uid;
     QString nick;
     QString avatar;
-    if (m_qsBase.isEmpty()) {
+    if (base.isEmpty()) {
         // 官方直连链路：GET /luna/me?aid=386088&device_platform=web&channel=pc_web。
         // 不能用 /luna/pc/me：那一族要求官方 bdms.node 逐请求生成的 X-Helios/X-Medusa，
         // 缺签名一律 1000006 ERR_REQUEST_FORBIDDEN；/luna/me 带同一 sessionid 即可取资料。
@@ -3014,7 +3350,10 @@ void AuthManager::finishQishuiLogin(const QString &sessionId)
             QUrl(QStringLiteral("https://api.qishui.com/luna/me")
                  + QStringLiteral("?aid=386088&device_platform=web&channel=pc_web")),
             qishuiPassportHeaders(cookie), QByteArray(),
-            [this, sourceId, sessionId, uid, nick, avatar, cookie](const HttpClient::Reply &r) mutable {
+            [this, sourceId, loginGeneration, qrGeneration, base, sessionId,
+             uid, nick, avatar, cookie](const HttpClient::Reply &r) mutable {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("qishui") || m_qsBase != base) return;
             if (r.ok) {
                 QJsonObject root = Json::rootOf(r.json).toObject();
                 const QJsonObject data = root.contains(QStringLiteral("data"))
@@ -3052,7 +3391,8 @@ void AuthManager::finishQishuiLogin(const QString &sessionId)
             emit qrChanged();
             saveSession(sourceId, onlyCookiePairs(cookie), uid, nick, avatar,
                         nick.isEmpty() ? QStringLiteral("汽水音乐登录成功")
-                                       : QStringLiteral("汽水音乐登录成功：") + nick);
+                                       : QStringLiteral("汽水音乐登录成功：") + nick,
+                        loginGeneration);
             });
             return;
         }
@@ -3061,9 +3401,12 @@ void AuthManager::finishQishuiLogin(const QString &sessionId)
     QVariantMap headers;
     headers.insert(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
     HttpClient::instance()->request(
-        QStringLiteral("POST"), QUrl(m_qsBase + QStringLiteral("/auth/me")), headers,
+        QStringLiteral("POST"), QUrl(base + QStringLiteral("/auth/me")), headers,
         QJsonDocument(body).toJson(QJsonDocument::Compact),
-        [this, sourceId, sessionId, uid, nick, avatar, cookie](const HttpClient::Reply &r) mutable {
+        [this, sourceId, loginGeneration, qrGeneration, base, sessionId,
+         uid, nick, avatar, cookie](const HttpClient::Reply &r) mutable {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("qishui") || m_qsBase != base) return;
             if (r.ok) {
                 QJsonObject root = Json::rootOf(r.json).toObject();
                 const QJsonObject data = root.contains(QStringLiteral("data"))
@@ -3090,7 +3433,8 @@ void AuthManager::finishQishuiLogin(const QString &sessionId)
             emit qrChanged();
             saveSession(sourceId, onlyCookiePairs(cookie), uid, nick, avatar,
                         nick.isEmpty() ? QStringLiteral("汽水音乐登录成功")
-                                       : QStringLiteral("汽水音乐登录成功：") + nick);
+                                       : QStringLiteral("汽水音乐登录成功：") + nick,
+                        loginGeneration);
         });
 }
 
@@ -3105,11 +3449,11 @@ void AuthManager::finishQishuiLogin(const QString &sessionId)
 // QQ / 微博同理，但 callback 是 HTML 弹窗回调，没有 WebEngine 收不到，故只内置微信。
 void AuthManager::startKuwoWxQr()
 {
+    const QString sourceId = QStringLiteral("kuwo");
+    const quint64 loginGeneration = invalidateLogin(sourceId);
+    if (!beginQrSession(sourceId, loginGeneration)) return;
+    const quint64 qrGeneration = m_qrGeneration;
     m_qrMode = QStringLiteral("kuwo_wx");
-    m_qrSource = QStringLiteral("kuwo");
-    m_kwUuid.clear();
-    m_kwPollBusy = false;
-    m_qrImagePath.clear();
     m_qrHint = QStringLiteral("正在获取微信二维码…");
     m_qrStatus = QStringLiteral("准备中");
     emit qrChanged();
@@ -3125,8 +3469,9 @@ void AuthManager::startKuwoWxQr()
     QVariantMap h = kuwoApiHeaders(QStringLiteral("https://open.weixin.qq.com/"));
     h.remove(QStringLiteral("Content-Type"));
     HttpClient::instance()->request(QStringLiteral("GET"), QUrl(url), h, QByteArray(),
-        [this](const HttpClient::Reply &r) {
-            if (m_qrMode != QLatin1String("kuwo_wx")) return;
+        [this, sourceId, loginGeneration, qrGeneration](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("kuwo_wx")) return;
             const QString html = QString::fromUtf8(r.body);
             static const QRegularExpression re(QStringLiteral("/connect/qrcode/([A-Za-z0-9_\\-]+)"));
             const QString uuid = re.match(html).captured(1);
@@ -3134,6 +3479,7 @@ void AuthManager::startKuwoWxQr()
                 m_qrStatus = QStringLiteral("微信二维码获取失败：") +
                              (r.ok ? QStringLiteral("开放平台未返回 uuid")
                                    : shortNetworkError(r.error));
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 emit toast(m_qrStatus);
                 return;
@@ -3144,11 +3490,13 @@ void AuthManager::startKuwoWxQr()
             HttpClient::instance()->request(QStringLiteral("GET"),
                 QUrl(QStringLiteral("https://open.weixin.qq.com/connect/qrcode/") + uuid), ih,
                 QByteArray(),
-                [this, uuid](const HttpClient::Reply &ir) {
-                    if (m_qrMode != QLatin1String("kuwo_wx") || m_kwUuid != uuid) return;
+                [this, sourceId, loginGeneration, qrGeneration, uuid](const HttpClient::Reply &ir) {
+                    if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                        || m_qrMode != QLatin1String("kuwo_wx") || m_kwUuid != uuid) return;
                     if (!ir.ok || ir.body.isEmpty()) {
                         m_qrStatus = QStringLiteral("微信二维码下载失败：") +
                                      shortNetworkError(ir.error);
+                        endQrSession(qrGeneration);
                         emit qrChanged();
                         return;
                     }
@@ -3156,6 +3504,7 @@ void AuthManager::startKuwoWxQr()
                     QFile f(path);
                     if (!f.open(QIODevice::WriteOnly)) {
                         m_qrStatus = QStringLiteral("二维码保存失败");
+                        endQrSession(qrGeneration);
                         emit qrChanged();
                         return;
                     }
@@ -3172,20 +3521,30 @@ void AuthManager::startKuwoWxQr()
 
 void AuthManager::pollKuwoWx()
 {
-    if (m_kwUuid.isEmpty()) { m_poll.stop(); m_polling = false; return; }
+    const QString sourceId = m_qrSource;
+    const quint64 loginGeneration = m_qrLoginGeneration;
+    const quint64 qrGeneration = m_qrGeneration;
+    const QString uuid = m_kwUuid;
+    if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+        || m_qrMode != QLatin1String("kuwo_wx")) {
+        endQrSession(qrGeneration);
+        return;
+    }
+    // 成功后由 exchange 链接管；停 poll 不代表 exchange 的代次失效。
+    if (!m_polling || uuid.isEmpty()) return;
     // 长轮询最长会挂 30s，2s 定时器会叠满请求：上一发没回来就跳过这一拍
     if (m_kwPollBusy) return;
     m_kwPollBusy = true;
-    const QString uuid = m_kwUuid;
     const QString url = QStringLiteral("https://long.open.weixin.qq.com/connect/l/qrconnect"
                                        "?uuid=%1&_=%2")
         .arg(uuid).arg(QDateTime::currentMSecsSinceEpoch());
     QVariantMap h = kuwoApiHeaders(QStringLiteral("https://open.weixin.qq.com/"));
     h.remove(QStringLiteral("Content-Type"));
     HttpClient::instance()->request(QStringLiteral("GET"), QUrl(url), h, QByteArray(),
-        [this, uuid](const HttpClient::Reply &r) {
+        [this, sourceId, loginGeneration, qrGeneration, uuid](const HttpClient::Reply &r) {
+            if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                || m_qrMode != QLatin1String("kuwo_wx") || m_kwUuid != uuid) return;
             m_kwPollBusy = false;
-            if (!m_polling || m_qrMode != QLatin1String("kuwo_wx") || m_kwUuid != uuid) return;
             const QString body = QString::fromUtf8(r.body);
             // 长轮询请求超时/空回复都属于「继续等」，不要把它说成失败
             if (body.trimmed().isEmpty()) return;
@@ -3198,9 +3557,10 @@ void AuthManager::pollKuwoWx()
                 if (code.isEmpty()) return;      // 已确认但 code 还没下发，下一拍再取
                 m_poll.stop();
                 m_polling = false;
+                m_kwUuid.clear();   // 消费凭据，使同轮晚到 poll 不再进入 exchange
                 m_qrStatus = QStringLiteral("微信已确认，正在换取酷我登录态…");
                 emit qrChanged();
-                kuwoWxExchange(code);
+                kuwoWxExchange(code, sourceId, loginGeneration, qrGeneration, uuid);
                 return;
             }
             if (ec == QLatin1String("404")) {
@@ -3211,17 +3571,14 @@ void AuthManager::pollKuwoWx()
                 return;
             }
             if (ec == QLatin1String("403")) {
-                m_poll.stop();
-                m_polling = false;
                 m_qrStatus = QStringLiteral("已在手机上取消登录，请重新获取二维码");
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 return;
             }
             if (ec == QLatin1String("402")) {
-                m_poll.stop();
-                m_polling = false;
-                m_qrImagePath.clear();
                 m_qrStatus = QStringLiteral("二维码已过期，请重新获取");
+                endQrSession(qrGeneration);
                 emit qrChanged();
                 return;
             }
@@ -3230,19 +3587,28 @@ void AuthManager::pollKuwoWx()
         32000);
 }
 
-void AuthManager::kuwoWxExchange(const QString &code)
+void AuthManager::kuwoWxExchange(const QString &code, const QString &sourceId,
+                                quint64 loginGeneration, quint64 qrGeneration,
+                                const QString &uuid)
 {
+    if (code.isEmpty() || uuid.isEmpty()
+        || !qrCurrent(sourceId, loginGeneration, qrGeneration)
+        || m_qrMode != QLatin1String("kuwo_wx")) return;
     const QString callback = QStringLiteral("http://i.kuwo.cn/US/platform/WeixinCallback.jsp?f=web"
                                             "&callbackUrl=")
         + QString::fromLatin1(QUrl::toPercentEncoding(QStringLiteral("http://www.kuwo.cn/callback")));
     auto jar = std::make_shared<QMap<QString, QString>>();
     auto hop = std::make_shared<std::function<void(const QString &, int)>>();
-    *hop = [this, jar, hop](const QString &url, int depth) {
+    *hop = [this, sourceId, loginGeneration, qrGeneration, uuid, jar, hop](const QString &url, int depth) {
+        if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+            || m_qrMode != QLatin1String("kuwo_wx")) return;
         QVariantMap h = kuwoApiHeaders(QStringLiteral("https://www.kuwo.cn/"));
         h.remove(QStringLiteral("Content-Type"));
         if (!jar->isEmpty()) h.insert(QStringLiteral("Cookie"), kuwoCookieText(*jar));
         HttpClient::instance()->request(QStringLiteral("GET"), QUrl(url), h, QByteArray(),
-            [this, jar, hop, depth](const HttpClient::Reply &r) {
+            [this, sourceId, loginGeneration, qrGeneration, uuid, jar, hop, depth](const HttpClient::Reply &r) {
+                if (!qrCurrent(sourceId, loginGeneration, qrGeneration)
+                    || m_qrMode != QLatin1String("kuwo_wx")) return;
                 for (const QString &sc : r.setCookies) {
                     const QString kv = sc.section(QLatin1Char(';'), 0, 0).trimmed();
                     const int eq = kv.indexOf(QLatin1Char('='));
@@ -3267,6 +3633,7 @@ void AuthManager::kuwoWxExchange(const QString &code)
                 if (uid.isEmpty()) {
                     m_qrStatus = QStringLiteral("微信已授权，但酷我没有下发登录态："
                                                 "该微信大概率还没绑定酷我账号，请先在网页端绑定");
+                    endQrSession(qrGeneration);
                     emit qrChanged();
                     emit loginStateChanged(QStringLiteral("kuwo"), false, m_qrStatus);
                     emit toast(m_qrStatus);
@@ -3279,7 +3646,7 @@ void AuthManager::kuwoWxExchange(const QString &code)
                 m_qrStatus = QStringLiteral("登录成功");
                 emit qrChanged();
                 saveSession(QStringLiteral("kuwo"), cookie, uid, nick, avatar,
-                            QStringLiteral("酷我微信登录成功"));
+                            QStringLiteral("酷我微信登录成功"), loginGeneration);
             },
             -1, false);
     };
@@ -3288,6 +3655,9 @@ void AuthManager::kuwoWxExchange(const QString &code)
 
 void AuthManager::logout(const QString &sourceId)
 {
+    // 登录代次同时作废该 source 的登录、二维码与同步回调；同步序号保留单调值，
+    // 避免极端回绕后复用，后续新同步自然取得更大的序号。
+    invalidateLogin(sourceId);
     Library::instance()->removeAccount(sourceId);
     refresh();
     emit loginStateChanged(sourceId, false, QStringLiteral("已退出登录"));
@@ -3296,38 +3666,70 @@ void AuthManager::logout(const QString &sourceId)
 
 void AuthManager::syncUserLibrary(const QString &sourceId)
 {
-    const Account a = account(sourceId);
-    if (!a.logged || a.cookie.isEmpty()) {
+    const quint64 sequence = nextSyncSequence(sourceId);
+    quint64 generation = currentLoginGeneration(sourceId);
+    if (generation == 0 && !sourceId.isEmpty()) {
+        // 启动时从磁盘恢复的账号没有登录代次；首次同步为它建立会话基线。
+        generation = nextGeneration(0);
+        m_loginGenerations.insert(sourceId, generation);
+    }
+    const Account snapshot = account(sourceId);
+    const auto identityCurrent = [this, sourceId, sequence, generation, snapshot]() {
+        if (sourceId.isEmpty() || sequence == 0 || generation == 0
+            || m_syncSequences.value(sourceId, 0) != sequence
+            || currentLoginGeneration(sourceId) != generation) return false;
+        const Account current = account(sourceId);
+        return current.source == sourceId && current.logged == snapshot.logged
+            && current.uid == snapshot.uid && current.cookie == snapshot.cookie;
+    };
+    if (!snapshot.logged || snapshot.cookie.isEmpty() || !identityCurrent()) {
         emit toast(QStringLiteral("请先登录该平台"));
         return;
     }
     emit toast(QStringLiteral("正在同步 %1 的歌单与收藏…")
                    .arg(SourceConfig::instance()->nameOf(sourceId)));
 
-    UserApi::instance()->fetchLibrary(sourceId, a.cookie,
-        [this, sourceId](const UserLibraryData &data) {
+    UserApi::instance()->fetchLibrary(sourceId, snapshot.cookie,
+        [this, sourceId, snapshot, identityCurrent](const UserLibraryData &data) {
+            // fetchLibrary 内部有多段异步请求；只有最终回调所属账号/代次/序号都仍
+            // 有效才允许整组落库，旧结果不能覆盖新账号或新一轮同步。
+            if (!identityCurrent()) return;
             Library *lib = Library::instance();
             if (!data.playlists.isEmpty()) lib->savePlaylists(data.playlists);
             // 每个歌单的歌曲一并落库，点开「我的歌单」即可直接播放
             for (const auto &pair : data.playlistSongs) {
-                if (pair.second.isEmpty()) continue;
                 lib->saveSongs(pair.second);
                 lib->setPlaylistSongs(pair.first, pair.second);
             }
-            if (!data.favorites.isEmpty()) {
+            if (data.favoritesLoaded && !data.favoritesError) {
                 Playlist fav;
-                fav.uid = sourceId + QStringLiteral(":user_favorite");
+                const QString accountKey = snapshot.uid.isEmpty()
+                    ? QStringLiteral("current") : snapshot.uid;
+                fav.uid = sourceId + QStringLiteral(":user_favorite:") + accountKey;
                 fav.source = sourceId;
                 fav.sourceId = QStringLiteral("user_favorite");
+                fav.extra.insert(QStringLiteral("accountUid"), snapshot.uid);
                 fav.title = QStringLiteral("我喜欢的音乐（")
                             + SourceConfig::instance()->nameOf(sourceId) + QStringLiteral("）");
                 fav.type = QStringLiteral("favorite");
                 fav.count = data.favorites.size();
-                lib->savePlaylist(fav);
-                lib->saveSongs(data.favorites);
-                lib->setPlaylistSongs(fav.uid, data.favorites);
-                for (const Song &song : data.favorites) lib->addFavorite(song);
+                if (!lib->savePlaylist(fav) || !lib->setPlaylistSongs(fav.uid, data.favorites)
+                    || !lib->replaceSourceFavorites(sourceId, data.favorites)) {
+                    emit librarySynced(sourceId, false, QStringLiteral("收藏同步写入本地失败"));
+                    emit toast(QStringLiteral("收藏同步写入本地失败"));
+                    return;
+                }
+                const QString previousUid = sourceId + QStringLiteral(":user_favorite");
+                if (previousUid != fav.uid) lib->removePlaylist(previousUid);
+                for (const Playlist &stored : lib->playlists(QStringLiteral("favorite"))) {
+                    if (stored.source == sourceId
+                        && stored.sourceId == QStringLiteral("user_favorite")
+                        && stored.uid != fav.uid)
+                        lib->removePlaylist(stored.uid);
+                }
             }
+            // 写库后再次核验；若期间退出/切换/新一轮同步开始，丢弃全部成功信号。
+            if (!identityCurrent()) return;
             emit libraryUpdated();
             // 歌单同步失败不等于登录失败：登录态已经落库，错误只通过 syncFinished 提示，
             // 避免界面把网络抖动说成"登录失败"

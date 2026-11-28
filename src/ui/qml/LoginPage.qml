@@ -131,6 +131,8 @@ Item {
     }
 
     onMethodChanged: {
+        if (root.method !== "qrcode")
+            app.cancelQrLogin()
         root.ensureCaptcha()
     }
 
@@ -151,6 +153,7 @@ Item {
     }
 
     onSelectedSourceChanged: {
+        app.cancelQrLogin()
         // 换平台时把上一个平台的失败原因清掉，否则会挂在新平台卡片底下误导人
         root.hint = ""
         root.hintError = false
@@ -661,6 +664,7 @@ Item {
                                 height: parent.height - 12
                                 fillMode: Image.PreserveAspectFit
                                 smooth: false
+                                cache: false
                                 source: (root.qrMine && app.qrImagePath.length > 0)
                                         ? (app.qrImagePath.indexOf("http") === 0
                                            ? app.qrImagePath : platform.toFileUrl(app.qrImagePath))

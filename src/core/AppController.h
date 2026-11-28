@@ -500,6 +500,9 @@ private:
     // PlayerController 需要一首「推荐续播」：按当前汽水果取相似歌曲插到当前歌后面；
     // 取不到 / 非汽水果则走原队列（顺序播放末尾则停止）。
     void onRecommendationNeeded();
+    // related 请求本体：attempt 用于「回空后延迟重试一次」——夜间网络抖动时
+    // 接口失败也回空列表，不重试的话漫游会在队列末尾静默停表（实测 06:05 停播）。
+    void relatedRecommend(const Song &seed, const Song &qishuiSeed, bool roaming, int attempt);
     // 播放（已取到直链但播不出来）失败：逐源换源重试，成功源置顶。d->inFallback 防重入。
     void onPlayerError(const QString &msg);
     // 曲中断流的最后一级恢复：换源（带音源扣分），从断点续播

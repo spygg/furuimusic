@@ -42,6 +42,8 @@ struct UserLibraryData {
     // 歌单 uid -> 该歌单的歌曲，同步时直接写入本地 SQLite
     QVector<QPair<QString, QVector<Song>>> playlistSongs;
     int failedPlaylists = 0;
+    bool favoritesLoaded = false;
+    bool favoritesError = false;
 };
 
 class UserApi : public QObject {
@@ -102,6 +104,10 @@ private:
     // 输出顺序与歌单一致。maxSongs <= 0 表示不限制。
     void completePlaylistSongs(const QString &sourceId, const QString &cookie,
                                const QString &name, const HttpClient::Reply &r, int maxSongs,
+                               const std::function<void(const QVector<Song> &)> &cb);
+    void completePlaylistSongs(const QString &sourceId, const QString &cookie,
+                               const QString &name, const HttpClient::Reply &r, int maxSongs,
+                               bool *requestOk,
                                const std::function<void(const QVector<Song> &)> &cb);
 };
 

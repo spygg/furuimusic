@@ -1,36 +1,41 @@
 #pragma once
 // 福瑞音乐 - 本地资料库（SQLite）：歌单、收藏、历史、账号、自定义音源
 #include <QObject>
+#include <QMutex>
 #include <QSet>
-#include <QSqlDatabase>
-#include <QSqlQuery>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QVector>
+#include <functional>
 
 #include "Types.h"
 
 namespace Furui {
+
+class LibraryWorker;
 
 class Library : public QObject {
     Q_OBJECT
 public:
     static Library *instance();
     void init();
+    void shutdown();
 
     QVector<Playlist> playlists(const QString &type = QString());
     void savePlaylists(const QVector<Playlist> &list);
-    void savePlaylist(const Playlist &p);
-    void removePlaylist(const QString &uid);
+    bool savePlaylist(const Playlist &p);
+    bool removePlaylist(const QString &uid);
 
     void saveSongs(const QVector<Song> &list);
     Song song(const QString &uid);
     QVector<Song> playlistSongs(const QString &playlistUid);
-    void setPlaylistSongs(const QString &playlistUid, const QVector<Song> &songs);
+    bool setPlaylistSongs(const QString &playlistUid, const QVector<Song> &songs);
 
     bool isFavorite(const QString &uid);
     void addFavorite(const Song &s);
     void removeFavorite(const QString &uid);
+    bool replaceSourceFavorites(const QString &source, const QVector<Song> &songs,
+                                QSet<QString> *removedUids = nullptr);
     QVector<Song> favorites();
 
     void addHistory(const Song &s);
@@ -64,15 +69,16 @@ signals:
 
 private:
     explicit Library(QObject *parent = nullptr);
-    void exec(const QString &sql);
-    void insertSong(const Song &s);
-    void reloadFavoriteCache();
-    static Song songFromQuery(const QSqlQuery &q);
-    QSqlDatabase m_db;
-    // 收藏 uid 常驻内存：SongListModel 每行渲染都会问一次 isFavorite，
-    // 原来每次都是一条 SQLite 查询，列表滚动时是明显的性能热点。
+    ~Library() override;
+    bool enqueueAndWait(const std::function<void()> &task) const;
+    void enqueue(std::function<void()> task);
+    LibraryWorker *m_worker = nullptr;
+    // 收藏 uid 常驻 GUI 内存：SongListModel 每行渲染都会问一次 isFavorite，
+    // 这里只做纯内存查询，不进入 SQLite worker，也不等待队列。
     QSet<QString> m_favoriteUids;
     bool m_ready = false;
+    QMutex m_shutdownMutex;
+    bool m_shutdownComplete = false;
 };
 
 } // namespace Furui

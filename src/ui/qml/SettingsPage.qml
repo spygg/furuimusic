@@ -795,13 +795,15 @@ Item {
                         Layout.fillWidth: true
                         text: {
                             if (updater.checking) return "正在检查更新…"
+                            if (updater.verifying) return "正在校验更新包 SHA-256…"
                             if (updater.downloading)
                                 return "正在下载更新 " + (updater.progress >= 0 ? updater.progress + "%" : "…")
                             if (updater.downloadedPath.length > 0) return "更新包已就绪：" + updater.downloadedPath
                             // 只认 C++ 侧按点分版本号比较得出的结论：不能拿远端版本和本地版本做
                             // 字符串不等判断，否则远端清单比本机旧（如本机 1.4.9、镜像缓存里的
                             // 清单还是 1.4.8）时会误报「发现新版本 v1.4.8」
-                            if (updater.hasUpdate) return "发现新版本 v" + updater.remoteVersion
+                            if (updater.hasUpdate)
+                                return updater.lastResult.length > 0 ? updater.lastResult : "发现新版本 v" + updater.remoteVersion
                             // 「拿到清单且确实不新」与「一条清单都没拉到」要分开显示，
                             // 否则断网时也会写「已是最新版本」
                             return updater.lastResult.length > 0 ? updater.lastResult : "已是最新版本"
@@ -815,7 +817,7 @@ Item {
                     id: checkBtn
                     text: updater.checking ? "检查中…" : "检查更新"
                     Layout.preferredHeight: theme.touchMin
-                    enabled: !updater.checking && !updater.downloading
+                    enabled: !updater.checking && !updater.downloading && !updater.verifying
                     background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
                     contentItem: Text { text: checkBtn.text; color: cPrimary; font.pixelSize: theme.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     onClicked: updater.checkForUpdates()
@@ -918,7 +920,7 @@ Item {
                 }
                 ProgressBar {
                     Layout.fillWidth: true
-                    visible: updater.downloading || updater.downloadedPath.length > 0
+                    visible: updater.downloading || updater.verifying || updater.downloadedPath.length > 0
                     from: 0
                     to: 100
                     value: updater.progress >= 0 ? updater.progress : 0
@@ -935,10 +937,11 @@ Item {
                         // 下载中不再是禁用的「下载中…」：卡死/断网时用户必须能自救，
                         // 按钮改为可点的「重新下载」——C++ downloadUpdate() 在下载中
                         // 再调用会取消旧请求、重新探测镜像并从头下载。
-                        text: updater.downloadedPath.length > 0 ? "安装更新"
+                        text: updater.verifying ? "校验中…"
+                              : updater.downloadedPath.length > 0 ? "安装更新"
                               : updater.downloading ? "重新下载"
                               : "下载更新"
-                        enabled: updater.hasUpdate || updater.downloadedPath.length > 0
+                        enabled: !updater.verifying && (updater.hasUpdate || updater.downloadedPath.length > 0)
                         background: Rectangle { radius: 6; color: updateBtn.down ? cPrimaryPress : cPrimary }
                         contentItem: Text { text: updateBtn.text; color: "#FFFFFF"; font.pixelSize: theme.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                         onClicked: {
@@ -969,7 +972,7 @@ Item {
                         // 移动端车机文件管理器进不去应用私有目录，浏览按钮无用；
                         // 且与「复制到下载目录」并存会挤爆窄屏按钮行（主按钮被裁切）。
                         visible: !platform.isMobile && updater.downloadedPath.length > 0
-                        enabled: !updater.downloading
+                        enabled: !updater.downloading && !updater.verifying
                         background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
                         contentItem: Text { text: browseBtn.text; color: cPrimary; font.pixelSize: theme.fontXs; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                         onClicked: updater.openDownloadFolder()
@@ -982,7 +985,7 @@ Item {
                         // copyToDownloads() 的 JNI 实现只在 Qt6 Android 有效；
                         // Qt5 Android 上该按钮点了只会走桌面 openUrl 分支，故隐藏。
                         visible: platform.isMobile && platform.qtMajor >= 6 && updater.downloadedPath.length > 0
-                        enabled: !updater.downloading
+                        enabled: !updater.downloading && !updater.verifying
                         background: Rectangle { radius: 6; color: cPrimarySoft; border.color: cLine }
                         contentItem: Text { text: copyDownloadBtn.text; color: cPrimary; font.pixelSize: theme.fontXs; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                         // 车机禁止应用内安装：把 APK 复制到公共 Download，供系统文件管理器手动安装
@@ -991,7 +994,7 @@ Item {
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: "更新包将直接在应用内下载，完成后自动拉起安装（桌面端打开所在文件夹）。"
+                    text: "更新包将直接在应用内下载，并以 GitHub 官方 SHA-256 校验后自动拉起安装（桌面端打开所在文件夹）。"
                           + (platform.isMobile && platform.qtMajor >= 6
                              ? "若车机限制了自动安装，点「复制到下载目录」在系统文件管理器中找到更新包手动安装。"
                              : "若车机限制了自动安装，请用系统文件管理器到应用下载目录手动安装。")

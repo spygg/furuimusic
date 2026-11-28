@@ -207,8 +207,8 @@ Rectangle {
                 }
                 Rectangle {
                     visible: root.vip
-                    width: 30
-                    height: 16
+                    Layout.preferredWidth: 30
+                    Layout.preferredHeight: 16
                     radius: 8
                     color: theme.vip
                     Text {
@@ -368,18 +368,22 @@ Rectangle {
                     }
                 }
 
-                // 圆形播放键：悬停/播放中变主色
+                // 圆形播放键：悬停/播放中变主色。
+                // 不再覆盖整块 MouseArea：AbstractButton 自身的 clicked 才能被键盘
+                // Enter/Space 激活（Tab 聚焦后无效的缺陷）；悬停用 HoverHandler 接管。
                 AbstractButton {
                     id: rowPlay
                     width: theme.touchMin
                     height: theme.touchMin
-                    scale: rowPlayHover.containsMouse ? 1.08 : 1.0
+                    Accessible.name: root.current ? (root.playing ? "暂停" : "继续播放") : "播放"
+                    scale: rowPlayHover.hovered ? 1.08 : 1.0
                     Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+                    HoverHandler { id: rowPlayHover; cursorShape: Qt.PointingHandCursor }
                     background: Rectangle {
                         radius: height / 2
                         color: root.playing || rowPlay.pressed
                                ? accent
-                               : rowPlayHover.containsMouse
+                               : rowPlayHover.hovered
                                  ? Qt.rgba(accent.r, accent.g, accent.b, 0.16) : cChip
                         border.color: root.current ? accent : cLine
                         border.width: root.current && !root.playing ? 1 : 0
@@ -393,15 +397,8 @@ Rectangle {
                             color: root.playing ? "#FFFFFF" : root.cText
                         }
                     }
-                    MouseArea {
-                        id: rowPlayHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        Accessible.name: root.current ? (root.playing ? "暂停" : "继续播放") : "播放"
-                        // 当前曲目上这枚键就是暂停/继续；其他行才是「播放这首」
-                        onClicked: root.current ? app.togglePause() : root.playRequested()
-                    }
+                    // 当前曲目上这枚键就是暂停/继续；其他行才是「播放这首」
+                    onClicked: root.current ? app.togglePause() : root.playRequested()
                 }
 
                 // 触屏端：行内操作全部收进这个「更多」菜单

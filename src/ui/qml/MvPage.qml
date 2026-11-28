@@ -117,17 +117,28 @@ Rectangle {
         root.wake()
     }
 
+    // 进入全屏前的窗口状态：退出时恢复，避免原本最大化/全屏的桌面窗口被压回 Normal
+    property int _prevVisibility: -1
+
     function setFullscreen(on) {
         // Android：锁定横屏 + 沉浸式隐藏系统栏（native 实现），退出时恢复自动方向；
         // 窗口本身始终占满屏幕，不需要再 showFullScreen。
-        // 桌面：保持窗口级 showFullScreen/showNormal。
+        // 桌面：保持窗口级 showFullScreen/showNormal，退出时恢复进入前的状态。
         if (Qt.platform.os === "android")
             app.setMvFullscreen(on)
         else {
             const w = root.Window.window
             if (w) {
-                if (on) w.showFullScreen()
-                else w.showNormal()
+                if (on) {
+                    _prevVisibility = w.visibility
+                    w.showFullScreen()
+                } else {
+                    // Window.Maximized=2 / Window.FullScreen=3；无记录时退回 Normal
+                    if (_prevVisibility === 2) w.showMaximized()
+                    else if (_prevVisibility === 3) w.showFullScreen()
+                    else w.showNormal()
+                    _prevVisibility = -1
+                }
             }
         }
         root.isFullscreen = on

@@ -90,11 +90,41 @@ bool trustedOrigin(const QByteArray &value, const QByteArray &request)
     return sameHostAsRequest(value, request);     // 本服务自己托管的网页
 }
 
+// 控制端点的 Host 必须指向请求实际到达的本机地址（回环或本机 LAN IP），否则视为可疑。
+// DNS rebinding 攻击下浏览器发出的 Host 是攻击者域名而连接仍落在本机地址上，
+// 这一检查直接挡掉；局域网网页控制台打开 http://<LAN-IP>:port 时 Host 恰好就是
+// 本机在连接上的 localAddress，正常使用不受影响。
+bool trustedControlHost(const QByteArray &request, QTcpSocket *socket)
+{
+    const QString hostPort = hostHeaderOf(request);
+    if (hostPort.isEmpty()) return true;      // 无 Host 的原始 HTTP 工具，交给 token 闸门
+    const QString host = QUrl(QStringLiteral("http://") + hostPort).host();
+    if (host.isEmpty()) return false;
+    if (host.compare(QLatin1String("localhost"), Qt::CaseInsensitive) == 0) return true;
+    const QHostAddress addr(host);
+    if (addr.isNull()) return false;
+    // 与本连接实际到达的本机地址比对（socket->localAddress），同时覆盖回环与 LAN
+    const QHostAddress local = socket->localAddress();
+    if (local == QHostAddress(QHostAddress::AnyIPv4) || local == QHostAddress(QHostAddress::AnyIPv6))
+        return true;                          // 监听在 any 上的兜底：只信任回环 Host
+    return addr == local || addr == QHostAddress(QHostAddress::LocalHost)
+           || addr == QHostAddress(QHostAddress::LocalHostIPv6);
+}
+
 bool untrustedBrowserRequest(const QByteArray &request)
 {
     const QByteArray origin = headerValue(request, "Origin");
     const QByteArray referer = headerValue(request, "Referer");
-    if (origin.isEmpty() && referer.isEmpty()) return false;
+    // 现代浏览器（Chrome 80+/FF 90+）对包括 no-cors fetch、<img>、顶级导航在内的
+    // 所有请求都会带 Sec-Fetch-Site；本地工具（curl/脚本）不带。取值不是
+    // same-origin/same-site/none 的一律是跨站发起 —— 修复「no-referrer 简单 GET
+    // 两个头都缺失被判可信」的绕过（审查 B-01）。
+    const QByteArray fetchSite = headerValue(request, "Sec-Fetch-Site");
+    if (!fetchSite.isEmpty()
+        && fetchSite != "same-origin" && fetchSite != "same-site" && fetchSite != "none")
+        return true;
+    if (origin.isEmpty() && referer.isEmpty())
+        return false;                         // 无浏览器来源头的本地工具，维持放行
     if (!origin.isEmpty() && !trustedOrigin(origin, request)) return true;
     if (!referer.isEmpty() && !trustedOrigin(referer, request)) return true;
     return false;
@@ -465,7 +495,9 @@ void OpenApiServer::handleRequest(QTcpSocket *socket, const QByteArray &request)
     }
     // 浏览器跨站保护：控制类端点不接受外部 Origin/Referer；
     // 不带这两个头的本地工具（curl / 洛雪兼容脚本）行为完全不变。
-    if (isControlPath(path) && untrustedBrowserRequest(request)) {
+    // 另要求 Host 指向本机回环，挡住 DNS rebinding（Host 会被浏览器换成攻击者域名）。
+    if (isControlPath(path)
+        && (untrustedBrowserRequest(request) || !trustedControlHost(request, socket))) {
         respond(socket, 403, QStringLiteral("application/json; charset=utf-8"),
                 "{\"error\":\"cross-origin control rejected\"}");
         return;

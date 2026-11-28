@@ -576,13 +576,22 @@ void SourceManager::resolveAlternate(const Song &song, const QStringList &exclud
     if (candidates.isEmpty()) { if (cb) cb(Playable()); return; }
 
     auto attempt = std::make_shared<std::function<void(int)>>();
-    *attempt = [this, song, quality, candidates, cb, attempt](int idx) {
-        if (idx >= candidates.size()) { if (cb) cb(Playable()); return; }
+    // 换源结果契约是「恰好一次回调」。虽然当前各平台的 search/resolveUrl 都是单次
+    // 投递，但这里横跨多平台多候选，任何一环将来引入软刷新/重试双投递，都会造成
+    // 双 playUrl 与候选链复制 —— 统一加 once 门兜底。
+    auto fired = std::make_shared<bool>(false);
+    auto finish = [cb, fired](const Playable &r) {
+        if (*fired) return;
+        *fired = true;
+        if (cb) cb(r);
+    };
+    *attempt = [this, song, quality, candidates, attempt, finish](int idx) {
+        if (idx >= candidates.size()) { finish(Playable()); return; }
         const QString id = candidates.at(idx);
         const int next = idx + 1;
         if (id == QLatin1String("custom")) {
             CustomSourceManager::instance()->resolve(song, quality,
-                [this, song, quality, cb, attempt, next](const Playable &sub) {
+                [this, attempt, next, finish](const Playable &sub) {
                     if (sub.ok) {
                         Playable r = sub;
                         r.source = QStringLiteral("custom");
@@ -592,7 +601,7 @@ void SourceManager::resolveAlternate(const Song &song, const QStringList &exclud
                         r.needSubstitute = false;
                         if (r.substituteSource.isEmpty())
                             r.substituteSource = QStringLiteral("在线音源");
-                        if (cb) cb(r);
+                        finish(r);
                         return;
                     }
                     (*attempt)(next);
@@ -602,14 +611,14 @@ void SourceManager::resolveAlternate(const Song &song, const QStringList &exclud
         MusicSource *target = source(id);
         if (!target) { (*attempt)(next); return; }
         const QString keyword = (song.title + QLatin1Char(' ') + song.artist).trimmed();
-        target->search(keyword, 10, 0, [this, song, quality, id, target, cb, attempt, next](const QVector<Song> &list) {
+        target->search(keyword, 10, 0, [this, song, quality, id, target, attempt, next, finish](const QVector<Song> &list) {
             Song matched; qreal best = 0.55;
             for (const Song &c : list) {
                 const qreal sc = candidateScore(song, c);
                 if (sc > best) { best = sc; matched = c; }
             }
             if (matched.title.isEmpty()) { (*attempt)(next); return; }
-            target->resolveUrl(matched, quality, [this, id, cb, attempt, next](const Playable &p) {
+            target->resolveUrl(matched, quality, [this, id, attempt, next, finish](const Playable &p) {
                 if (p.ok) {
                     Playable r = p;
                     r.substituted = true;
@@ -618,7 +627,7 @@ void SourceManager::resolveAlternate(const Song &song, const QStringList &exclud
                     r.substituteSource = SourceConfig::instance()->nameOf(id) + QStringLiteral("（自动换源）");
                     r.message = QStringLiteral("原曲播放失败，已自动换源到 ") + r.substituteSource;
                     promoteSource(id);
-                    if (cb) cb(r);
+                    finish(r);
                 } else {
                     demoteSource(id);            // 本候选取链失败 → 降权后再试下一个
                     (*attempt)(next);

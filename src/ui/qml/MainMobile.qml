@@ -20,7 +20,9 @@ Item {
 
     function fmtTime(ms) {
         var t = Math.max(0, Math.floor(ms / 1000))
-        return ("0" + Math.floor(t / 60)).slice(-2) + ":" + ("0" + (t % 60)).slice(-2)
+        // 分钟不截断：(("0"+m).slice(-2) 会把 100 分钟显示成 00（播客/长合辑错时间）
+        var m = Math.floor(t / 60)
+        return (m < 10 ? "0" + m : m) + ":" + ("0" + (t % 60)).slice(-2)
     }
 
     property int pageIndex: 0

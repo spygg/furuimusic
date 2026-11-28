@@ -36,6 +36,8 @@ public:
     using DownloadProgressCallback = std::function<void(qint64, qint64)>;
 
     static HttpClient *instance();
+    // 为当前线程创建独立 NAM（ScriptEngine worker 使用），不修改应用级代理。
+    static HttpClient *createForCurrentThread();
 
     // headers 支持 {placeholder}，由调用方渲染后传入；body 已是最终字节
     // followRedirects=false 时 3xx 原样返回，调用方从 headers["location"] 自行跳转
@@ -43,11 +45,13 @@ public:
     // peerVerifyName 非空时，仅把「证书主机名校验」用的名字换成它，连接/SNI/Host 仍用 url 的域名。
     // 只给已知证书配错的站点用（如酷狗 login.user.kugou.com 拿到的是只覆盖 *.kugou.com 的通配证书）。
     // bodyLimit >=0 时最多保留这么多响应字节，达到上限立即 abort（用于只需要文件头的探测请求，
-    // 避免上游忽略 Range 时把整包下载进内存）；默认 -1 表示不限制。
+    // 避免上游忽略 Range 时把整包下载进内存）；默认 16MiB：业务响应（歌单/歌词/榜单 JSON）
+    // 远达不到，但能挡住异常/恶意超大响应在 GUI 线程 readAll+解析导致 OOM（审查 PERF-02）。
+    // 需要超大响应（如更新包探测）的调用点显式传 -1 或自己的上限。
     void request(const QString &method, const QUrl &url, const QVariantMap &headers,
                  const QByteArray &body, const Callback &cb, int timeoutMs = -1,
                  bool followRedirects = true, const QString &peerVerifyName = QString(),
-                 qint64 bodyLimit = -1);
+                 qint64 bodyLimit = 16 * 1024 * 1024);
     // 返回本次下载的 QNetworkReply，调用方可在「重新下载」时 abort 旧请求；
     // 忽略返回值不影响原有调用点。
     QNetworkReply *download(const QUrl &url, const QVariantMap &headers, const QString &destPath,
