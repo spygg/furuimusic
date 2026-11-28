@@ -5,7 +5,7 @@
 # 其余各处全部由此脚本派生，消除发版时四处手改的同步负担：
 #   1. src/core/Version.h            改宏（唯一人工编辑点，也可只跑本脚本顺带改）
 #   2. src/CMakeLists.txt            不用改：configure 期 file(READ) 自动注入 project VERSION
-#   3. src/version.json              version 字段 + downloads 四条 URL 由本脚本重写
+#   3. src/version.json              version 字段 + downloads 七条 URL 由本脚本重写
 #   4. src/publish/version.json       兼容副本，本脚本从 3 复制并校验一致
 #
 # desc/history（发版说明）是人工内容，本脚本不碰——发版时手工编辑 version.json 后跑：
@@ -33,10 +33,12 @@ DOWNLOAD_TEMPLATES = {
     "windows": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-windows-x64.zip",
     "linux": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-linux-x86_64.AppImage",
     "macos": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-macos-x86_64.zip",
+    # android 原键继续指向 legacy，兼容只按清单键下载的更老客户端。
     "android": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-android-arm64-v8a.apk",
-    # 比亚迪车机特供版（伪装网易云车机版包名 com.netease.cloudmusic.iot）：UpdateChecker 的
-    # FURUI_CAR_COMPAT_EDITION 构建读这个键；发 CI 双变体矩阵后每版都有此资产
+    "android-release": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-android-arm64-v8a-signed.apk",
+    # 比亚迪车机特供版（伪装网易云车机版包名 com.netease.cloudmusic.iot）同样保留双签名。
     "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-carcompat-netease-arm64-v8a.apk",
+    "android-carcompat-release": "https://github.com/spygg/furuimusic/releases/download/v{v}/FuruiMusic-carcompat-netease-arm64-v8a-signed.apk",
 }
 
 

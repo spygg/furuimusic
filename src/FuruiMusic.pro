@@ -37,6 +37,7 @@ CORE_HEADERS += \
     core/Settings.h \
     core/JsonMapper.h \
     core/HttpClient.h \
+    core/UpdatePackage.h \
     core/UpdateChecker.h \
     core/SourceConfig.h \
     core/Library.h \
@@ -193,6 +194,14 @@ android {
     # Qt 5 的 JNI 封装（QAndroidJniObject/QtAndroid）在独立模块里，首页返回键
     # 调 Activity.moveTaskToBack 需要它；Qt 6 走 QJniObject（QtCore 自带）。
     QT += androidextras
+    FURUI_ANDROID_RELEASE_CERT = $$(FURUI_ANDROID_RELEASE_CERT_SHA256)
+    isEmpty(FURUI_ANDROID_RELEASE_CERT): FURUI_ANDROID_RELEASE_CERT = $$FURUI_ANDROID_RELEASE_CERT_SHA256
+    !isEmpty(FURUI_ANDROID_RELEASE_CERT) {
+        !contains(FURUI_ANDROID_RELEASE_CERT, "^[0-9a-fA-F]{64}$") {
+            error(FURUI_ANDROID_RELEASE_CERT_SHA256 must be a 64-character SHA-256 digest)
+        }
+        DEFINES += FURUI_ANDROID_RELEASE_CERT_SHA256=\\\"$$FURUI_ANDROID_RELEASE_CERT\\\"
+    }
     ANDROID_PACKAGE_SOURCE_DIR = $$PWD/platform/android-qt5
     ANDROID_MIN_SDK_VERSION = 21
     ANDROID_TARGET_SDK_VERSION = 30

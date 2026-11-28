@@ -149,7 +149,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 
 - **Qt 5 APK 仅基础播放**：`src/platform/android-qt5/AndroidManifest.xml` 没有 `MediaSessionService` 前台服务、`MediaButtonReceiver`（`MEDIA_BUTTON`）或 `REQUEST_INSTALL_PACKAGES` 权限，`AndroidMediaSession` 的 Qt 5 分支也是空实现。所以 Qt 5 APK 只能应用内播放/切歌，**没有**系统通知栏/锁屏/耳机媒体键控制，也不支持应用内更新拉起安装器；需要这些能力请用 Qt 6 构建。`build_android.bat` 与三个 Qt 6 脚本都支持环境变量覆盖（`QT_ANDROID` / `QT_ROOT_DIR` / `QT_DIR` / `MINGW_DIR` / `ANDROID_SDK_ROOT` / `ANDROID_NDK_ROOT` / `JAVA_HOME`），不设置时才探测常见安装目录。
 
-`build_android_qt6.bat` 在 `FuruiMusic_make_apk` 之后会自动 `zipalign` + `apksigner` 签名：从仓库内的 `src/platform/android-qt6/furui-debug.keystore.b64` 恢复**固定的公开 debug key**（缺失即报错，不再现场随机生成——随机签名会让应用内升级因签名不一致被系统拒绝），产出可直接安装的 `bin_android/FuruiMusic-android-arm64-v8a.apk` 并跑 `apksigner verify` 复检。`build_android.sh` 与 Qt 6 的 CMake 流程本身只产出 `android-build-release-unsigned.apk`，签名交给 CI 或手工执行；CI 优先使用 `RELEASE_*` secrets，缺失时回退同一份 debug key 并打警告（详见「CI / Release 工作流」）。Windows 下 `.bat` 必须是 CRLF 换行，LF 会让 `cmd.exe` 解析错乱。
+`build_android_qt6.bat` 在 `FuruiMusic_make_apk` 之后会自动 `zipalign` + `apksigner` 签名：从仓库内的 `src/platform/android-qt6/furui-debug.keystore.b64` 恢复**固定的公开 debug key**（缺失即报错，不再现场随机生成——随机签名会让应用内升级因签名不一致被系统拒绝），产出可直接安装的 `bin_android/FuruiMusic-android-arm64-v8a.apk` 并跑 `apksigner verify` 复检。`build_android.sh` 与 Qt 6 的 CMake 流程本身只产出 `android-build-release-unsigned.apk`；CI 用 `src/scripts/android_update_signing.sh` 从同一未签名包生成新签名与 legacy 两份 APK。Windows 下 `.bat` 必须是 CRLF 换行，LF 会让 `cmd.exe` 解析错乱。
 
 **Android 端两处平台差异（2026-11-10 修复）**：① 图标由 `GlyphImageProvider` 栅格化，Qt 6 Android 的纹理上传对预乘 `QImage` + `QPen` 描边不稳定，图标会退化成黑色方块；现改为非预乘画布 + `QPainterPathStroker` 纯填充路径 + `RGBA8888` 返回，并关闭 QML 侧 `mipmap`。② 网易二维码在重复/空值 Cookie 头下会被风控（`code=-462`，界面提示「获取网络设备失败」一类文案）；现禁用 `QNetworkAccessManager` 自动 Cookie（`Manual` 加载/保存）、Cookie 拼接跳过空值、`Set-Cookie` 去重，并把出码改成 eapi → 明文带设备指纹 → 无 Cookie 明文三级兜底。若仍显示黑块，可查 `logcat` 的 `FuruiGlyph` 行与 App 私有目录下的 `glyph_debug.png`。
 
@@ -333,24 +333,24 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 
 ## CI / Release 工作流
 
-`.github/workflows/release.yml` 的多平台发布结构参考本地副本 `.github参考/workflows/release.yml`（与 `reference/` 一样不入库，远端读者可忽略该路径）：各构建 job 只上传 workflow artifacts，由独立的 `release` job 汇总到同一个 GitHub Release（避免并发写同一 release 时互相覆盖）。触发条件为推送 `v*` tag 或手动 `workflow_dispatch`；**手动运行只出 artifacts、不发布 Release**。发布本身只用内置 `GITHUB_TOKEN`（`permissions: contents: write`）；Android 签名另可配置四个 `RELEASE_*` secrets（见下），不配置也能跑通流水线（回退到仓库内的公开 debug key，并打出警告）。`manifest` job 还会比对两份 Qt6 Android manifest 的权限/服务/接收器集合，避免车机特供版与主流版能力漂移。
+`.github/workflows/release.yml` 的多平台发布结构参考本地副本 `.github参考/workflows/release.yml`（与 `reference/` 一样不入库，远端读者可忽略该路径）：各构建 job 只上传 workflow artifacts，由独立的 `release` job 汇总到同一个 GitHub Release（避免并发写同一 release 时互相覆盖）。触发条件为推送 `v*` tag 或手动 `workflow_dispatch`；**手动运行只出 artifacts、不发布 Release**。发布本身只用内置 `GITHUB_TOKEN`（`permissions: contents: write`）。正式 tag 必须配置四项 `RELEASE_*` secrets；CI 同时发布新签名 APK 与旧 debug 签名兼容 APK，原 APK 文件名继续保留给旧客户端。`manifest` job 还会比对两份 Qt6 Android manifest 的权限/服务/接收器集合，避免车机特供版与主流版能力漂移。
 
 | Job | Runner / 工具链 | 产物 |
 |---|---|---|
 | Windows (MinGW 13.1 x64) | `windows-2022`，Qt 6.8.3 `win64_mingw` + MinGW 13.1 + Ninja + `qtmultimedia` + `qtwebview` | `FuruiMusic-windows-x64.zip`（windeployqt 部署 Qt 6 运行库、QML 模块与 FFmpeg 多媒体插件；WebView2 私有插件在 6.8.3 下自动跳过） |
 | Linux (x86_64) | `ubuntu-22.04`，Qt 6.8.3 `gcc_64` + `qtmultimedia` | `FuruiMusic-linux-x86_64.AppImage` |
 | macOS (x86_64) | `macos-15-intel`，Qt 6.8.3 `clang_64` | `FuruiMusic-macos-x86_64.zip`（`FuruiMusic.app`，bundle id `cn.furui.music`） |
-| Android arm64-v8a | `ubuntu-22.04`，Qt 6.8.3 `android_arm64_v8a` + `gcc_64` host、NDK 26.1、JDK 17、build-tools 35 | `FuruiMusic-android-arm64-v8a.apk`（优先 `RELEASE_*` secrets 签名，缺失回退公开 debug key；zipalign + `apksigner verify` 复检） |
+| Android arm64-v8a | `ubuntu-22.04`，Qt 6.8.3 `android_arm64_v8a` + `gcc_64` host、NDK 26.1、JDK 17、build-tools 35 | `FuruiMusic-android-arm64-v8a-signed.apk`（新签名）+ `FuruiMusic-android-arm64-v8a.apk`（legacy）；车机变体同样两份，均通过 zipalign、证书与包名复检 |
 | Publish release | `ubuntu-22.04`，`needs: [build, build-android, manifest]` | 汇总全部 artifacts，`generate_release_notes` 自动生成发布说明 |
 
 - 构建命令与上面的「构建」一节一致。Windows job 实际执行的是
   `cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++`，
   再 `cmake --build build --parallel`；Linux、macOS 只是把 `-G Ninja` 与编译器指定去掉（runner 默认生成器即可）。
-- Android 侧复用 `src/scripts/build_android.sh`（CMake + `FuruiMusic_make_apk`），CI 用 Qt 6.8.3 + NDK 26.1 覆盖脚本默认的 6.11.1 + NDK 27。Qt 6 的 CMake 流程只产出未签名 APK，签名优先用 GitHub Secrets **`RELEASE_KEYSTORE_B64`**（base64 编码的 JKS/PKCS12）、**`RELEASE_KEYSTORE_PASSWORD`**、**`RELEASE_KEY_ALIAS`**、**`RELEASE_KEY_PASSWORD`**（四项必须同时存在）；未配置时 CI 打出 `::warning::` 并回退仓库内随附的公开 debug keystore `src/platform/android-qt6/furui-debug.keystore.b64`，仅保证 APK 可安装、不是正式发布签名。本地 `build_android_qt6.bat` / `build_android_car_compat.bat` 也固定用这份 debug key，保证应用内升级签名一致。`src/platform/android-qt6/libs/arm64-v8a/` 的两个 OpenSSL 3 `.so` 已在 `.gitignore` 中加例外，保证 APK 里 HTTPS 可用。
+- Android 侧复用 `src/scripts/build_android.sh`（CMake + `FuruiMusic_make_apk`），CI 用 Qt 6.8.3 + NDK 26.1 覆盖脚本默认的 6.11.1 + NDK 27。正式 tag 必须配置 GitHub Secrets **`RELEASE_KEYSTORE_B64`**（base64 编码的 JKS/PKCS12）、**`RELEASE_KEYSTORE_PASSWORD`**、**`RELEASE_KEY_ALIAS`**、**`RELEASE_KEY_PASSWORD`**（四项必须同时存在）。CI 先把新证书 SHA-256 嵌入 APK，再从同一未签名包生成 `*-signed.apk` 与原文件名的 legacy APK；legacy 固定使用仓库内公开 debug keystore `src/platform/android-qt6/furui-debug.keystore.b64`。清单原键 `android` / `android-carcompat` 始终指向 legacy，以兼容只按清单键下载的更老客户端；新键 `android-release` / `android-carcompat-release` 指向新签名包。新客户端按当前安装证书选择对应资产，未知证书拒绝下载。正式新密钥必须长期备份并沿用同一证书，否则已装新签名版本的用户会被识别为未知签名并停止更新。手动 `workflow_dispatch` 缺密钥时只生成临时测试新密钥，产物不发布。本地 `build_android_qt6.bat` / `build_android_car_compat.bat` 仍固定用 debug key。`src/platform/android-qt6/libs/arm64-v8a/` 的两个 OpenSSL 3 `.so` 已在 `.gitignore` 中加例外，保证 APK 里 HTTPS 可用。
 - **Qt 在线仓库元数据适配（2026-11-12）**：Qt 6.8+ 的 Android kit 移到了 `all_os/android/` 且旧树清空、linux x86_64 架构 id 由 `gcc_64` 改名 `linux_gcc_64`、MinGW 13.1 工具拆到独立名 `tools_mingw1310`——aqtinstall 3.3.0（install-qt-action 默认）尚不支持，CI 三条腿首跑全挂在 Install Qt。修法：Android kit 改用 `src/scripts/install_qt_mirror.sh` 直读 `all_os/android` 的 Updates.xml 逐包下载（sha1 校验 + 7z 解包，bash 版参照 QtRemoteDesktop 的 install_qt_mirror.ps1），另两处改用新 id。
-- **Android job 尚未实机跑通**（本机无 Android CI 环境），建议先手动 `workflow_dispatch` 验证流水线再打 tag；`release` job 把 `build-android` 列为发布门槛，避免发布「只有桌面包、没有安装包」的半成品。
+- **双签名 CI 尚待 GitHub runner 验证**：本机已跑通 Qt 6 CMake → APK → 两种签名 → legacy 覆盖安装，但修改后的工作流尚未推送执行；建议先手动 `workflow_dispatch` 验证流水线再打 tag。`release` job 把 `build-android` 列为发布门槛，避免发布「只有桌面包、没有安装包」的半成品。
 - 未纳入 Release：Windows XP（Qt 5.7 加载不了 QML 2.15）、MSVC 组合（本工程未验证）、Inno Setup 安装包（仓库没有 `installer/` 脚本）。
-- 验证状态：Windows 的构建/部署命令、Android 的 CMake → APK → 签名链路均已在本机跑通；Linux、macOS、Android 三个 CI job 仍属按配置推断，需要实际推一次 tag 才能确认。
+- 验证状态：Windows 的构建/部署命令、Android 的 CMake → APK → 双签名 → legacy 覆盖安装均已在本机跑通；Linux、macOS 以及新版 Android 双签名 CI job 仍属按配置推断，需要在 GitHub runner 实际执行才能确认。
 - 工作流不会把构建日志推送到分支；失败时请查看 Actions 日志。
 
 ## 在线更新（src/version.json）
@@ -362,7 +362,7 @@ Windows 主机对应 `src/scripts/build_android_qt6.bat`。CMake 的 Android 路
 - **无本地清单兜底**：`src/core/config.qrc` 仍把 `src/version.json` 编译进 `:/config/version.json`，但早期网络失败时会回退到这份本地清单——它与本地版本同源，必然谎报「已是最新版本」。该回退已从 `UpdateChecker::finishCheck` 移除；所有远端地址都失败时如实显示「无法获取更新信息（网络不可达或全部镜像失败）」，不再把断网误报成「已是最新」。
 - **清单字段**：`version`（最新版本号，唯一人工来源是 `src/core/Version.h` 的 `FURUI_APP_VERSION`；`src/CMakeLists.txt` 在 configure 时自动读取它注入 `project(... VERSION ...)`，**不要再手改 CMakeLists 里的版本号**）、`desc`（本次更新说明）、`history`（历史版本列表，弹层一并展示）、`downloads`（各平台下载直链，可选；缺省时按 CI 产物命名拼 `https://github.com/spygg/furuimusic/releases/download/v<version>/<产物名>`）。
 - **下载与安装**：用户在弹层点「下载更新」后，`HttpClient::download` 流式写入本地并上报进度（0-100）；Android 存到 AppData（`files-path` 由 `src/platform/android-qt6/res/xml/qtprovider_paths.xml` 暴露给 FileProvider），完成后经 `androidx FileProvider` + `ACTION_VIEW`（失败时打开公共 Download 目录由用户手点）拉起安装器（AndroidManifest 已声明 `REQUEST_INSTALL_PACKAGES`，Qt 5 APK 不支持，见上文）；Windows 下载到 exe 同级的「下载」目录（便携式），macOS/Linux 下载到系统「下载」目录下的 `FuruiMusic`（.app bundle 与 AppImage 挂载点均只读）；完成后 Windows 打开安装包所在文件夹，Linux 的 AppImage 补执行位后直接启动，macOS 的 zip 打开所在文件夹由用户解压替换。
-- **发版流程**：跑 `python src/tools/release.py 1.4.49` 同步 `Version.h` 与两份 `version.json`（CMake 的 `project(VERSION)` 自动跟随 `Version.h`，无需手改）→ 人工填好 `desc`/`history` → 推 `v*` tag → CI 校验清单与两份 Android manifest → 自动构建并发布 Release → 老版本应用即可收到更新提示。
+- **发版流程**：确认四项 `RELEASE_*` secrets 已配置 → 跑 `python src/tools/release.py <版本>` 同步 `Version.h` 与两份 `version.json`（CMake 的 `project(VERSION)` 自动跟随 `Version.h`，无需手改）→ 人工填好 `desc`/`history` → 推 `v*` tag → CI 校验清单、Android manifest 与双签名资产 → 自动构建并发布 Release → 新老版本应用按签名收到兼容更新。
 
 ## 许可证
 

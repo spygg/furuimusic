@@ -1,7 +1,11 @@
 {
-  "version": "1.4.57",
-  "desc": "修复\n- QuickJS 音源脚本移至工作线程，脚本死循环不再卡住界面；SQLite 读写迁至独立线程，降低数据库 IO 对界面的阻塞。\n- 更新包增加 SHA-256 校验链，下载完成与安装前均校验，CI 同步发布校验文件。\n- 扫码、账号同步与短信登录增加代次保护；收藏同步遇到缺失状态、超过上限或歌曲补全失败时保留本地缓存，不再误删或截断收藏。\n- 播放器曲中 StoppedState 不再误判为播放结束；修复浅色主题背景与卡片分层、SongRow VIP 标签布局告警。\n\n优化\n- 脚本worker与数据库worker统一清理，避免退出时线程悬挂。",
+  "version": "1.4.58",
+  "desc": "新增\n- Android 更新支持新老签名兼容：新签名用户下载 *-signed.apk，旧 debug 签名用户继续下载原文件名 APK；原清单键保持不变，旧客户端仍可正常更新。\n- CI 从同一未签名包生成两套签名 APK，并校验证书、包名、APK 对齐和 SHA256SUMS。\n\n修复\n- 更新器按当前安装证书选择更新包；未知签名、证书读取失败或签名不一致时阻止下载和安装。\n- 补齐 Qt 5/6 Android 证书读取与 JNI 异常处理，避免安装器误报成功。\n\n说明\n- 本版同时包含 v1.4.57 的 QuickJS/SQLite 线程化、更新包 SHA-256、账号同步与扫码代次、主题及看门狗修复。",
   "history": [
+    {
+      "version": "1.4.57",
+      "desc": "修复\n- QuickJS 音源脚本移至工作线程，脚本死循环不再卡住界面；SQLite 读写迁至独立线程，降低数据库 IO 对界面的阻塞。\n- 更新包增加 SHA-256 校验链，下载完成与安装前均校验，CI 同步发布校验文件。\n- 扫码、账号同步与短信登录增加代次保护；收藏同步遇到缺失状态、超过上限或歌曲补全失败时保留本地缓存，不再误删或截断收藏。\n- 播放器曲中 StoppedState 不再误判为播放结束；修复浅色主题背景与卡片分层、SongRow VIP 标签布局告警。\n\n优化\n- 脚本worker与数据库worker统一清理，避免退出时线程悬挂。"
+    },
     {
       "version": "1.4.56",
       "desc": "新增\n- 更新下载支持后台进行：下载中可点「重新下载」作废旧请求重新拉取；点「稍后」关闭弹层后继续后台下载，失败时全局提示，不再卡死在「下载中」。\n\n修复\n- 回退 bug：全面屏手势机型整页下移、挖孔区封面背景未覆盖（v1.4.54 引入的键盘收起复位逻辑误伤「差额算法」机型），现仅在键盘高度被卡进安全区时才复位，两台真机已验证。\n\n优化\n- 挖孔屏各页面顶部留白收紧 4dp，控件更贴近状态栏。\n- 安全区日志新增导航模式诊断（0=三键导航 2=全面屏手势），便于区分机型。"
@@ -232,10 +236,12 @@
     }
   ],
   "downloads": {
-    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.57/FuruiMusic-windows-x64.zip",
-    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.57/FuruiMusic-linux-x86_64.AppImage",
-    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.57/FuruiMusic-macos-x86_64.zip",
-    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.57/FuruiMusic-android-arm64-v8a.apk",
-    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.57/FuruiMusic-carcompat-netease-arm64-v8a.apk"
+    "windows": "https://github.com/spygg/furuimusic/releases/download/v1.4.58/FuruiMusic-windows-x64.zip",
+    "linux": "https://github.com/spygg/furuimusic/releases/download/v1.4.58/FuruiMusic-linux-x86_64.AppImage",
+    "macos": "https://github.com/spygg/furuimusic/releases/download/v1.4.58/FuruiMusic-macos-x86_64.zip",
+    "android": "https://github.com/spygg/furuimusic/releases/download/v1.4.58/FuruiMusic-android-arm64-v8a.apk",
+    "android-release": "https://github.com/spygg/furuimusic/releases/download/v1.4.58/FuruiMusic-android-arm64-v8a-signed.apk",
+    "android-carcompat": "https://github.com/spygg/furuimusic/releases/download/v1.4.58/FuruiMusic-carcompat-netease-arm64-v8a.apk",
+    "android-carcompat-release": "https://github.com/spygg/furuimusic/releases/download/v1.4.58/FuruiMusic-carcompat-netease-arm64-v8a-signed.apk"
   }
 }

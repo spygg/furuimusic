@@ -1,6 +1,6 @@
 name: Build & Release
 
-# 推 v* 标签即构建三个桌面产物 + Android APK，并由独立的 release job 汇总发布
+# 推 v* 标签即构建三个桌面产物 + Android 双签名 APK，并由独立的 release job 汇总发布
 # GitHub Release。workflow_dispatch（手动）只产出 workflow artifacts，方便先验证
 # 流水线再打 tag；各构建 job 不再各自上传 Release，避免并发写同一个 release。
 on:
@@ -60,7 +60,25 @@ jobs:
           if bad:
               print("::error::downloads 链接版本与清单版本 %s 不一致：%s" % (want, "; ".join(bad)))
               sys.exit(1)
-          print("downloads URLs in sync")
+          expected_assets = {
+              "windows": "FuruiMusic-windows-x64.zip",
+              "linux": "FuruiMusic-linux-x86_64.AppImage",
+              "macos": "FuruiMusic-macos-x86_64.zip",
+              "android": "FuruiMusic-android-arm64-v8a.apk",
+              "android-release": "FuruiMusic-android-arm64-v8a-signed.apk",
+              "android-carcompat": "FuruiMusic-carcompat-netease-arm64-v8a.apk",
+              "android-carcompat-release": "FuruiMusic-carcompat-netease-arm64-v8a-signed.apk",
+          }
+          downloads = d.get("downloads", {})
+          if set(downloads) != set(expected_assets):
+              print("::error::downloads 键集合不符合双签名发布契约")
+              sys.exit(1)
+          from urllib.parse import urlparse
+          for key, asset in expected_assets.items():
+              if urlparse(downloads[key]).path.rsplit("/", 1)[-1] != asset:
+                  print("::error::downloads[%s] 必须指向 %s" % (key, asset))
+                  sys.exit(1)
+          print("downloads URLs and dual-signing assets in sync")
           PY
       - name: Verify git tag matches version
         if: startsWith(github.ref, 'refs/tags/')
@@ -333,8 +351,9 @@ jobs:
   # 所以仍单独一个 job。Qt 6 的 QtMultimedia 自带 FFmpeg 解码后端，两端 MV 都能在应用内播放。
   # 直接用仓库内的 src/scripts/build_android.sh 完成 CMake 配置与 make_apk。
   # Qt 6 的 CMake 流程不签名（只交 android-build-release-unsigned.apk），
-  # 这里 zipalign + apksigner 签名并 verify 复检：优先用 RELEASE_* secrets，
-  # 四个齐全才启用；否则打警告并回退仓库内的公开 debug keystore（仅保证可安装）。
+  # 这里从同一对齐包分别生成新签名与 legacy 签名 APK，并逐个 verify/核对证书。
+  # 正式 tag 必须提供四项 RELEASE_* secrets；手动 workflow 可使用临时测试签名，
+  # 但只上传 workflow artifacts，不发布 Release。
   # 矩阵出两个变体：mainstream（cn.furui.music）与 carcompat（比亚迪特供，
   # 用网易云车机版包名 com.netease.cloudmusic.iot + BYD 小迪语音对接；应用名仍为
   # 「福瑞音乐」供车机设置里区分，语音关键词是「网易云音乐」，须先卸载官方网易云）。
@@ -352,12 +371,14 @@ jobs:
             label: Android arm64-v8a
             car: ''
             artifact: FuruiMusic-android-arm64-v8a.apk
+            releaseArtifact: FuruiMusic-android-arm64-v8a-signed.apk
             group: android-arm64-v8a
             pkg: cn.furui.music
           - name: carcompat
             label: Android arm64-v8a (BYD 车机特供)
             car: '1'
             artifact: FuruiMusic-carcompat-netease-arm64-v8a.apk
+            releaseArtifact: FuruiMusic-carcompat-netease-arm64-v8a-signed.apk
             group: android-carcompat-arm64-v8a
             pkg: com.netease.cloudmusic.iot
     env:
@@ -368,6 +389,7 @@ jobs:
       ANDROID_PLATFORM: 'android-35'
       ANDROID_NDK_VER: '26.1.10909125'
       ARTIFACT_NAME: ${{ matrix.variant.artifact }}
+      RELEASE_ARTIFACT_NAME: ${{ matrix.variant.releaseArtifact }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -428,6 +450,16 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
 
+      - name: Prepare Android signing identities
+        shell: bash
+        run: bash src/scripts/android_update_signing.sh prepare
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          REQUIRE_RELEASE_KEY: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
+
       - name: Build APK
         shell: bash
         run: |
@@ -444,63 +476,29 @@ jobs:
           test -f "$QT_ANDROID/bin/qt-cmake" || { echo "::error::Qt Android kit 未就位"; exit 1; }
           bash src/scripts/build_android.sh
 
-      - name: Sign APK (zipalign + apksigner)
+      - name: Sign release and legacy APKs
         shell: bash
         run: |
           set -euo pipefail
-          # 两个变体的构建目录不同（android_qt6 / android_qt6_carcompat），
-          # 但 job 各自有独立 workspace，直接全树找未签名 APK 即可
           unsigned="$(find build -path '*android-build*' -name '*release*unsigned*.apk' -print -quit)"
           if [ -z "$unsigned" ]; then
             echo "::error::没找到 Qt 产出的未签名 release APK"
             find build -name '*.apk' -print
             exit 1
           fi
-          echo "未签名 APK: $unsigned"
+          bash src/scripts/android_update_signing.sh sign "$unsigned" "$ARTIFACT_NAME" "$RELEASE_ARTIFACT_NAME"
           BT="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
-          KS="$RUNNER_TEMP/furui-release.keystore"
-          # Prefer a real release identity from secrets (all four must be set).
-          # Fallback is the fixed PUBLIC debug keystore checked in as base64: a
-          # stable signature is required for in-app updates (random per-run keys
-          # make the device installer reject the new APK as signature mismatch).
-          if [ -n "$RELEASE_KEYSTORE_B64" ] && [ -n "$RELEASE_KEYSTORE_PASSWORD" ] && \
-             [ -n "$RELEASE_KEY_ALIAS" ] && [ -n "$RELEASE_KEY_PASSWORD" ]; then
-            echo "::notice::Signing release APK with RELEASE_* secrets"
-            printf '%s' "$RELEASE_KEYSTORE_B64" | base64 -d > "$KS"
-            KSALIAS="$RELEASE_KEY_ALIAS"
-            KSPASS="$RELEASE_KEYSTORE_PASSWORD"
-            KEYPASS="$RELEASE_KEY_PASSWORD"
-          elif [ "${GITHUB_REF:-}" = "${GITHUB_REF#refs/tags/}" ]; then
-            # 非 tag 构建（workflow_dispatch 手动验证）：允许公开 debug 密钥兜底，
-            # 产物只进 workflow artifacts、不发布，签名身份无所谓。
-            echo "::warning::RELEASE_* signing secrets incomplete; using checked-in PUBLIC DEBUG keystore for a NON-RELEASE workflow_dispatch artifact."
-            base64 -d src/platform/android-qt6/furui-debug.keystore.b64 > "$KS"
-            KSALIAS="androiddebugkey"
-            KSPASS="android"
-            KEYPASS="android"
-          else
-            # 正式 tag 发布绝不允许用仓库内公开密钥签名：同包名可被他人伪造更新包，
-            # 日后切换正式密钥还会造成签名不一致（审查 B-16）。缺密钥直接 fail。
-            echo "::error::正式 tag 发布缺少 RELEASE_* 签名密钥（keystore/密码/alias 必须四项齐全）。禁止回退到仓库内公开 debug 密钥签名发布。"
-            exit 1
-          fi
-          test -s "$KS"
-          "$BT/zipalign" -f -p 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
-          "$BT/apksigner" sign --ks "$KS" --ks-key-alias "$KSALIAS" \
-            --ks-pass "pass:$KSPASS" --key-pass "pass:$KEYPASS" \
-            --out "$ARTIFACT_NAME" "$RUNNER_TEMP/aligned.apk"
-          "$BT/apksigner" verify --print-certs "$ARTIFACT_NAME"
-          # 启动崩溃回归守卫：src/platform/android-qt6/res/values/libs.xml 会覆盖 Qt
-          # 打包模板，一旦丢了 static_init_classes，Qt 6.8 运行时的 QtLoader 在
-          # Activity.onCreate 里 getString(0) 直接抛 Resources$NotFoundException（1.4.8
-          # 就是这样一启动就崩）。这里在产物上复检，缺了就中断发布。
-          "$BT/aapt2" dump resources "$ARTIFACT_NAME" | grep -q 'static_init_classes' \
-            || { echo "::error::APK 缺少 static_init_classes 资源，Qt 6.8 运行时会启动崩溃"; exit 1; }
-          # 防混包守卫：两个变体只差包名，发错文件在线升级和伪装都会翻车
-          "$BT/aapt2" dump badging "$ARTIFACT_NAME" | grep -q "package: name='${{ matrix.variant.pkg }}'" \
-            || { echo "::error::APK 包名不是 ${{ matrix.variant.pkg }}，变体产物混了"; exit 1; }
-          test -s "$ARTIFACT_NAME"
-          ls -la "$ARTIFACT_NAME"
+          for apk in "$ARTIFACT_NAME" "$RELEASE_ARTIFACT_NAME"; do
+            test -s "$apk"
+            "$BT/apksigner" verify --print-certs "$apk"
+            resources="$("$BT/aapt2" dump resources "$apk")"
+            badging="$("$BT/aapt2" dump badging "$apk")"
+            grep -q 'static_init_classes' <<<"$resources" \
+              || { echo "::error::APK 缺少 static_init_classes 资源，Qt 6.8 运行时会启动崩溃"; exit 1; }
+            grep -q "package: name='${{ matrix.variant.pkg }}'" <<<"$badging" \
+              || { echo "::error::APK 包名不是 ${{ matrix.variant.pkg }}，变体产物混了"; exit 1; }
+          done
+          ls -la "$ARTIFACT_NAME" "$RELEASE_ARTIFACT_NAME"
         env:
           RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
@@ -511,7 +509,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.variant.group }}
-          path: ${{ env.ARTIFACT_NAME }}
+          path: |
+            ${{ env.ARTIFACT_NAME }}
+            ${{ env.RELEASE_ARTIFACT_NAME }}
           if-no-files-found: error
 
   # 汇总发布：各 job 并发往同一个 release 传文件会互相覆盖，所以只交 artifacts，
@@ -546,7 +546,21 @@ jobs:
             | sort -z | while IFS= read -r -d '' file; do
                 (cd "$(dirname "$file")" && sha256sum "$(basename "$file")")
               done > SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 5
+          expected="$(printf '%s\n' \
+            FuruiMusic-windows-x64.zip \
+            FuruiMusic-linux-x86_64.AppImage \
+            FuruiMusic-macos-x86_64.zip \
+            FuruiMusic-android-arm64-v8a.apk \
+            FuruiMusic-android-arm64-v8a-signed.apk \
+            FuruiMusic-carcompat-netease-arm64-v8a.apk \
+            FuruiMusic-carcompat-netease-arm64-v8a-signed.apk | sort)"
+          actual="$(find . -type f \( -name '*.zip' -o -name '*.AppImage' -o -name '*.apk' \) -printf '%f\n' | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::Release 资产集合不完整或重名"
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          test "$(wc -l < SHA256SUMS)" -eq 7
           cat SHA256SUMS
 
       - name: Create release

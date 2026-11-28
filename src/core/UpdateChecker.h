@@ -4,10 +4,11 @@
 //   1) 先问 GitHub API /releases/latest 拿最新 tag（不走 CDN），再按该不可变 tag
 //      并行拉多镜像清单并取最大版本号；API 不可达时才退回 main 分支多镜像；
 //   2) 与本地版本号比较，有新版本时通知 QML（设置页弹层 + 全局 Toast）；
-//   3) 用户同意后从 GitHub Releases 直接下载当前平台的安装包
-//      （Windows: FuruiMusic-windows-x64.zip / Android: FuruiMusic-android-arm64-v8a.apk），
-//      不跳转外部网页；
+//   3) 用户同意后从 GitHub Releases 直接下载当前平台的安装包；Android 按已安装证书
+//      选择新签名包或旧 debug 签名兼容包，不跳转外部网页；
 //   4) 下载完成后 Android 拉起系统安装器（FileProvider），桌面打开安装包所在文件夹。
+#include "UpdatePackage.h"
+
 #include <QJsonObject>
 #include <QNetworkReply>
 #include <QObject>
@@ -104,10 +105,8 @@ private:
     void openVerifiedDownloadFolder();
     QString copyVerifiedToDownloads();
     QString downloadUrlFor(const QString &version) const;
-    // downloadUrlFor 公共体：key = 清单 downloads 键，fallbackAsset = 默认资产名。
-    // 车机特供版用它改查 android-carcompat 键 / 特供资产名。
-    QString downloadUrlForKey(const QString &version, const QString &key,
-                              const QString &fallbackAsset) const;
+    // 按平台、车机变体和签名通道选择清单键及默认资产名。
+    QString downloadUrlForKey(const QString &version, AndroidUpdateChannel channel) const;
     QStringList downloadCandidates(const QString &version) const;
     void probeAndDownload(const QStringList &candidates, quint64 gen);
     void startDownload(const QString &url, quint64 gen);
@@ -120,6 +119,7 @@ private:
     QVariantMap m_downloads;   // manifest 里的 downloads 映射（平台 -> 直链，可远程改镜像）
     QString m_releaseTag;
     QString m_packageAsset;
+    AndroidUpdateChannel m_androidUpdateChannel = AndroidUpdateChannel::Release;
     QString m_packageUrl;
     QString m_packageSha256;
     qint64 m_packageSize = 0;

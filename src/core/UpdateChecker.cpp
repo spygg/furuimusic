@@ -28,12 +28,22 @@
 #include <climits>
 #include <algorithm>
 
-#if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#if defined(Q_OS_ANDROID)
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QJniObject>
 #include <QJniEnvironment>
 // QNativeInterface::QAndroidApplication 的真实头文件；QNativeInterface/QAndroidApplication
 // 这个前向路径 Qt 6.9+ 才有，6.8.3 的 android kit 里没有（CI 实测 fatal error）
 #include <QtCore/qcoreapplication_platform.h>
+#else
+#include <QtAndroidExtras>
+#include <QAndroidJniEnvironment>
+#include <QAndroidJniObject>
+#endif
+#endif
+
+#ifndef FURUI_ANDROID_RELEASE_CERT_SHA256
+#define FURUI_ANDROID_RELEASE_CERT_SHA256 ""
 #endif
 
 namespace Furui {
@@ -132,21 +142,18 @@ constexpr int kManifestTimeoutMs = 8000;
 // 车机兼容版（FURUI_CAR_COMPAT_EDITION，CMake 在 FURUI_ANDROID_CAR_COMPAT=ON 时
 // 注入）必须下特供包：包名是网易云车机版 com.netease.cloudmusic.iot，主流版
 // APK 装不上（装上也会变成第二个应用），绝不能把主流版推给它。
-QString androidAssetName()
-{
-#ifdef FURUI_CAR_COMPAT_EDITION
-    return QStringLiteral("FuruiMusic-carcompat-netease-arm64-v8a.apk");
-#else
-    return QStringLiteral("FuruiMusic-android-arm64-v8a.apk");
-#endif
-}
-
-QString releaseAssetFor(const QString &platformKey)
+QString releaseAssetFor(const QString &platformKey,
+                        AndroidUpdateChannel channel = AndroidUpdateChannel::Release)
 {
     if (platformKey == QLatin1String("windows"))
         return QStringLiteral("FuruiMusic-windows-x64.zip");
-    if (platformKey == QLatin1String("android"))
-        return androidAssetName();
+    if (platformKey == QLatin1String("android")) {
+#ifdef FURUI_CAR_COMPAT_EDITION
+        return androidUpdateAsset(true, channel);
+#else
+        return androidUpdateAsset(false, channel);
+#endif
+    }
     if (platformKey == QLatin1String("macos"))
         return QStringLiteral("FuruiMusic-macos-x86_64.zip");
     return QStringLiteral("FuruiMusic-linux-x86_64.AppImage");
@@ -162,6 +169,30 @@ QString platformKey()
     return QStringLiteral("macos");
 #else
     return QStringLiteral("linux");
+#endif
+}
+
+#if defined(Q_OS_ANDROID)
+QString androidInstalledCertificateSha256();
+#endif
+
+AndroidUpdateChannel currentAndroidUpdateChannel()
+{
+#if defined(Q_OS_ANDROID)
+    const QString certificate = androidInstalledCertificateSha256();
+    if (certificate.isEmpty()) {
+        Logger::write(QStringLiteral("W"), QStringLiteral("[更新] 无法读取当前应用签名，禁止下载更新包"));
+        return AndroidUpdateChannel::Unknown;
+    }
+    const AndroidUpdateChannel channel = selectAndroidUpdateChannel(
+        certificate, QStringLiteral(FURUI_ANDROID_RELEASE_CERT_SHA256));
+    Logger::write(QStringLiteral("I"), QStringLiteral("[更新] Android 签名通道: %1")
+                      .arg(channel == AndroidUpdateChannel::Legacy ? QStringLiteral("legacy")
+                           : channel == AndroidUpdateChannel::Release ? QStringLiteral("release")
+                                                                       : QStringLiteral("unknown")));
+    return channel;
+#else
+    return AndroidUpdateChannel::Release;
 #endif
 }
 
@@ -208,6 +239,66 @@ bool isValidVersion(const QString &version)
     static const QRegularExpression valid(QStringLiteral("\\A[0-9]+(\\.[0-9]+)*\\z"));
     return valid.match(version).hasMatch();
 }
+
+#if defined(Q_OS_ANDROID)
+QString androidInstalledCertificateSha256()
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    QJniEnvironment env;
+    QJniObject activity = QJniObject::callStaticObjectMethod(
+        "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
+    if (!activity.isValid() || env->ExceptionCheck()) { env->ExceptionClear(); return QString(); }
+    const QJniObject package = activity.callObjectMethod("getPackageName", "()Ljava/lang/String;");
+    const QJniObject pm = activity.callObjectMethod(
+        "getPackageManager", "()Landroid/content/pm/PackageManager;");
+    if (!package.isValid() || !pm.isValid() || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return QString();
+    }
+    const QJniObject current = pm.callObjectMethod(
+        "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
+        package.object<jstring>(), jint(64));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return QString(); }
+    if (!current.isValid()) return QString();
+    const QJniObject signatures = current.getObjectField(
+        "signatures", "[Landroid/content/pm/Signature;");
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return QString(); }
+    jobjectArray array = static_cast<jobjectArray>(signatures.object<jobject>());
+    if (!array || env->GetArrayLength(array) != 1) return QString();
+    QJniObject signature(env->GetObjectArrayElement(array, 0));
+    const QString hex = signature.callObjectMethod("toCharsString", "()Ljava/lang/String;").toString();
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return QString(); }
+#else
+    QAndroidJniEnvironment env;
+    const QAndroidJniObject activity = QtAndroid::androidActivity();
+    if (!activity.isValid() || env->ExceptionCheck()) { env->ExceptionClear(); return QString(); }
+    const QAndroidJniObject package = activity.callObjectMethod("getPackageName", "()Ljava/lang/String;");
+    const QAndroidJniObject pm = activity.callObjectMethod(
+        "getPackageManager", "()Landroid/content/pm/PackageManager;");
+    if (!package.isValid() || !pm.isValid() || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return QString();
+    }
+    const QAndroidJniObject current = pm.callObjectMethod(
+        "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
+        package.object<jstring>(), jint(64));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return QString(); }
+    if (!current.isValid()) return QString();
+    const QAndroidJniObject signatures = current.getObjectField(
+        "signatures", "[Landroid/content/pm/Signature;");
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return QString(); }
+    jobjectArray array = static_cast<jobjectArray>(signatures.object<jobject>());
+    if (!array || env->GetArrayLength(array) != 1) return QString();
+    const QAndroidJniObject signature(env->GetObjectArrayElement(array, 0));
+    const QString hex = signature.callObjectMethod("toCharsString", "()Ljava/lang/String;").toString();
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return QString(); }
+#endif
+    const QByteArray certificate = QByteArray::fromHex(hex.toLatin1());
+    if (certificate.isEmpty())
+        return QString();
+    return QString::fromLatin1(QCryptographicHash::hash(certificate, QCryptographicHash::Sha256).toHex());
+}
+#endif
 
 #if defined(Q_OS_ANDROID) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 // 拉起安装器之前先判断这个 APK 到底装不装得上。国产 ROM 对
@@ -271,10 +362,13 @@ int androidApkInstallability(const QString &path)
 // paths 覆盖 files-path 根目录，APK 放在 AppDataLocation 下即可共享。
 bool androidInstallApk(const QString &path)
 {
+    QJniEnvironment env;
     QJniObject jpath = QJniObject::fromString(path);
     QJniObject file("java/io/File", "(Ljava/lang/String;)V", jpath.object());
-    if (!file.isValid())
+    if (!file.isValid() || env->ExceptionCheck()) {
+        env->ExceptionClear();
         return false;
+    }
     QJniObject context = QNativeInterface::QAndroidApplication::context();
     if (!context.isValid())
         return false;
@@ -282,6 +376,10 @@ bool androidInstallApk(const QString &path)
     // com.netease.cloudmusic.iot，写死 cn.furui.music.qtprovider 会让 getUriForFile
     // 找不到 provider 抛异常 → 更新包装不上。按运行时包名拼，主流/特供版都正确。
     const QJniObject pkgObj = context.callObjectMethod("getPackageName", "()Ljava/lang/String;");
+    if (!pkgObj.isValid() || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return false;
+    }
     const QString pkg = pkgObj.toString();
     const QString authority = (pkg.isEmpty() ? QStringLiteral("cn.furui.music") : pkg)
                               + QStringLiteral(".qtprovider");
@@ -291,11 +389,15 @@ bool androidInstallApk(const QString &path)
         context.object(),
         QJniObject::fromString(authority).object(),
         file.object());
-    if (!uri.isValid())
+    if (!uri.isValid() || env->ExceptionCheck()) {
+        env->ExceptionClear();
         return false;
+    }
     QJniObject intent("android/content/Intent", "()V");
-    if (!intent.isValid())
+    if (!intent.isValid() || env->ExceptionCheck()) {
+        env->ExceptionClear();
         return false;
+    }
     intent.callObjectMethod("setAction", "(Ljava/lang/String;)Landroid/content/Intent;",
                             QJniObject::fromString(QStringLiteral("android.intent.action.VIEW")).object());
     intent.callObjectMethod("setDataAndType", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/Intent;",
@@ -311,7 +413,15 @@ bool androidInstallApk(const QString &path)
                             QJniObject::fromString(
                                 QStringLiteral("android.intent.extra.NOT_UNKNOWN_SOURCE")).object<jstring>(),
                             jboolean(true));
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return false;
+    }
     context.callMethod<void>("startActivity", "(Landroid/content/Intent;)V", intent.object());
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return false;
+    }
     return true;
 }
 
@@ -529,7 +639,8 @@ bool UpdateChecker::applyManifest(const QJsonObject &obj, const QJsonObject &rel
     for (auto it = dl.constBegin(); it != dl.constEnd(); ++it)
         m_downloads.insert(it.key(), it.value().toString());
 
-    m_packageAsset = releaseAssetFor(platformKey());
+    m_androidUpdateChannel = currentAndroidUpdateChannel();
+    m_packageAsset = releaseAssetFor(platformKey(), m_androidUpdateChannel);
     QString releaseTag = release.value(QLatin1String("tag_name")).toString().trimmed();
     if (releaseTag.startsWith(QLatin1Char('v')))
         releaseTag.remove(0, 1);
@@ -556,7 +667,9 @@ bool UpdateChecker::applyManifest(const QJsonObject &obj, const QJsonObject &rel
     }
 
     const bool hasUpdate = compareVersion(localVersion(), remote) < 0;
-    if (hasUpdate && !m_releaseMetadataTrusted)
+    if (hasUpdate && m_androidUpdateChannel == AndroidUpdateChannel::Unknown)
+        m_lastResult = QStringLiteral("发现新版本，但无法识别当前应用签名，已禁止下载不兼容的更新包");
+    else if (hasUpdate && !m_releaseMetadataTrusted)
         m_lastResult = QStringLiteral("发现新版本，但官方未提供可信的 SHA-256 校验信息，已禁止下载");
     else
         m_lastResult = hasUpdate ? QString() : QStringLiteral("已是最新版本");
@@ -569,22 +682,22 @@ QString UpdateChecker::downloadUrlFor(const QString &version) const
 {
     if (m_releaseMetadataTrusted && version == m_remoteVersion)
         return m_packageUrl;
-#ifdef FURUI_CAR_COMPAT_EDITION
-    // 特供版：优先读清单里的 android-carcompat 直链；清单没给就忽略主流版
-    // android 直链（那是 cn.furui.music 的包，装到特供版上等于装第二个应用），
-    // 按 CI 产物名拼特供默认地址。
-    return downloadUrlForKey(version, QStringLiteral("android-carcompat"),
-                             QStringLiteral("FuruiMusic-carcompat-netease-arm64-v8a.apk"));
-#else
-    return downloadUrlForKey(version, platformKey(), releaseAssetFor(platformKey()));
-#endif
+    return downloadUrlForKey(version, m_androidUpdateChannel);
 }
 
-// downloadUrlFor 的公共体：key = 清单 downloads 里查的键，fallbackAsset =
-// 清单没给直链时按 CI 产物名拼的默认资产名。
-QString UpdateChecker::downloadUrlForKey(const QString &version, const QString &key,
-                                         const QString &fallbackAsset) const
+QString UpdateChecker::downloadUrlForKey(const QString &version,
+                                         AndroidUpdateChannel channel) const
 {
+    const QString platform = platformKey();
+#ifdef FURUI_CAR_COMPAT_EDITION
+    const bool carCompat = true;
+#else
+    const bool carCompat = false;
+#endif
+    const QString key = platform == QLatin1String("android")
+                            ? androidUpdateDownloadKey(carCompat, channel)
+                            : platform;
+    const QString fallbackAsset = releaseAssetFor(platform, channel);
     // manifest 里声明了当前平台直链则优先（可发版时远程换镜像），否则按 CI 产物名拼默认地址
     const QString fromManifest = m_downloads.value(key).toString();
     if (!fromManifest.isEmpty()) {
@@ -865,8 +978,11 @@ QString UpdateChecker::targetPath() const
     QString version = m_remoteVersion;
     static const QRegularExpression validVersion(QStringLiteral("\\A[0-9]+(\\.[0-9]+)*\\z"));
     if (!validVersion.match(version).hasMatch()) version = QStringLiteral("unknown");
-    return dir.filePath(QStringLiteral("FuruiMusic-v%1-%2.%3")
-                            .arg(version, platformKey(), suffix));
+    const QString channelSuffix = platformKey() == QLatin1String("android")
+                                      && m_androidUpdateChannel == AndroidUpdateChannel::Legacy
+                                      ? QStringLiteral("-legacy") : QString();
+    return dir.filePath(QStringLiteral("FuruiMusic-v%1-%2%3.%4")
+                            .arg(version, platformKey(), channelSuffix, suffix));
 }
 
 void UpdateChecker::downloadUpdate()
@@ -883,8 +999,17 @@ void UpdateChecker::downloadUpdate()
     m_downloadQueue.clear();
     m_downloadIndex = 0;
     m_downloadedPath.clear();
+    if (m_androidUpdateChannel == AndroidUpdateChannel::Unknown) {
+        m_downloading = false;
+        m_progress = 0;
+        m_lastResult = QStringLiteral("无法识别当前应用签名，已禁止下载更新包");
+        emit stateChanged();
+        emit downloadFailed(m_lastResult);
+        return;
+    }
     if (!m_releaseMetadataTrusted || m_packageSha256.isEmpty() || m_packageSize <= 0
-        || m_packageAsset != releaseAssetFor(platformKey()) || !QUrl(m_packageUrl).isValid()) {
+        || m_packageAsset != releaseAssetFor(platformKey(), m_androidUpdateChannel)
+        || !QUrl(m_packageUrl).isValid()) {
         m_downloading = false;
         m_progress = 0;
         m_lastResult = QStringLiteral("官方 release 缺少可信的 SHA-256 校验信息，已禁止下载");
@@ -958,13 +1083,7 @@ void UpdateChecker::installVerifiedPackage()
         return;
     }
     if (verdict == 1) {
-        // 签名不同：本机装的是调试包、在线包是发布签名，强制给用户留一份可手动安装的包
-        if (!copied) copied = !copyVerifiedToDownloads().isEmpty();
-        const QString msg = copied
-            ? QStringLiteral("更新包与当前应用签名不同（常见原因：本机装的是本地调试包，在线包是发布签名）。"
-                             "已复制到系统「下载」目录，请用文件管理器安装")
-            : QStringLiteral("更新包与当前应用签名不同，且复制到下载目录失败，请检查存储权限后手动安装：%1")
-                  .arg(m_downloadedPath);
+        const QString msg = QStringLiteral("更新包与当前应用签名不一致，已阻止安装；请重新检查更新后重试");
         AppController::instance()->notify(msg, QStringLiteral("warning"));
         emit downloadFailed(msg);
         return;

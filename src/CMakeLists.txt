@@ -127,7 +127,7 @@ set(CORE_FILES
     core/Version.h
     core/Settings.h core/JsonMapper.h
     core/HttpClient.h core/HttpClient.cpp
-    core/UpdateChecker.h core/UpdateChecker.cpp
+    core/UpdatePackage.h core/UpdateChecker.h core/UpdateChecker.cpp
     core/SourceConfig.h core/SourceConfig.cpp
     core/Library.h core/Library.cpp
     core/MusicSource.h core/MusicSource.cpp
@@ -207,8 +207,25 @@ set(LEGACY_WIDGETS_FILES
     legacy/widgets/LyricsWindow.h legacy/widgets/LyricsWindow.cpp
 )
 
+set(FURUI_ANDROID_RELEASE_CERT_SHA256 "" CACHE STRING
+    "Android release signing certificate SHA-256 used to select the matching update APK")
+if(DEFINED ENV{FURUI_ANDROID_RELEASE_CERT_SHA256})
+    set(FURUI_ANDROID_RELEASE_CERT_SHA256 "$ENV{FURUI_ANDROID_RELEASE_CERT_SHA256}")
+endif()
+if(ANDROID AND NOT FURUI_ANDROID_RELEASE_CERT_SHA256 STREQUAL "")
+    string(LENGTH "${FURUI_ANDROID_RELEASE_CERT_SHA256}" _furui_cert_length)
+    if(NOT _furui_cert_length EQUAL 64
+       OR NOT FURUI_ANDROID_RELEASE_CERT_SHA256 MATCHES "^[0-9a-fA-F]+$")
+        message(FATAL_ERROR "FURUI_ANDROID_RELEASE_CERT_SHA256 must be a 64-character SHA-256 digest")
+    endif()
+endif()
+
 add_library(FuruiCore STATIC ${CORE_FILES})
 target_include_directories(FuruiCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(ANDROID AND NOT FURUI_ANDROID_RELEASE_CERT_SHA256 STREQUAL "")
+    target_compile_definitions(FuruiCore PRIVATE
+        FURUI_ANDROID_RELEASE_CERT_SHA256="${FURUI_ANDROID_RELEASE_CERT_SHA256}")
+endif()
 target_link_libraries(FuruiCore PUBLIC
     ${QT}::Core ${QT}::Gui ${QT}::Network ${QT}::Sql ${QT}::Multimedia)
 if(FURUI_HAVE_WEBVIEW)
